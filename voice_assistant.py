@@ -21,6 +21,7 @@ import pyttsx3
 from openai import OpenAI
 from connectors.spotify_connector import SpotifyConnector
 from connectors.search_engine import GeminiSearch
+from connectors.weather_connector import handle_tool_requests
 import edge_tts
 import asyncio
 import tempfile
@@ -71,7 +72,7 @@ def record_audio(duration, sample_rate, save_path=None):
         print(f"Error recording audio: {e}")
         return None
 
-def detect_wakeword(audio_window, model, sample_rate, energy_threshold=0.060, confidence_threshold=0.995):
+def detect_wakeword(audio_window, model, sample_rate, energy_threshold=0.060, confidence_threshold=0.997):
     """Return True if wake word is detected in the given audio window."""
     energy = np.sqrt(np.mean(audio_window ** 2))
     if energy < energy_threshold:
@@ -100,7 +101,7 @@ class VoiceAssistant:
 
         # Initialize conversation history
         self.conversation_history = self.load_conversation_history()
-
+        self.handle_weather_action = handle_tool_requests
         # Audio configuration  
         self.audio_channels = 1  # Channel configuration for microphone recording
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
@@ -166,13 +167,19 @@ class VoiceAssistant:
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             # Ask OpenAI to return a JSON with tool/action info
             tool_prompt = (
-                "You are a voice assistant. Based on the user's message, respond ONLY with a JSON object specifying the tool to use and action needed. "
+                "You are a voice assistant. Based on the user's message, respond ONLY with a JSON object specifying the tool to use and action needed."
+                "always transliterate the response in english even query is in different language."
+                "if user message is in hindi or different language respond in that language. and provide language flag in response. also use the same language for tools query do not transliterate the user message."
                 "Example for Spotify play: {\"tool\": \"spotify\", \"action\": \"play\", \"target\": \"album\", \"name\": \"Shape of You\"}. "
                 "Example for Spotify resume stopped song: {\"tool\": \"spotify\", \"action\": \"resume\"}. "
                 "Example for Spotify next: {\"tool\": \"spotify\", \"action\": \"next\"}. "
                 "Example for Spotify stop: {\"tool\": \"spotify\", \"action\": \"stop\"}. "
-                "Example for Google Search (for any questions needing current time, data, weather, news, facts): {\"tool\": \"google_search\", \"action\": \"search\", \"query\": \"latest news in AI\"}. "
-                "If no tool is needed and you can answer directly, respond with: {\"tool\": \"none\", \"response\": \"your direct answer here\"}. "
+                "Example for Google Search (for any questions needs current data, news, facts): {\"tool\": \"google_search\", \"action\": \"search\", \"query\": \"latest news in AI\"}. "
+                "Example for Weather API (for weather-related queries): {\"tool\": \"weather\", \"action\": \"get_current_weather\", \"location\": \"London\"}. "
+                "Example for Weather API (for weather-related queries): {\"tool\": \"weather\", \"action\": \"get_forecast\", \"location\": \"pune\", \"days\": 3}. "
+                "Example for current time use API (for weather-related queries): {\"tool\": \"weather\", \"action\": \"get_timezone\", \"location\": \"pune\"}. "
+                "If no tool is needed and l can answer directly, respond with: {\"tool\": \"none\", \"response\": \"your direct answer here\",{\"lang\": \"en\"}. "
+                "if location is not provided always use Pune as default location."
                 "User message: " + user_message
             )
             response = client.chat.completions.create(
@@ -319,7 +326,7 @@ class VoiceAssistant:
             print(f"Error getting AI response: {e}")
             return "Sorry, I'm having trouble thinking right now."
     
-    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0):
+    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang= "en"):
         """
         Simple Edge TTS function for voice assistant integration
         
@@ -330,7 +337,8 @@ class VoiceAssistant:
             speed_multiplier: Additional pygame playback speed control
         """
         print(f"Speaking with Edge TTS: {text}")
-        
+        if lang == "hi":
+            voice = "hi-IN-AartiNeural"
         try:
             # Run the async function in a new event loop
             asyncio.run(self._generate_and_play(text, voice, rate, speed_multiplier))
@@ -452,7 +460,7 @@ class VoiceAssistant:
             
         except Exception as e:
             error_message = str(e)
-            print(f"Spotify error")
+            print(f"Spotify error: {error_message}")
             
             # Provide more specific error messages
             if "No active Spotify device" in error_message:
@@ -476,7 +484,8 @@ class VoiceAssistant:
             
             # Initialize the search connector
             gs = GeminiSearch()  # Now uses Flash-Lite by default
-            answer = gs.quick_search(query)  # Pass just the query string, not the whole dict
+            lang = tool_response.get("lang", "en")
+            answer = gs.quick_search(query, lang)  # Pass just the query string, not the whole dict
       
             if answer:
                 return answer  # Return raw result for AI processing
@@ -562,7 +571,13 @@ class VoiceAssistant:
         if tool_response["tool"] == "spotify":
             self.handle_spotify_action(tool_response)
             print("Spotify action completed. Ready for next command.")
-            
+
+        if tool_response["tool"] == "weather":
+            response = self.handle_weather_action(tool_response)
+            ai_response = self.get_ai_response(response)
+            self.speak(ai_response)
+            print("Weather action completed. Ready for next command.")
+
         elif tool_response["tool"] in ["search", "google_search", "web_search", "brave_search"]:
             result = self.handle_search_action(tool_response)
             self.speak(result)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import time
+import random
 from typing import Dict, List, Optional
 import warnings
 
@@ -42,11 +43,12 @@ class GeminiSearch:
 
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
         # Client reads GOOGLE_API_KEY from env by default
+        _ensure_api_key()
         self.client = genai.Client()
         self.model = model
         self._grounding_tool = types.Tool(google_search=types.GoogleSearch())
 
-    def quick_search(self, query: str) -> str:
+    def quick_search(self, query: str, lang: Optional[str] = None) -> str:
         """Fast search returning only answer text, optimized for voice assistants.
         
         Parameters
@@ -59,20 +61,42 @@ class GeminiSearch:
         str
             Just the answer text, no metadata
         """
+        # Build a conservative system instruction; if `lang` is provided, reference it.
+        lang_hint = f"Respond in {lang}." if lang else "Respond in the same language as the query."
         config = types.GenerateContentConfig(
             tools=[self._grounding_tool],
-            system_instruction="You are a helpful assistant. For location-based queries (weather, time, news, restaurants, events, traffic, etc.) where no specific location is mentioned, default to Pune, India. Give very brief, direct answers. Maximum 2 sentences.",
+            system_instruction=(
+                "You are a helpful assistant. For location-based queries (weather, time, news, restaurants, events, traffic, etc.) "
+                "where no specific location is mentioned, default to Pune, India. Give very brief, direct answers (maximum 2 sentences). "
+                "Keep answers short and suitable for text-to-speech (avoid special characters). "
+                f"{lang_hint} If the language is not English, transliterate into Latin script."
+            ),
         )
-        
-        try:
-            resp = self.client.models.generate_content(
-                model="gemini-2.5-flash-lite",  # Use Flash-Lite for speed
-                contents=query,
-                config=config,
-            )
-            return getattr(resp, "text", "") or "No answer found."
-        except Exception as e:
-            return f"Search failed: {str(e)}"
+        # Retry on transient errors (e.g. 503 / overloaded). Use exponential backoff with jitter.
+        max_attempts = 4
+        base_delay = 1.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                
+                resp = self.client.models.generate_content(
+                    model=self.model,  # Use configured model
+                    contents=query,
+                    config=config,
+                )
+                return getattr(resp, "text", "") or "No answer found."
+            except Exception as e:
+                msg = str(e).lower()
+                # Consider these messages transient and worth retrying
+                transient_indicators = ["503", "unavailable", "overloaded", "temporarily", "rate limit"]
+                if attempt >= max_attempts or not any(ind in msg for ind in transient_indicators):
+                    # Final attempt or non-transient error: return a friendly message including the error
+                    return f"Search failed: {str(e)}"
+
+                # Sleep with exponential backoff + jitter and retry
+                delay = base_delay * (2 ** (attempt - 1))
+                jitter = random.uniform(0, 0.5)
+                time.sleep(delay + jitter)
+                continue
 
     def search(self, query: str, model: Optional[str] = None, timeout: int = 30) -> Dict:
         """Run a grounded web query and return response with citations.
@@ -103,19 +127,38 @@ class GeminiSearch:
             system_instruction="You are a helpful assistant. For any location-based queries (weather, time, news, restaurants, etc.) where no specific location is mentioned, default to Pune, India. Provide concise, accurate answers based on search results. Be brief but informative.",
         )
 
-        try:
-            resp = self.client.models.generate_content(
-                model=m,
-                contents=query,
-                config=config,
-            )
-        except Exception as e:
+        # Retry on transient errors (503 / overloaded) with exponential backoff
+        max_attempts = 4
+        base_delay = 1.0
+        resp = None
+        last_exception = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.client.models.generate_content(
+                    model=m,
+                    contents=query,
+                    config=config,
+                )
+                last_exception = None
+                break
+            except Exception as e:
+                last_exception = e
+                msg = str(e).lower()
+                transient_indicators = ["503", "unavailable", "overloaded", "temporarily", "rate limit"]
+                if attempt >= max_attempts or not any(ind in msg for ind in transient_indicators):
+                    break
+                delay = base_delay * (2 ** (attempt - 1))
+                jitter = random.uniform(0, 0.5)
+                time.sleep(delay + jitter)
+                continue
+
+        if resp is None and last_exception is not None:
             return {
-                "text": f"Search failed: {str(e)}",
+                "text": f"Search failed: {str(last_exception)}",
                 "citations": [],
                 "web_search_queries": [],
                 "response_time": time.time() - start_time,
-                "error": str(e)
+                "error": str(last_exception)
             }
 
         text = getattr(resp, "text", "") or ""
@@ -163,28 +206,17 @@ def _ensure_api_key() -> None:
 
 
 if __name__ == "__main__":
-    # Quick manual test: python connectors/search_engine.py "latest weather in London"
+    # Quick manual test with hardcoded query
     import sys
 
-    _ensure_api_key()
-
-    query = " ".join(sys.argv[1:]) or "What is the latest headline from BBC?"
-    print(f"Searching for: {query}")
-    print("⏳ Please wait...")
+    query = "what is weather in pune"
+    lang = "en"
     
-    gs = GeminiSearch()
-    out = gs.search(query)
-    
-    print(f"⚡ Response time: {out['response_time']:.2f} seconds")
-    print("Answer:\n", out["text"])  # model's grounded answer
-    
-    if out.get("error"):
-        print(f"❌ Error: {out['error']}")
-    
-    if out["citations"]:
-        print("\nSources:")
-        for i, c in enumerate(out["citations"], 1):
-            print(f"  [{i}] {c['title']} - {c['uri']}")
-    
-    if out["web_search_queries"]:
-        print(f"\nSearch queries used: {', '.join(out['web_search_queries'])}")
+    try:
+        _ensure_api_key() 
+        gs = GeminiSearch()
+        result = gs.quick_search(query, lang=lang)
+        print(f"Query: {query}")
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Error: {e}")
