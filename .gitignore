@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+audio_data/
+background_sound/
+.cache-*
+conversion_history.json
+logs/   
+setup.txt
