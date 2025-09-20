@@ -61,7 +61,9 @@ class ReminderManager:
                 "remind_time": remind_datetime.isoformat(),
                 "created_time": datetime.now().isoformat(),
                 "active": True,
-                "notified": False
+                "notified": False,
+                "repeat_count": 0,  # Simple counter for repeats
+                "max_repeats": 2    # Will repeat 2 times (total 3 notifications)
             }
             
             self.reminders.append(reminder)
@@ -84,43 +86,51 @@ class ReminderManager:
         try:
             # Handle "in X minutes/hours"
             if "in " in time_str:
-                if "minute" in time_str:
-                    minutes = int(''.join(filter(str.isdigit, time_str)))
-                    return now + timedelta(minutes=minutes)
-                elif "hour" in time_str:
-                    hours = int(''.join(filter(str.isdigit, time_str)))
-                    return now + timedelta(hours=hours)
-                elif "day" in time_str:
-                    days = int(''.join(filter(str.isdigit, time_str)))
-                    return now + timedelta(days=days)
+                # Extract number more carefully
+                import re
+                numbers = re.findall(r'\d+', time_str)
+                if numbers:
+                    num = int(numbers[0])  # Take the first number found
+                    if "minute" in time_str:
+                        return now + timedelta(minutes=num)
+                    elif "hour" in time_str:
+                        return now + timedelta(hours=num)
+                    elif "day" in time_str:
+                        return now + timedelta(days=num)
             
             # Handle "tomorrow at X"
             if "tomorrow" in time_str:
                 tomorrow = now + timedelta(days=1)
                 if "pm" in time_str or "am" in time_str:
-                    hour = int(''.join(filter(str.isdigit, time_str.split("at")[-1] if "at" in time_str else time_str)))
-                    if "pm" in time_str and hour != 12:
-                        hour += 12
-                    elif "am" in time_str and hour == 12:
-                        hour = 0
-                    return tomorrow.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    import re
+                    numbers = re.findall(r'\d+', time_str)
+                    if numbers:
+                        hour = int(numbers[0])
+                        if "pm" in time_str and hour != 12:
+                            hour += 12
+                        elif "am" in time_str and hour == 12:
+                            hour = 0
+                        return tomorrow.replace(hour=hour, minute=0, second=0, microsecond=0)
             
             # Handle "today at X"
             if "today" in time_str or any(word in time_str for word in ["pm", "am"]):
                 if "pm" in time_str or "am" in time_str:
-                    hour = int(''.join(filter(str.isdigit, time_str.split("at")[-1] if "at" in time_str else time_str)))
-                    if "pm" in time_str and hour != 12:
-                        hour += 12
-                    elif "am" in time_str and hour == 12:
-                        hour = 0
-                    
-                    target_time = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-                    
-                    # If the time has passed today, set it for tomorrow
-                    if target_time <= now:
-                        target_time += timedelta(days=1)
-                    
-                    return target_time
+                    import re
+                    numbers = re.findall(r'\d+', time_str)
+                    if numbers:
+                        hour = int(numbers[0])
+                        if "pm" in time_str and hour != 12:
+                            hour += 12
+                        elif "am" in time_str and hour == 12:
+                            hour = 0
+                        
+                        target_time = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+                        
+                        # If the time has passed today, set it for tomorrow
+                        if target_time <= now:
+                            target_time += timedelta(days=1)
+                        
+                        return target_time
             
             # Handle specific times like "5:30 PM"
             if ":" in time_str:
@@ -142,7 +152,8 @@ class ReminderManager:
                 except:
                     pass
             
-        except Exception:
+        except Exception as e:
+            print(f"Debug: Error parsing time '{time_str}': {e}")
             pass
         
         return None
@@ -157,9 +168,26 @@ class ReminderManager:
         due_reminders = []
         
         for reminder in self.reminders:
-            if (reminder["active"] and not reminder["notified"] and 
-                datetime.fromisoformat(reminder["remind_time"]) <= now):
-                due_reminders.append(reminder)
+            if not reminder["active"]:
+                continue
+                
+            remind_time = datetime.fromisoformat(reminder["remind_time"])
+            
+            # Check if it's time for this reminder
+            if not reminder.get("notified", False):
+                # First time
+                if remind_time <= now:
+                    due_reminders.append(reminder)
+            else:
+                # Check for repeat (every 5 minutes)
+                repeat_count = reminder.get("repeat_count", 0)
+                max_repeats = reminder.get("max_repeats", 2)
+                
+                if repeat_count < max_repeats:
+                    # Next repeat is 5 minutes after last notification
+                    next_repeat = remind_time + timedelta(minutes=5 * (repeat_count + 1))
+                    if next_repeat <= now:
+                        due_reminders.append(reminder)
                 
         return due_reminders
     
@@ -167,9 +195,53 @@ class ReminderManager:
         """Mark a reminder as notified."""
         for reminder in self.reminders:
             if reminder["id"] == reminder_id:
-                reminder["notified"] = True
+                if not reminder.get("notified", False):
+                    reminder["notified"] = True
+                else:
+                    # Increment repeat count
+                    reminder["repeat_count"] = reminder.get("repeat_count", 0) + 1
+                    
+                    # Stop repeating after max repeats
+                    if reminder["repeat_count"] >= reminder.get("max_repeats", 2):
+                        reminder["active"] = False
                 break
         self.save_reminders()
+
+    def snooze_reminder(self, reminder_id: int, snooze_minutes: int = 5) -> str:
+        """Snooze a reminder for specified minutes."""
+        for reminder in self.reminders:
+            if reminder["id"] == reminder_id and reminder["active"]:
+                snooze_until = datetime.now() + timedelta(minutes=snooze_minutes)
+                reminder["snoozed"] = True
+                reminder["snooze_until"] = snooze_until.isoformat()
+                self.save_reminders()
+                
+                snooze_time_str = snooze_until.strftime("%I:%M %p")
+                return f"Reminder snoozed until {snooze_time_str}: {reminder['text']}"
+        
+        return "Reminder not found or already completed."
+    
+    def acknowledge_reminder(self, reminder_id: int) -> str:
+        """Acknowledge a reminder to stop all repeats."""
+        for reminder in self.reminders:
+            if reminder["id"] == reminder_id:
+                reminder["active"] = False
+                reminder["notified"] = True
+                self.save_reminders()
+                return f"Reminder acknowledged and stopped: {reminder['text']}"
+        
+        return "Reminder not found."
+    
+    def set_reminder_repeat_settings(self, reminder_id: int, max_repeats: int = 3, repeat_interval: int = 5) -> str:
+        """Customize repeat settings for a specific reminder."""
+        for reminder in self.reminders:
+            if reminder["id"] == reminder_id:
+                reminder["max_repeats"] = max_repeats
+                reminder["repeat_interval"] = repeat_interval
+                self.save_reminders()
+                return f"Repeat settings updated: {max_repeats} repeats every {repeat_interval} minutes"
+        
+        return "Reminder not found."
     
     def cancel_reminder(self, reminder_id: int) -> str:
         """Cancel a specific reminder."""
@@ -217,7 +289,7 @@ class ReminderManager:
                 due_reminders = self.get_due_reminders()
                 for reminder in due_reminders:
                     # This would be handled by the main voice assistant
-                    print(f"🔔 REMINDER: {reminder['text']}")
+                    print(f" REMINDER: {reminder['text']}")
                     self.mark_reminded(reminder["id"])
                 
                 time.sleep(60)  # Check every 60 seconds (1 minute)
@@ -235,12 +307,31 @@ class ReminderManager:
         
         if len(due_reminders) == 1:
             reminder = due_reminders[0]
+            repeat_count = reminder.get("repeat_count", 0)
+            max_repeats = reminder.get("max_repeats", 3)
+            
+            # Create message based on repeat status
+            if repeat_count == 0:
+                message = f"Reminder: {reminder['text']}"
+            else:
+                remaining = max_repeats - repeat_count
+                if remaining > 0:
+                    message = f"Reminder (repeat {repeat_count + 1}): {reminder['text']}. Say acknowledge to stop repeats, or snooze for 5 minutes."
+                else:
+                    message = f"Final reminder: {reminder['text']}"
+            
             self.mark_reminded(reminder["id"])
-            return f"Reminder: {reminder['text']}"
+            return message
         else:
-            reminder_texts = [r['text'] for r in due_reminders]
+            reminder_texts = []
             for reminder in due_reminders:
+                repeat_count = reminder.get("repeat_count", 0)
+                if repeat_count > 0:
+                    reminder_texts.append(f"{reminder['text']} (repeat {repeat_count + 1})")
+                else:
+                    reminder_texts.append(reminder['text'])
                 self.mark_reminded(reminder["id"])
+            
             return f"You have {len(due_reminders)} reminders: " + ", ".join(reminder_texts)
 
 
@@ -271,14 +362,79 @@ def handle_reminder_action(action_data: Dict) -> str:
         return "I don't understand that reminder action."
 
 
-if __name__ == "__main__":
-    # Test the reminder manager
+def test_reminder_system():
+    """
+    Simple test function that:
+    1. Sets a reminder for 1 minute from now
+    2. Starts a thread that checks every 10 seconds
+    3. Shows when the reminder triggers
+    """
+    print("🧪 Testing Reminder System...")
+    
     rm = ReminderManager()
     
-    # Test adding reminders
-    print(rm.add_reminder("Take medicine", "in 2 minutes"))
-    print(rm.add_reminder("Call mom", "tomorrow at 3 PM"))
-    print(rm.add_reminder("Meeting", "today at 5:30 PM"))
+    # Clear any existing reminders for clean test
+    rm.reminders = []
+    rm.save_reminders()
     
-    # List reminders
-    print("\n" + rm.list_reminders())
+    # Set a test reminder for 1 minute from now
+    test_message = "Test reminder - this is a 1 minute test!"
+    result = rm.add_reminder(test_message, "in 1 minute")
+    print(f"✅ {result}")
+    
+    # Start the reminder checker with faster check interval for testing
+    print("🔄 Starting reminder checker (checking every 10 seconds)...")
+    
+    def test_check_loop():
+        """Test loop that checks every 10 seconds instead of 60."""
+        check_count = 0
+        while check_count < 12:  # Run for up to 2 minutes (12 * 10 seconds)
+            try:
+                check_count += 1
+                print(f"⏰ Check #{check_count} - {datetime.now().strftime('%H:%M:%S')}")
+                
+                due_reminders = rm.get_due_reminders()
+                if due_reminders:
+                    for reminder in due_reminders:
+                        print(f"🔔 REMINDER TRIGGERED: {reminder['text']}")
+                        rm.mark_reminded(reminder["id"])
+                    print("✅ Test completed - reminder was triggered!")
+                    return
+                else:
+                    print("   No reminders due yet...")
+                
+                time.sleep(10)  # Check every 10 seconds
+                
+            except Exception as e:
+                print(f"❌ Error in test checker: {e}")
+                time.sleep(10)
+        
+        print("⏰ Test timeout reached (2 minutes)")
+    
+    # Start the test thread (don't use daemon so script waits for it)
+    test_thread = threading.Thread(target=test_check_loop, daemon=False)
+    test_thread.start()
+    
+    print(f"📱 Test started at {datetime.now().strftime('%H:%M:%S')}")
+    print("💡 The reminder should trigger in about 1 minute...")
+    print("🛑 Press Ctrl+C to stop the test")
+    
+    try:
+        # Keep the main thread alive and wait for test to complete
+        test_thread.join()
+        print("✅ Test completed successfully!")
+    except KeyboardInterrupt:
+        print("\n🛑 Test stopped by user")
+
+
+if __name__ == "__main__":
+    # Test the reminder manager
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        # Run the test function
+        test_reminder_system()
+    else:
+        # When run directly, run the full test by default
+        print("🚀 Running reminder system test...")
+        test_reminder_system()

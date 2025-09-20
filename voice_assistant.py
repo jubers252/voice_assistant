@@ -13,7 +13,6 @@ import time
 from dotenv import load_dotenv
 import sounddevice as sd
 from scipy.io.wavfile import write
-import librosa
 import numpy as np
 from keras.models import load_model
 import speech_recognition as sr
@@ -24,15 +23,11 @@ from connectors.search_engine import GeminiSearch
 from connectors.weather_connector import handle_tool_requests
 from connectors.amzon_connector import get_amazon_result
 from connectors.amazon_order_tracker import get_order
-import edge_tts
-import asyncio
-import tempfile
-import pygame
-import tempfile
-import soundfile as sf
+from connectors.reminder_manager import ReminderManager
 import threading
 from collections import deque
-
+from audio.audio_processor import AudioProcessors
+from audio.wake_word_detector import WakeWordDetector
 # Load environment variables
 load_dotenv()
 
@@ -40,56 +35,8 @@ load_dotenv()
 CONVERSATION_FILE = "conversation_history.json"
 
 # Wake word detection parameters (matching training)
-n_mfcc = 40
-n_fft = 2048
-hop_length = 512
-n_mels = 128
 
-# Function to extract MFCC features (from test_cnn_model.py)
-def extract_features(audio, sample_rate):
-    try:
-        mfcc = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=n_mfcc, n_fft=n_fft, hop_length=hop_length)
-        mfcc_delta = librosa.feature.delta(mfcc)
-        mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
-        features = np.concatenate((mfcc, mfcc_delta, mfcc_delta2), axis=0)
-        features = features.T  # Transpose to (time_steps, features)
-        return features
-    except Exception as e:
-        print(f"Error extracting features: {e}")
-        return None
 
-# Function to record audio (from test_cnn_model.py)
-def record_audio(duration, sample_rate, save_path=None):
-    try:
-        print("Recording...")
-        audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
-        sd.wait()
-        print("Recording complete.")
-        audio_flat = audio.flatten()
-        if save_path:
-            sf.write(save_path, audio_flat, sample_rate)
-            print(f"Audio saved to {save_path}")
-        return audio_flat
-    except Exception as e:
-        print(f"Error recording audio: {e}")
-        return None
-
-def detect_wakeword(audio_window, model, sample_rate, energy_threshold=0.060, confidence_threshold=0.997):
-    """Return True if wake word is detected in the given audio window."""
-    energy = np.sqrt(np.mean(audio_window ** 2))
-    if energy < energy_threshold:
-        return False, energy, None
-    features = extract_features(audio_window, sample_rate)
-    desired_length = 44
-    if features is None:
-        return False, energy, None
-    if features.shape[0] < desired_length:
-        features = np.pad(features, ((0, desired_length - features.shape[0]), (0, 0)), mode='constant')
-    else:
-        features = features[:desired_length]
-    features = features.reshape(1, desired_length, 120)
-    prediction = model.predict(features, verbose=0)[0][0]
-    return prediction > confidence_threshold, energy, prediction
 
 class VoiceAssistant:
   
@@ -102,6 +49,18 @@ class VoiceAssistant:
         self.microphone = sr.Microphone(device_index=1)  # Adjust device index if needed
 
         # Initialize conversation history
+        # Initialize AudioProcessors (no buffer - we'll manage our own)
+        self.audio_processors = AudioProcessors()
+        # Initialize wake word detector with an existing model if available
+        ww_model_path = r"C:\Users\JUBER\OneDrive\Documents\chat_gpt_api\model\WWD_improved.h5"
+        if not os.path.exists(ww_model_path):
+            ww_model_path = 'models/wake_word_model.h5'
+
+        try:
+            self.wake_word_detector = WakeWordDetector(model_path=ww_model_path)
+        except Exception as e:
+            print(f"Warning: wake word model not loaded during init: {e}")
+            self.wake_word_detector = None
         self.conversation_history = self.load_conversation_history()
         self.handle_weather_action = handle_tool_requests
         self.get_order_tracking = get_order
@@ -120,6 +79,9 @@ class VoiceAssistant:
         self.is_speaking = False
         self.speech_interrupted = False
         self.speech_thread = None
+
+        # Initialize reminder manager
+        self.reminder_manager = ReminderManager()
 
         # Check available voices
         self.check_available_tts_options()
@@ -194,6 +156,7 @@ Rules:
 - For news/search: "google_search"
 - For amazon order tracking/status: "amazon_order_tracking"
 - For amazon order history for upto nth days: use get_recent_orders action
+- For reminders (set, add, remind, list reminders): "reminder"
 - For default location, use Pisoli, Pune, India
 - Default: "none"
 
@@ -207,6 +170,8 @@ Examples:
 {{"tool":"weather","action":"get_forecast","location":"Pune"}}
 {{"tool":"weather","action":"get_timezone","location":"Pune"}}
 {{"tool":"amazon_order_tracking","action":"get_recent_orders","days":5}}
+{{"tool":"reminder","action":"add","text":"Take medicine","time":"in 30 minutes"}}
+{{"tool":"reminder","action":"list"}}
 {{"tool":"none","lang":"en"}}
 
 User: {user_message}"""
@@ -375,149 +340,7 @@ User: {user_message}"""
             print(f"Error getting AI response: {e}")
             return "Sorry, I'm having trouble thinking right now."
     
-    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang="en"):
-        """
-        Threaded TTS function with interruption support
-        """
-        # Stop any current speech first
-        self.stop_speech()
-        
-        # Start new speech thread
-        self.speech_thread = threading.Thread(
-            target=self._speak_threaded, 
-            args=(text, voice, rate, speed_multiplier, lang)
-        )
-        self.speech_thread.daemon = True
-        self.speech_thread.start()
-
-    def _generate_and_play_simple(self, text, voice, rate, speed_multiplier):
-        """Simplified synchronous TTS generation and playback with interruption"""
-        # Generate TTS
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        tmp_file_path = tmp_file.name
-        tmp_file.close()
-        
-        try:
-            # Generate TTS synchronously
-            communicate = edge_tts.Communicate(text, voice, rate=rate)
-            asyncio.run(communicate.save(tmp_file_path))
-            
-            # Play with interruption
-            if os.path.exists(tmp_file_path) and not self.speech_interrupted:
-                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
-                pygame.mixer.music.load(tmp_file_path)
-                pygame.mixer.music.play()
-                
-                while pygame.mixer.music.get_busy() and not self.speech_interrupted:
-                    time.sleep(0.05)  # Check every 50ms for interruption
-                
-                if self.speech_interrupted:
-                    pygame.mixer.music.stop()
-                    print("Speech interrupted!")
-                
-                pygame.mixer.quit()
-                
-        except Exception as e:
-            print(f"TTS generation/playback error: {e}")
-        finally:
-            if os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
-    
-    def _speak_threaded(self, text, voice, rate, speed_multiplier, lang):
-        """Threaded speech function with interruption support"""
-        self.is_speaking = True
-        self.speech_interrupted = False
-        
-        try:
-            # Set voice based on language
-            if lang == "hi":
-                voice = "hi-IN-AartiNeural"
-            
-            print(f"Speaking with Edge TTS: {text}")
-            
-            # Call the simplified function directly
-            self._generate_and_play_simple(text, voice, rate, speed_multiplier)
-                
-        except Exception as e:
-            print(f"Edge TTS failed: {e}")
-        finally:
-            self.is_speaking = False
-    
-    def stop_speech(self):
-        """Stop current speech immediately"""
-        if self.is_speaking:
-            self.speech_interrupted = True
-            try:
-                if pygame.mixer.get_init():
-                    pygame.mixer.music.stop()
-            except:
-                pass
-            
-            # Wait briefly for thread to finish
-            if self.speech_thread and self.speech_thread.is_alive():
-                self.speech_thread.join(timeout=0.5)
-    
-    def wait_for_speech_completion(self, timeout=10):
-        """Wait for current speech to complete (optional utility method)"""
-        start_time = time.time()
-        while self.is_speaking and (time.time() - start_time) < timeout:
-            time.sleep(0.1)
-        return not self.is_speaking  # Returns True if speech completed, False if timeout
-    
-        
-    def pause_listening(self, seconds=3):
-        """Pause listening to avoid detecting the assistant's own voice"""
-        import time
-        print(f"Pausing listening for {seconds} seconds...")
-        time.sleep(seconds)
-    
-    def check_microphones(self):
-        """Check available microphones and their indices"""
-        print("\nAvailable microphones:")
-        for i, microphone_name in enumerate(sr.Microphone.list_microphone_names()):
-            print(f"  {i}: {microphone_name}")
-        print(f"Currently using microphone index: {self.mic_device_id}")
-        
-        # Test current microphone
-        try:
-            recognizer = sr.Recognizer()
-            with sr.Microphone(device_index=self.mic_device_id) as source:
-                print(f"Testing microphone {self.mic_device_id}...")
-                recognizer.adjust_for_ambient_noise(source, duration=1)
-                print(f"Energy threshold: {recognizer.energy_threshold}")
-                print("Microphone is working!")
-        except Exception as e:
-            print(f"Error with current microphone: {e}")
-            print("Consider changing the device_index in the code")
-    
-    def play_beep_sound(self, beep_file = None):
-        """Play a simple beep sound to indicate assistant is listening"""
-        try:
-            import pygame
-            
-            # Use the specific beep file
-            if not beep_file:
-                beep_file = "beep/short-beep-tone-47916.mp3"
-
-            if os.path.exists(beep_file):
-                pygame.mixer.init()
-                pygame.mixer.music.load(beep_file)
-                pygame.mixer.music.play()
-                
-                # Wait for the short beep to finish
-                while pygame.mixer.music.get_busy():
-                    pygame.time.wait(10)
-                
-                pygame.mixer.quit()
-            else:
-                print(f"Beep file not found: {beep_file}")
-                # Fallback to system beep
-
-        except Exception as e:
-            print(f"Error playing beep: {e}")
-    
-    
-    
+   
     def handle_spotify_action(self, tool_response):
         """Handle Spotify actions with enhanced feedback and error handling"""
         try:
@@ -528,7 +351,7 @@ User: {user_message}"""
             result = temp_connector.main(tool_response)
             
             if result:
-                self.speak(result)
+                self.audio_processors.speak(result)
                 
                 # Additional context for certain actions
                 action = tool_response.get("action", "")
@@ -541,7 +364,7 @@ User: {user_message}"""
                 elif action == "next":
                     print("Skipped to next track. Ready for next command.")
             else:
-                self.speak("Spotify action completed, but I didn't receive details about what happened.")
+              self.audio_processors.speak("Spotify action completed, but I didn't receive details about what happened.")
             return True
         except Exception as e:
             error_message = str(e)
@@ -549,13 +372,13 @@ User: {user_message}"""
             
             # Provide more specific error messages
             if "No active Spotify device" in error_message:
-                self.speak("I couldn't find an active Spotify device. Please open Spotify on your device and try again.")
+                self.audio_processors.speak("I couldn't find an active Spotify device. Please open Spotify on your device and try again.")
             elif "No track" in error_message or "No album" in error_message or "No artist" in error_message:
-                self.speak("I couldn't find that song on Spotify. Try using different keywords or check the spelling.")
+                self.audio_processors.speak("I couldn't find that song on Spotify. Try using different keywords or check the spelling.")
             elif "internet" in error_message.lower() or "connection" in error_message.lower():
-                self.speak("I'm having trouble connecting to Spotify. Please check your internet connection.")
+                self.audio_processors.speak("I'm having trouble connecting to Spotify. Please check your internet connection.")
             else:
-                self.speak("Sorry, I couldn't control Spotify right now. There was an unexpected error.")
+                self.audio_processors.speak("Sorry, I couldn't control Spotify right now. There was an unexpected error.")
 
     def handle_search_action(self, tool_response):
         """Handle search actions using Gemini Search - returns raw result for processing"""
@@ -632,13 +455,6 @@ User: {user_message}"""
                 
         return False
 
-    def audio_callback(self, indata, frames, time_info, status):
-        """Audio callback function for real-time audio processing"""
-        if status:
-            print(f"Audio callback status: {status}")
-        
-        audio_samples = indata[:, 0]
-        self.audio_buffer.extend(audio_samples)
 
     def give_processing_feedback(self, tool_type, query_hint=""):
         """Provide immediate feedback while processing different types of requests"""
@@ -738,7 +554,7 @@ User: {user_message}"""
             message = random.choice(messages)
         
         # Speak the feedback immediately
-        self.speak(message)
+        self.audio_processors.speak(message)
         
         # Small pause to let the feedback finish
         import time
@@ -797,7 +613,7 @@ User: {user_message}"""
         """Process user command and execute appropriate actions with interrupt support"""
         # Check for exit commands
         if any(word in user_command for word in ["exit", "quit", "goodbye", "bye"]):
-            self.speak("Goodbye!")
+            self.audio_processors.speak("Goodbye!")
             self.detection_running = False
             return True  # Signal to break from main loop
         
@@ -821,7 +637,7 @@ User: {user_message}"""
                 response = self.handle_weather_action(tool_response)
                 print(f"Weather API response: {response}")
                 ai_response = self.get_ai_response(response, is_tool_response=True)
-                self.speak(ai_response)
+                self.audio_processors.speak(ai_response)
                 return response
             
             self.handle_with_timed_feedback("weather", user_command, weather_action)
@@ -834,7 +650,7 @@ User: {user_message}"""
                 response = get_amazon_result(tool_response)
                 print(f"Amazon API response: {response}")
                 ai_response = self.get_ai_response(response, is_tool_response=True)
-                self.speak(ai_response)
+                self.audio_processors.speak(ai_response)
                 return response
             
             self.handle_with_timed_feedback("amazon", user_command, amazon_action)
@@ -847,7 +663,7 @@ User: {user_message}"""
                 response = self.get_order_tracking(tool_response)
                 print(f"Order tracking response: {response}")
                 ai_response = self.get_ai_response(response, is_tool_response=True)
-                self.speak(ai_response)
+                self.audio_processors.speak(ai_response)
                 return response
             
             self.handle_with_timed_feedback("amazon_order_tracking", user_command, order_tracking_action)
@@ -863,7 +679,7 @@ User: {user_message}"""
                 
                 # Get language for TTS
                 lang = tool_response.get("lang", "en")
-                self.speak(result, lang=lang)
+                self.audio_processors.speak(result, lang=lang)
                 return result
             
             result = self.handle_with_timed_feedback(tool_response["tool"], user_command, search_action)
@@ -874,6 +690,41 @@ User: {user_message}"""
                 return self.handle_follow_up_conversation()
             else:
                 print("Search completed. Ready for next command.")
+
+        elif tool_response["tool"] == "reminder":
+            self.conversation_history.append({"role": "user", "content": user_command})
+            
+            def reminder_action():
+                try:
+                    action = tool_response.get("action", "add")
+                    
+                    if action == "add":
+                        # Extract reminder text and time
+                        reminder_text = tool_response.get("text", "")
+                        reminder_time = tool_response.get("time", "")
+                        
+                        response = self.reminder_manager.add_reminder(reminder_text, reminder_time)
+                        
+                    elif action == "list":
+                        response = self.reminder_manager.list_reminders()
+                        
+                    else:
+                        response = "I can help you add reminders or list your current reminders."
+                    
+                    print(f"Reminder response: {response}")
+                    ai_response = self.get_ai_response(response, is_tool_response=True)
+                    self.audio_processors.speak(ai_response)
+                    return response
+                    
+                except Exception as e:
+                    error_msg = f"Sorry, I had trouble with that reminder. {str(e)}"
+                    print(f"Reminder error: {error_msg}")
+                    self.audio_processors.speak(error_msg)
+                    return error_msg
+            
+            # Execute reminder action directly - no need for timed feedback
+            reminder_action()
+            print("Reminder action completed. Ready for next command.")
 
         elif tool_response["tool"] == "none":
             return self.handle_direct_response(tool_response, user_command)
@@ -888,7 +739,7 @@ User: {user_message}"""
         """Handle direct response from OpenAI without tools"""
         # Give feedback for complex conversational queries
         if any(keyword in user_command.lower() for keyword in ["explain", "tell me about", "what is", "how does", "why", "describe"]):
-            self.speak("Let me think about that")
+            self.audio_processors.speak("Let me think about that")
             time.sleep(0.3)
         
         # Add the user command to history since it's a conversational message
@@ -899,7 +750,7 @@ User: {user_message}"""
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": response_text})
             self.save_conversation_history()
-            self.speak(response_text)
+            self.audio_processors.speak(response_text)
             
             # Check if the direct response needs follow-up
             if self.is_question_or_needs_clarification(response_text):
@@ -908,7 +759,7 @@ User: {user_message}"""
         else:
             # Fallback to general AI response (already handles conversation history)
             ai_response = self.get_ai_response(user_command)
-            self.speak(ai_response)
+            self.audio_processors.speak(ai_response)
             
             # Check if this AI response needs follow-up too
             if self.is_question_or_needs_clarification(ai_response):
@@ -922,12 +773,12 @@ User: {user_message}"""
         """Handle fallback conversation with follow-up support"""
         # Give feedback for processing
         if len(user_command) > 20:  # Longer queries might need processing time
-            self.speak("Let me process that for you")
+            self.audio_processors.speak("Let me process that for you")
             time.sleep(0.3)
         
         # This is a conversational message, so add to history and get AI response
         ai_response = self.get_ai_response(user_command)
-        self.speak(ai_response)
+        self.audio_processors.speak(ai_response)
         
         time.sleep(0.3)
         
@@ -940,7 +791,8 @@ User: {user_message}"""
     def handle_follow_up_conversation(self):
         """Handle follow-up conversation when AI asks questions"""
         print("AI is asking a question or needs clarification. Continuing conversation...")
-        self.pause_listening(0.5)  # Longer pause for better audio separation
+        # Pause using audio_processors helper for consistent behavior
+        self.audio_processors.pause_listening(0.5)  # Longer pause for better audio separation
         print("Now listening for follow-up response...")
         
         # Try to get follow-up response
@@ -948,37 +800,49 @@ User: {user_message}"""
         if follow_up_command:
             print(f"Received valid follow-up response: '{follow_up_command}'")
             ai_response = self.get_ai_response(follow_up_command)
-            self.speak(ai_response)
+            self.audio_processors.speak(ai_response)
             
             # Check if this response also needs follow-up
             if self.is_question_or_needs_clarification(ai_response):
                 return self.handle_final_follow_up()
         else:
             print("No valid follow-up response detected after multiple attempts")
-            self.speak("I didn't hear your response. Feel free to wake me up again if you need anything!")
+            self.audio_processors.speak("I didn't hear your response. Feel free to wake me up again if you need anything!")
         
         return False
     
     def handle_final_follow_up(self):
         """Handle final follow-up attempt"""
         print("AI has another question. One more follow-up attempt...")
-        self.pause_listening(1.5)
+        self.audio_processors.pause_listening(1.5)
         final_follow_up = self.listen_for_command(is_follow_up=True)
         if final_follow_up:
             final_response = self.get_ai_response(final_follow_up)
-            self.speak(final_response)
+            self.audio_processors.speak(final_response)
         else:
-            self.speak("I'll end our conversation here. Feel free to wake me up again anytime!")
+          self.audio_processors.speak("I'll end our conversation here. Feel free to wake me up again anytime!")
         
         return False
-    
+
+    def check_and_announce_reminders(self):
+        """Check for due reminders and announce them"""
+        try:
+            reminder_message = self.reminder_manager.get_due_reminders_for_speech()
+            if reminder_message and not getattr(self.audio_processors, 'is_speaking', False):
+                print(f"Announcing reminder: {reminder_message}")
+                # Play attention sound before reminder
+                self.audio_processors.play_beep_sound()
+                time.sleep(0.3)
+                self.audio_processors.speak(reminder_message)
+        except Exception as e:
+            print(f"Error checking reminders: {e}")
+
     def handle_wake_word_detection(self):
         """Handle actions when wake word is detected"""
         print("Wake word detected! Listening for command...")
-        
-        # Play simple beep sound for instant feedback
-        self.play_beep_sound()
-        self.pause_listening(0.3)  # Minimal pause
+        # play beep sound to indicate readiness
+        self.audio_processors.play_beep_sound()
+        self.audio_processors.pause_listening(0.2)  # Minimal pause
         
         user_command = self.listen_for_command()
         
@@ -990,20 +854,23 @@ User: {user_message}"""
             print("No command detected, waiting for next input...")
         
         return False  # Continue main loop
-
     def main_conversation_thread(self):
         """Thread function for continuous wake word detection with speech interruption"""
         print("Main conversation thread started")
         
         while self.detection_running:
-            # Check if we have enough audio data
+            # Ensure wake word detector and its model are available
+            if not getattr(self, 'wake_word_detector', None) or not getattr(self.wake_word_detector, 'model', None):
+                time.sleep(self.step_duration)
+                continue
+            # Check if we have enough audio data in our buffer
             if len(self.audio_buffer) < self.window_samples:
                 time.sleep(self.step_duration)
                 continue
-            
+
             # Wake word detection (now always active, even during speech)
             audio_window = np.array(self.audio_buffer)
-            detected, energy, confidence = detect_wakeword(audio_window, self.model, self.sample_rate)
+            detected, energy, confidence = self.wake_word_detector.detect_wakeword(audio_window, self.sample_rate)
             
             # Show detection attempts with energy > 0.005 for debugging
             if energy and energy > 0.005:
@@ -1011,12 +878,15 @@ User: {user_message}"""
             
             # Handle wake word detection
             if detected:
-                # If we're speaking, interrupt it
-                if self.is_speaking:
+                # If we're speaking, interrupt it via audio_processors
+                if getattr(self.audio_processors, 'is_speaking', False):
                     print("Wake word detected while speaking - interrupting!")
-                    self.stop_speech()
+                    try:
+                        self.audio_processors.stop_speech()
+                    except Exception:
+                        pass
                     time.sleep(0.3)  # Brief pause after interruption
-                
+
                 should_exit = self.handle_wake_word_detection()
                 if should_exit:
                     break
@@ -1030,21 +900,36 @@ User: {user_message}"""
         print("Listening for wake word...")
         
         # Initialize wake word detection variables
-        self.model = load_model('model_training/saved_model/WWD_improved.h5')
+        print("Wake word model already loaded in WakeWordDetector")
+
         self.window_duration = 1.5  # seconds (back to training size for accuracy)
         self.step_duration = 0.3    # seconds (faster than 0.5 but not too fast)
         self.window_samples = int(self.window_duration * self.sample_rate)
+        
+        # Create audio buffer for wake word detection in VoiceAssistant
         self.audio_buffer = deque(maxlen=self.window_samples)
+        self.buffer_lock = threading.Lock()
+        print(f"Audio buffer created with {self.window_samples} samples ({self.window_duration})")
+        
+        # Configure AudioProcessors to use our buffer
+        self.audio_processors.set_audio_buffer(self.audio_buffer, self.buffer_lock)
+        
+        # Start reminder checker in background
+        print("Starting reminder system...")
+        # self.reminder_manager.start_reminder_checker()
+            
         self.detection_running = True
         self.stream = None
         try:
-            self.play_beep_sound(beep_file = "beep/startup_sound.wav")
+            self.audio_processors.play_beep_sound(beep_file = "beep/startup_sound.wav")
             
-            self.stream = sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='float32', callback=self.audio_callback)
+            self.stream = sd.InputStream(samplerate=self.sample_rate, channels=1, dtype='float32', callback=self.audio_processors.audio_callback)
             with self.stream:
                 t = threading.Thread(target=self.main_conversation_thread, daemon=True)
                 t.start()
                 while self.detection_running:
+                    # Check for due reminders while waiting
+                    self.check_and_announce_reminders()
                     time.sleep(0.1)  # Keep main thread alive
         except KeyboardInterrupt:
             print("\nProgram stopped by user")
@@ -1054,6 +939,9 @@ User: {user_message}"""
             self.detection_running = False
         finally:
             print("Voice assistant shutting down...")
+            # Stop reminder checker
+            if hasattr(self, 'reminder_manager'):
+                self.reminder_manager.stop_reminder_checker()
 
 if __name__ == "__main__":
     try:
