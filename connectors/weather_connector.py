@@ -235,5 +235,5 @@ def handle_tool_requests(tool_request: Dict) -> str:
 if __name__ == "__main__":
     weather = WeatherAPIConnector()
     location = "Pune"
-    result = weather.get_timezone(location)
+    result = weather.get_simple_weather(location)
     print(result)

@@ -22,6 +22,8 @@ from openai import OpenAI
 from connectors.spotify_connector import SpotifyConnector
 from connectors.search_engine import GeminiSearch
 from connectors.weather_connector import handle_tool_requests
+from connectors.amzon_connector import get_amazon_result
+from connectors.amazon_order_tracker import get_order
 import edge_tts
 import asyncio
 import tempfile
@@ -102,6 +104,7 @@ class VoiceAssistant:
         # Initialize conversation history
         self.conversation_history = self.load_conversation_history()
         self.handle_weather_action = handle_tool_requests
+        self.get_order_tracking = get_order
         # Audio configuration  
         self.audio_channels = 1  # Channel configuration for microphone recording
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
@@ -112,6 +115,11 @@ class VoiceAssistant:
         self.sample_rate = 22050
         self.duration = 1.5
         self.debug_mode = True            # Show detailed output
+
+        # Speech interruption control
+        self.is_speaking = False
+        self.speech_interrupted = False
+        self.speech_thread = None
 
         # Check available voices
         self.check_available_tts_options()
@@ -124,7 +132,7 @@ class VoiceAssistant:
         except (FileNotFoundError, json.JSONDecodeError):
             # Start with system message to establish assistant personality
             return [
-                {"role": "system", "content": "You are a helpful, friendly, and concise voice assistant named Sofi. Provide short and direct answers suitable for voice responses."}
+                {"role": "system", "content": "You are a helpful, friendly, and concise voice assistant named Sofi. Respond primarily in English unless the user specifically asks in Hindi. Provide short and direct answers suitable for voice responses. Always use conversation history to understand context and provide relevant follow-up answers. When users refer to previous topics, reference them appropriately. Do not use special characters, markdown, asterisks, or formatting in your responses. Use only plain text with simple punctuation as your responses will be converted to speech."}
             ]
     
     def save_conversation_history(self):
@@ -162,30 +170,51 @@ class VoiceAssistant:
     
     def get_tool_action(self, user_message):
         """Interact with OpenAI to decide which tool/action to call based on user_message."""
-        self.conversation_history.append({"role": "user", "content": user_message})
         try:
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            # Ask OpenAI to return a JSON with tool/action info
-            tool_prompt = (
-                "You are a voice assistant. Based on the user's message, respond ONLY with a JSON object specifying the tool to use and action needed."
-                "always transliterate the response in english even query is in different language."
-                "if user message is in hindi or different language respond in that language. and provide language flag in response. also use the same language for tools query do not transliterate the user message."
-                "Example for Spotify play: {\"tool\": \"spotify\", \"action\": \"play\", \"target\": \"album\", \"name\": \"Shape of You\"}. "
-                "Example for Spotify resume stopped song: {\"tool\": \"spotify\", \"action\": \"resume\"}. "
-                "Example for Spotify next: {\"tool\": \"spotify\", \"action\": \"next\"}. "
-                "Example for Spotify stop: {\"tool\": \"spotify\", \"action\": \"stop\"}. "
-                "Example for Google Search (for any questions needs current data, news, facts): {\"tool\": \"google_search\", \"action\": \"search\", \"query\": \"latest news in AI\"}. "
-                "Example for Weather API (for weather-related queries): {\"tool\": \"weather\", \"action\": \"get_current_weather\", \"location\": \"London\"}. "
-                "Example for Weather API (for weather-related queries): {\"tool\": \"weather\", \"action\": \"get_forecast\", \"location\": \"pune\", \"days\": 3}. "
-                "Example for current time use API (for weather-related queries): {\"tool\": \"weather\", \"action\": \"get_timezone\", \"location\": \"pune\"}. "
-                "If no tool is needed and l can answer directly, respond with: {\"tool\": \"none\", \"response\": \"your direct answer here\",{\"lang\": \"en\"}. "
-                "if location is not provided always use Pune as default location."
-                "User message: " + user_message
-            )
+            
+            # Simple context check - only look at last 2 exchanges for efficiency
+            recent_context = ""
+            if len(self.conversation_history) >= 3:  # system + at least 1 exchange
+                recent_messages = self.conversation_history[-4:]  # Last 2 exchanges
+                for msg in recent_messages:
+                    if msg["role"] in ["user", "assistant"]:
+                        recent_context += f"{msg['role']}: {msg['content'][:100]}...\n"
+            
+            # Compact tool routing prompt
+            tool_prompt = f"""Route user query to appropriate tool. Return JSON only.
+
+Recent context: {recent_context}
+
+Rules:
+- If asking about products mentioned in recent context, use "none"
+- For NEW products search: use "amazon" 
+- For music/spotify: "spotify"
+- For weather/time: "weather" 
+- For news/search: "google_search"
+- For amazon order tracking/status: "amazon_order_tracking"
+- For amazon order history for upto nth days: use get_recent_orders action
+- For default location, use Pisoli, Pune, India
+- Default: "none"
+
+Examples:
+{{"tool":"amazon","action":"single_product_search","query":"iPhone 16","lang":"en"}}
+{{"tool":"spotify","action":"play","target":"song","name":"Shape of You"}}
+{{"tool":"spotify","action":"resume"}}
+{{"tool":"spotify","action":"stop"}}
+{{"tool":"spotify","action":"next"}}
+{{"tool":"weather","action":"get_current_weather","location":"Pune"}}
+{{"tool":"weather","action":"get_forecast","location":"Pune"}}
+{{"tool":"weather","action":"get_timezone","location":"Pune"}}
+{{"tool":"amazon_order_tracking","action":"get_recent_orders","days":5}}
+{{"tool":"none","lang":"en"}}
+
+User: {user_message}"""
+
             response = client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[{"role": "system", "content": tool_prompt}],
-                max_tokens=100,
+                max_tokens=50,  # Much smaller - just need JSON
                 temperature=0.0
             )
             reply = response.choices[0].message.content.strip()
@@ -238,10 +267,10 @@ class VoiceAssistant:
                     else:
                         print(f"I didn't catch that. Please try again... (attempt {retry_count + 1})")
                     
-                    # Brief ambient noise adjustment to calibrate
-                    print("Calibrating microphone...")
-                    recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                    print(f"Adjusted energy threshold: {recognizer.energy_threshold}")
+                    # # Brief ambient noise adjustment to calibrate
+                    # print("Calibrating microphone...")
+                    # recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                    # print(f"Adjusted energy threshold: {recognizer.energy_threshold}")
                         
                     print("i m listening...")
                     
@@ -307,77 +336,133 @@ class VoiceAssistant:
                     
         return None
     
-    def get_ai_response(self, user_message):
+    def get_ai_response(self, user_message, is_tool_response=False):
         """Get a formatted response from OpenAI for general conversation."""
-        self.conversation_history.append({"role": "user", "content": user_message})
+        # Ensure user_message is always a string
+        if not isinstance(user_message, str):
+            user_message = str(user_message)
+        
         try:
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            # For tool responses, create a temporary conversation with the tool data
+            if is_tool_response:
+                temp_messages = self.conversation_history.copy()
+                temp_messages.append({"role": "user", "content": f"Please summarize this information for the user in a natural, conversational way. Always respond in same language as user query. For Hindi queries, transliterate your response to Roman script (English letters). Do not add any special characters in response, make it plain text with new line if required since response will be used for TTS: {user_message}"})
+                messages_to_send = temp_messages
+            else:
+                # For regular conversation, add user message to history
+                self.conversation_history.append({"role": "user", "content": user_message})
+                # Add comprehensive TTS and language formatting instruction with context awareness
+                temp_messages = self.conversation_history.copy()
+                temp_messages.append({"role": "system", "content": "IMPORTANT RESPONSE GUIDELINES: 1) Use the conversation history to understand context and provide relevant answers to follow-up questions. 2) If the user refers to 'this', 'that', 'it', or asks follow-up questions, reference the previous conversation. 3) Respond in the same language as the user's query. 4) For Hindi queries, transliterate your response to Roman script (English letters). 5) Use plain text only - no special characters, markdown, asterisks, or formatting. 6) Use simple punctuation only. 7) Keep responses concise and conversational for voice output. 8) This response will be converted to speech, so ensure it sounds natural when spoken aloud."})
+                messages_to_send = temp_messages
+            
             response = client.chat.completions.create(
                 model="gpt-4.1",
-                messages=self.conversation_history,
+                messages=messages_to_send,
                 max_tokens=150,
                 temperature=0.7
             )
             reply = response.choices[0].message.content.strip()
+            
+            # Add assistant response to conversation history
             self.conversation_history.append({"role": "assistant", "content": reply})
             self.save_conversation_history()
+            
             return reply
         except Exception as e:
             print(f"Error getting AI response: {e}")
             return "Sorry, I'm having trouble thinking right now."
     
-    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang= "en"):
+    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang="en"):
         """
-        Simple Edge TTS function for voice assistant integration
+        Threaded TTS function with interruption support
+        """
+        # Stop any current speech first
+        self.stop_speech()
         
-        Args:
-            text: Text to speak
-            voice: Edge TTS voice name
-            rate: Speech rate ("+0%", "+30%", "+50%", etc.)
-            speed_multiplier: Additional pygame playback speed control
-        """
-        print(f"Speaking with Edge TTS: {text}")
-        if lang == "hi":
-            voice = "hi-IN-AartiNeural"
-        try:
-            # Run the async function in a new event loop
-            asyncio.run(self._generate_and_play(text, voice, rate, speed_multiplier))
-            
-        except Exception as e:
-            print(f"Edge TTS failed: {e}")
+        # Start new speech thread
+        self.speech_thread = threading.Thread(
+            target=self._speak_threaded, 
+            args=(text, voice, rate, speed_multiplier, lang)
+        )
+        self.speech_thread.daemon = True
+        self.speech_thread.start()
 
-    async def _generate_and_play(self, text, voice, rate, speed_multiplier):
-        """Internal async function to generate and play TTS"""
+    def _generate_and_play_simple(self, text, voice, rate, speed_multiplier):
+        """Simplified synchronous TTS generation and playback with interruption"""
+        # Generate TTS
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp_file_path = tmp_file.name
         tmp_file.close()
         
         try:
-            # Generate speech
+            # Generate TTS synchronously
             communicate = edge_tts.Communicate(text, voice, rate=rate)
-            await communicate.save(tmp_file_path)
+            asyncio.run(communicate.save(tmp_file_path))
             
-            if os.path.exists(tmp_file_path):
-                # Play with pygame
-                base_frequency = 22050
-             
-                pygame.mixer.init(frequency=base_frequency, size=-16, channels=2, buffer=512)
-                
+            # Play with interruption
+            if os.path.exists(tmp_file_path) and not self.speech_interrupted:
+                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
                 pygame.mixer.music.load(tmp_file_path)
                 pygame.mixer.music.play()
                 
-                # Wait for playback to complete
-                while pygame.mixer.music.get_busy():
-                    pygame.time.wait(50)
+                while pygame.mixer.music.get_busy() and not self.speech_interrupted:
+                    time.sleep(0.05)  # Check every 50ms for interruption
+                
+                if self.speech_interrupted:
+                    pygame.mixer.music.stop()
+                    print("Speech interrupted!")
                 
                 pygame.mixer.quit()
                 
+        except Exception as e:
+            print(f"TTS generation/playback error: {e}")
         finally:
             if os.path.exists(tmp_file_path):
                 os.unlink(tmp_file_path)
-        
     
+    def _speak_threaded(self, text, voice, rate, speed_multiplier, lang):
+        """Threaded speech function with interruption support"""
+        self.is_speaking = True
+        self.speech_interrupted = False
         
+        try:
+            # Set voice based on language
+            if lang == "hi":
+                voice = "hi-IN-AartiNeural"
+            
+            print(f"Speaking with Edge TTS: {text}")
+            
+            # Call the simplified function directly
+            self._generate_and_play_simple(text, voice, rate, speed_multiplier)
+                
+        except Exception as e:
+            print(f"Edge TTS failed: {e}")
+        finally:
+            self.is_speaking = False
+    
+    def stop_speech(self):
+        """Stop current speech immediately"""
+        if self.is_speaking:
+            self.speech_interrupted = True
+            try:
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+            except:
+                pass
+            
+            # Wait briefly for thread to finish
+            if self.speech_thread and self.speech_thread.is_alive():
+                self.speech_thread.join(timeout=0.5)
+    
+    def wait_for_speech_completion(self, timeout=10):
+        """Wait for current speech to complete (optional utility method)"""
+        start_time = time.time()
+        while self.is_speaking and (time.time() - start_time) < timeout:
+            time.sleep(0.1)
+        return not self.is_speaking  # Returns True if speech completed, False if timeout
     
         
     def pause_listening(self, seconds=3):
@@ -457,7 +542,7 @@ class VoiceAssistant:
                     print("Skipped to next track. Ready for next command.")
             else:
                 self.speak("Spotify action completed, but I didn't receive details about what happened.")
-            
+            return True
         except Exception as e:
             error_message = str(e)
             print(f"Spotify error: {error_message}")
@@ -555,6 +640,159 @@ class VoiceAssistant:
         audio_samples = indata[:, 0]
         self.audio_buffer.extend(audio_samples)
 
+    def give_processing_feedback(self, tool_type, query_hint=""):
+        """Provide immediate feedback while processing different types of requests"""
+        import random
+        
+        feedback_messages = {
+            "spotify": [
+                "Let me control your music for you",
+                "Connecting to Spotify",
+                "Working on your music request",
+                "I'm handling your music command"
+            ],
+            "weather": [
+                "Let me check the weather for you",
+                "Getting the latest weather information", 
+                "Fetching weather details",
+                "I'm checking the current conditions"
+            ],
+            "amazon": [
+                "Let me search for that product",
+                "I'm fetching product details for you",
+                "Searching Amazon for your request",
+                "Let me find that on Amazon",
+                "I'm looking up that product"
+            ],
+            "search": [
+                "Let me search for that information",
+                "I'm looking that up for you",
+                "Searching for the latest details",
+                "Let me find that information",
+                "I'm searching the web for you"
+            ],
+            "google_search": [
+                "Let me search for that information",
+                "I'm looking that up for you", 
+                "Searching for the latest details",
+                "Let me find that information",
+                "I'm searching the web for you"
+            ],
+            "web_search": [
+                "Let me search for that information",
+                "I'm looking that up for you",
+                "Searching for the latest details",
+                "Let me find that information",
+                "I'm searching the web for you"
+            ],
+            "amazon_order_tracking": [
+                "Let me check your order status",
+                "I'm fetching your order details",
+                "Checking your recent orders",
+                "Let me track that order for you",
+                "Looking up your order history"
+            ]
+           
+        }
+        
+        # Get appropriate message for the tool type
+        messages = feedback_messages.get(tool_type, ["I'm working on your request"])
+        
+        # Select message based on query content for more context
+        if tool_type == "amazon" and query_hint:
+            if "price" in query_hint.lower():
+                message = "Let me check the price for you"
+            elif "review" in query_hint.lower():
+                message = "I'm fetching reviews for you"
+            elif "compare" in query_hint.lower():
+                message = "Let me compare those products"
+            else:
+                message = random.choice(messages)
+        elif tool_type == "amazon_order_tracking" and query_hint:
+            if "status" in query_hint.lower() or "track" in query_hint.lower():
+                message = "Let me track that order for you"
+            elif "recent" in query_hint.lower() or "latest" in query_hint.lower():
+                message = "Checking your recent orders"
+            elif "delivery" in query_hint.lower():
+                message = "Let me check the delivery status"
+            else:
+                message = random.choice(messages)
+        elif tool_type == "weather" and query_hint:
+            if "time" in query_hint.lower():
+                message = "Let me check the current time"
+            elif "tomorrow" in query_hint.lower():
+                message = "I'm checking tomorrow's weather"
+            else:
+                message = random.choice(messages)
+        elif tool_type == "spotify" and query_hint:
+            if "play" in query_hint.lower():
+                message = "Let me play that for you"
+            elif "stop" in query_hint.lower():
+                message = "I'm stopping the music"
+            elif "next" in query_hint.lower():
+                message = "Skipping to the next song"
+            else:
+                message = random.choice(messages)
+        else:
+            # Use random message for variety
+            message = random.choice(messages)
+        
+        # Speak the feedback immediately
+        self.speak(message)
+        
+        # Small pause to let the feedback finish
+        import time
+        time.sleep(0.5)
+
+    def handle_with_timed_feedback(self, tool_type, query_hint, action_func, *args, **kwargs):
+        """
+        Execute an action with time-based processing feedback.
+        Only gives feedback if the action takes longer than 5 seconds.
+        
+        Args:
+            tool_type: Type of tool for feedback message selection
+            query_hint: User query for context-aware feedback
+            action_func: Function to execute
+            *args, **kwargs: Arguments to pass to action_func
+            
+        Returns:
+            Result from action_func
+        """
+        import time
+        import threading
+        
+        start_time = time.time()
+        feedback_given = False
+        result_ready = False
+        
+        def delayed_feedback():
+            """Give feedback after 5 seconds if action is still running"""
+            nonlocal feedback_given
+            time.sleep(5.0)  # Wait 5 seconds
+            if not result_ready and not feedback_given:  # Check if action is still running
+                feedback_given = True
+                self.give_processing_feedback(tool_type, query_hint)
+        
+        # Start the delayed feedback thread
+        feedback_thread = threading.Thread(target=delayed_feedback, daemon=True)
+        feedback_thread.start()
+        
+        try:
+            # Execute the actual action
+            result = action_func(*args, **kwargs)
+            
+            # Mark that action completed
+            result_ready = True
+            execution_time = time.time() - start_time
+            
+            print(f"Action completed in {execution_time:.2f} seconds. Feedback given: {feedback_given}")
+            return result
+            
+        except Exception as e:
+            # Mark completion even on error to prevent delayed feedback
+            result_ready = True
+            raise e
+
     def process_user_command(self, user_command):
         """Process user command and execute appropriate actions with interrupt support"""
         # Check for exit commands
@@ -569,18 +807,66 @@ class VoiceAssistant:
         
         # Handle different tool responses
         if tool_response["tool"] == "spotify":
-            self.handle_spotify_action(tool_response)
+            # Spotify actions are usually fast, use timed feedback
+            def spotify_action():
+                return self.handle_spotify_action(tool_response)
+            
+            self.handle_with_timed_feedback("spotify", user_command, spotify_action)
             print("Spotify action completed. Ready for next command.")
 
-        if tool_response["tool"] == "weather":
-            response = self.handle_weather_action(tool_response)
-            ai_response = self.get_ai_response(response)
-            self.speak(ai_response)
+        elif tool_response["tool"] == "weather":
+            self.conversation_history.append({"role": "user", "content": user_command})
+            
+            def weather_action():
+                response = self.handle_weather_action(tool_response)
+                print(f"Weather API response: {response}")
+                ai_response = self.get_ai_response(response, is_tool_response=True)
+                self.speak(ai_response)
+                return response
+            
+            self.handle_with_timed_feedback("weather", user_command, weather_action)
             print("Weather action completed. Ready for next command.")
 
+        elif tool_response["tool"] == "amazon":
+            self.conversation_history.append({"role": "user", "content": user_command})
+            
+            def amazon_action():
+                response = get_amazon_result(tool_response)
+                print(f"Amazon API response: {response}")
+                ai_response = self.get_ai_response(response, is_tool_response=True)
+                self.speak(ai_response)
+                return response
+            
+            self.handle_with_timed_feedback("amazon", user_command, amazon_action)
+            print("Amazon action completed. Ready for next command.")
+
+        elif tool_response["tool"] == "amazon_order_tracking":
+            self.conversation_history.append({"role": "user", "content": user_command})
+            
+            def order_tracking_action():
+                response = self.get_order_tracking(tool_response)
+                print(f"Order tracking response: {response}")
+                ai_response = self.get_ai_response(response, is_tool_response=True)
+                self.speak(ai_response)
+                return response
+            
+            self.handle_with_timed_feedback("amazon_order_tracking", user_command, order_tracking_action)
+            print("Order tracking completed. Ready for next command.")
+
         elif tool_response["tool"] in ["search", "google_search", "web_search", "brave_search"]:
-            result = self.handle_search_action(tool_response)
-            self.speak(result)
+            self.conversation_history.append({"role": "user", "content": user_command})
+            
+            def search_action():
+                result = self.handle_search_action(tool_response)
+                self.conversation_history.append({"role": "assistant", "content": result})
+                self.save_conversation_history()
+                
+                # Get language for TTS
+                lang = tool_response.get("lang", "en")
+                self.speak(result, lang=lang)
+                return result
+            
+            result = self.handle_with_timed_feedback(tool_response["tool"], user_command, search_action)
             
             # Check if search result needs clarification or follow-up
             if self.is_question_or_needs_clarification(result):
@@ -600,8 +886,19 @@ class VoiceAssistant:
     
     def handle_direct_response(self, tool_response, user_command):
         """Handle direct response from OpenAI without tools"""
+        # Give feedback for complex conversational queries
+        if any(keyword in user_command.lower() for keyword in ["explain", "tell me about", "what is", "how does", "why", "describe"]):
+            self.speak("Let me think about that")
+            time.sleep(0.3)
+        
+        # Add the user command to history since it's a conversational message
+        self.conversation_history.append({"role": "user", "content": user_command})
+        
         if "response" in tool_response:
             response_text = tool_response["response"]
+            # Add assistant response to history
+            self.conversation_history.append({"role": "assistant", "content": response_text})
+            self.save_conversation_history()
             self.speak(response_text)
             
             # Check if the direct response needs follow-up
@@ -609,7 +906,7 @@ class VoiceAssistant:
                 time.sleep(0.3)
                 return self.handle_follow_up_conversation()
         else:
-            # Fallback to general AI response
+            # Fallback to general AI response (already handles conversation history)
             ai_response = self.get_ai_response(user_command)
             self.speak(ai_response)
             
@@ -623,6 +920,12 @@ class VoiceAssistant:
     
     def handle_fallback_conversation(self, user_command):
         """Handle fallback conversation with follow-up support"""
+        # Give feedback for processing
+        if len(user_command) > 20:  # Longer queries might need processing time
+            self.speak("Let me process that for you")
+            time.sleep(0.3)
+        
+        # This is a conversational message, so add to history and get AI response
         ai_response = self.get_ai_response(user_command)
         self.speak(ai_response)
         
@@ -689,9 +992,8 @@ class VoiceAssistant:
         return False  # Continue main loop
 
     def main_conversation_thread(self):
-        """Thread function for continuous wake word detection"""
+        """Thread function for continuous wake word detection with speech interruption"""
         print("Main conversation thread started")
-        conversation_active = False
         
         while self.detection_running:
             # Check if we have enough audio data
@@ -699,12 +1001,7 @@ class VoiceAssistant:
                 time.sleep(self.step_duration)
                 continue
             
-            # Skip detection during conversation to avoid interruptions
-            if conversation_active:
-                time.sleep(self.step_duration)
-                continue
-                
-            # Wake word detection
+            # Wake word detection (now always active, even during speech)
             audio_window = np.array(self.audio_buffer)
             detected, energy, confidence = detect_wakeword(audio_window, self.model, self.sample_rate)
             
@@ -714,13 +1011,16 @@ class VoiceAssistant:
             
             # Handle wake word detection
             if detected:
-                conversation_active = True
+                # If we're speaking, interrupt it
+                if self.is_speaking:
+                    print("Wake word detected while speaking - interrupting!")
+                    self.stop_speech()
+                    time.sleep(0.3)  # Brief pause after interruption
                 
                 should_exit = self.handle_wake_word_detection()
                 if should_exit:
                     break
                 
-                conversation_active = False
                 print("Returning to wake word listening...")
                 
             time.sleep(self.step_duration)

@@ -61,15 +61,20 @@ class GeminiSearch:
         str
             Just the answer text, no metadata
         """
-        # Build a conservative system instruction; if `lang` is provided, reference it.
-        lang_hint = f"Respond in {lang}." if lang else "Respond in the same language as the query."
+
         config = types.GenerateContentConfig(
             tools=[self._grounding_tool],
             system_instruction=(
                 "You are a helpful assistant. For location-based queries (weather, time, news, restaurants, events, traffic, etc.) "
                 "where no specific location is mentioned, default to Pune, India. Give very brief, direct answers (maximum 2 sentences). "
                 "Keep answers short and suitable for text-to-speech (avoid special characters). "
-                f"{lang_hint} If the language is not English, transliterate into Latin script."
+                f"IMPORTANT: Always respond in the same language as the user's query. "
+                f"If user asks in Hindi, respond in Hindi BUT use Roman script (transliterated Hindi) for TTS compatibility. "
+                f"If user asks in English, respond in English only. "
+                f"Language detected: {lang or 'en'}. "
+                f"If language is Hindi (hi), respond in Hindi but write it in Roman/Latin letters (like 'aaj ka mausam kaisa hai'). "
+                f"If language is English (en), respond in English only. "
+                f"Do NOT use Devanagari script (Hindi characters) - use Roman letters for Hindi words."
             ),
         )
         # Retry on transient errors (e.g. 503 / overloaded). Use exponential backoff with jitter.
