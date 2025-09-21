@@ -61,9 +61,7 @@ class ReminderManager:
                 "remind_time": remind_datetime.isoformat(),
                 "created_time": datetime.now().isoformat(),
                 "active": True,
-                "notified": False,
-                "repeat_count": 0,  # Simple counter for repeats
-                "max_repeats": 2    # Will repeat 2 times (total 3 notifications)
+                "notified": False
             }
             
             self.reminders.append(reminder)
@@ -168,26 +166,9 @@ class ReminderManager:
         due_reminders = []
         
         for reminder in self.reminders:
-            if not reminder["active"]:
-                continue
-                
-            remind_time = datetime.fromisoformat(reminder["remind_time"])
-            
-            # Check if it's time for this reminder
-            if not reminder.get("notified", False):
-                # First time
-                if remind_time <= now:
-                    due_reminders.append(reminder)
-            else:
-                # Check for repeat (every 5 minutes)
-                repeat_count = reminder.get("repeat_count", 0)
-                max_repeats = reminder.get("max_repeats", 2)
-                
-                if repeat_count < max_repeats:
-                    # Next repeat is 5 minutes after last notification
-                    next_repeat = remind_time + timedelta(minutes=5 * (repeat_count + 1))
-                    if next_repeat <= now:
-                        due_reminders.append(reminder)
+            if (reminder["active"] and not reminder["notified"] and 
+                datetime.fromisoformat(reminder["remind_time"]) <= now):
+                due_reminders.append(reminder)
                 
         return due_reminders
     
@@ -195,53 +176,9 @@ class ReminderManager:
         """Mark a reminder as notified."""
         for reminder in self.reminders:
             if reminder["id"] == reminder_id:
-                if not reminder.get("notified", False):
-                    reminder["notified"] = True
-                else:
-                    # Increment repeat count
-                    reminder["repeat_count"] = reminder.get("repeat_count", 0) + 1
-                    
-                    # Stop repeating after max repeats
-                    if reminder["repeat_count"] >= reminder.get("max_repeats", 2):
-                        reminder["active"] = False
+                reminder["notified"] = True
                 break
         self.save_reminders()
-
-    def snooze_reminder(self, reminder_id: int, snooze_minutes: int = 5) -> str:
-        """Snooze a reminder for specified minutes."""
-        for reminder in self.reminders:
-            if reminder["id"] == reminder_id and reminder["active"]:
-                snooze_until = datetime.now() + timedelta(minutes=snooze_minutes)
-                reminder["snoozed"] = True
-                reminder["snooze_until"] = snooze_until.isoformat()
-                self.save_reminders()
-                
-                snooze_time_str = snooze_until.strftime("%I:%M %p")
-                return f"Reminder snoozed until {snooze_time_str}: {reminder['text']}"
-        
-        return "Reminder not found or already completed."
-    
-    def acknowledge_reminder(self, reminder_id: int) -> str:
-        """Acknowledge a reminder to stop all repeats."""
-        for reminder in self.reminders:
-            if reminder["id"] == reminder_id:
-                reminder["active"] = False
-                reminder["notified"] = True
-                self.save_reminders()
-                return f"Reminder acknowledged and stopped: {reminder['text']}"
-        
-        return "Reminder not found."
-    
-    def set_reminder_repeat_settings(self, reminder_id: int, max_repeats: int = 3, repeat_interval: int = 5) -> str:
-        """Customize repeat settings for a specific reminder."""
-        for reminder in self.reminders:
-            if reminder["id"] == reminder_id:
-                reminder["max_repeats"] = max_repeats
-                reminder["repeat_interval"] = repeat_interval
-                self.save_reminders()
-                return f"Repeat settings updated: {max_repeats} repeats every {repeat_interval} minutes"
-        
-        return "Reminder not found."
     
     def cancel_reminder(self, reminder_id: int) -> str:
         """Cancel a specific reminder."""
@@ -307,59 +244,40 @@ class ReminderManager:
         
         if len(due_reminders) == 1:
             reminder = due_reminders[0]
-            repeat_count = reminder.get("repeat_count", 0)
-            max_repeats = reminder.get("max_repeats", 3)
-            
-            # Create message based on repeat status
-            if repeat_count == 0:
-                message = f"Reminder: {reminder['text']}"
-            else:
-                remaining = max_repeats - repeat_count
-                if remaining > 0:
-                    message = f"Reminder (repeat {repeat_count + 1}): {reminder['text']}. Say acknowledge to stop repeats, or snooze for 5 minutes."
-                else:
-                    message = f"Final reminder: {reminder['text']}"
-            
             self.mark_reminded(reminder["id"])
-            return message
+            return f"Reminder: {reminder['text']}"
         else:
-            reminder_texts = []
+            reminder_texts = [r['text'] for r in due_reminders]
             for reminder in due_reminders:
-                repeat_count = reminder.get("repeat_count", 0)
-                if repeat_count > 0:
-                    reminder_texts.append(f"{reminder['text']} (repeat {repeat_count + 1})")
-                else:
-                    reminder_texts.append(reminder['text'])
                 self.mark_reminded(reminder["id"])
-            
             return f"You have {len(due_reminders)} reminders: " + ", ".join(reminder_texts)
 
 
-# Example usage functions for integration
-def handle_reminder_action(action_data: Dict) -> str:
-    """Handle reminder actions from the voice assistant."""
-    rm = ReminderManager()
-    
-    action = action_data.get("action", "")
-    
-    if action == "set":
-        text = action_data.get("text", "")
-        time_str = action_data.get("time", "")
-        return rm.add_reminder(text, time_str)
-    
-    elif action == "list":
-        return rm.list_reminders()
-    
-    elif action == "cancel":
-        reminder_id = action_data.get("id", 0)
-        return rm.cancel_reminder(reminder_id)
-    
-    elif action == "check":
-        due_reminder = rm.get_due_reminders_for_speech()
-        return due_reminder or "No reminders are due right now."
-    
-    else:
-        return "I don't understand that reminder action."
+    # Example usage functions for integration
+    def handle_reminder_action(self, action_data: Dict) -> str:
+        """Handle reminder actions from the voice assistant."""
+        rm = ReminderManager()
+        
+        action = action_data.get("action", "")
+        
+        if action == "set": 
+            text = action_data.get("text", "")
+            time_str = action_data.get("time", "")
+            return rm.add_reminder(text, time_str)
+        
+        elif action == "list":
+            return rm.list_reminders()
+        
+        elif action == "cancel":
+            reminder_id = action_data.get("id", 0)
+            return rm.cancel_reminder(reminder_id)
+        
+        elif action == "check":
+            due_reminder = rm.get_due_reminders_for_speech()
+            return due_reminder or "No reminders are due right now."
+        
+        else:
+            return "I don't understand that reminder action."
 
 
 def test_reminder_system():

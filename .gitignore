@@ -211,3 +211,5 @@ background_sound/
 conversion_history.json
 logs/   
 setup.txt
+data/
+output/

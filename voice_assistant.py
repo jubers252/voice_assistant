@@ -12,9 +12,7 @@ import json
 import time
 from dotenv import load_dotenv
 import sounddevice as sd
-from scipy.io.wavfile import write
 import numpy as np
-from keras.models import load_model
 import speech_recognition as sr
 import pyttsx3
 from openai import OpenAI
@@ -32,7 +30,7 @@ from audio.wake_word_detector import WakeWordDetector
 load_dotenv()
 
 
-CONVERSATION_FILE = "conversation_history.json"
+CONVERSATION_FILE = "data/conversation_history.json"
 
 # Wake word detection parameters (matching training)
 
@@ -156,7 +154,7 @@ Rules:
 - For news/search: "google_search"
 - For amazon order tracking/status: "amazon_order_tracking"
 - For amazon order history for upto nth days: use get_recent_orders action
-- For reminders (set, add, remind, list reminders): "reminder"
+- For reminders (set, add, check, list or cancel reminders): "reminder"
 - For default location, use Pisoli, Pune, India
 - Default: "none"
 
@@ -171,7 +169,7 @@ Examples:
 {{"tool":"weather","action":"get_timezone","location":"Pune"}}
 {{"tool":"amazon_order_tracking","action":"get_recent_orders","days":5}}
 {{"tool":"reminder","action":"add","text":"Take medicine","time":"in 30 minutes"}}
-{{"tool":"reminder","action":"list"}}
+{{"tool":"reminder","action":"list/set/check/cancel"}}
 {{"tool":"none","lang":"en"}}
 
 User: {user_message}"""
@@ -365,6 +363,7 @@ User: {user_message}"""
                     print("Skipped to next track. Ready for next command.")
             else:
               self.audio_processors.speak("Spotify action completed, but I didn't receive details about what happened.")
+            self.conversation_history.append({"role": "assistant", "content": result})
             return True
         except Exception as e:
             error_message = str(e)
@@ -623,6 +622,7 @@ User: {user_message}"""
         
         # Handle different tool responses
         if tool_response["tool"] == "spotify":
+            self.conversation_history.append({"role": "user", "content": user_command})
             # Spotify actions are usually fast, use timed feedback
             def spotify_action():
                 return self.handle_spotify_action(tool_response)
@@ -695,34 +695,12 @@ User: {user_message}"""
             self.conversation_history.append({"role": "user", "content": user_command})
             
             def reminder_action():
-                try:
-                    action = tool_response.get("action", "add")
-                    
-                    if action == "add":
-                        # Extract reminder text and time
-                        reminder_text = tool_response.get("text", "")
-                        reminder_time = tool_response.get("time", "")
-                        
-                        response = self.reminder_manager.add_reminder(reminder_text, reminder_time)
-                        
-                    elif action == "list":
-                        response = self.reminder_manager.list_reminders()
-                        
-                    else:
-                        response = "I can help you add reminders or list your current reminders."
-                    
-                    print(f"Reminder response: {response}")
-                    ai_response = self.get_ai_response(response, is_tool_response=True)
-                    self.audio_processors.speak(ai_response)
-                    return response
-                    
-                except Exception as e:
-                    error_msg = f"Sorry, I had trouble with that reminder. {str(e)}"
-                    print(f"Reminder error: {error_msg}")
-                    self.audio_processors.speak(error_msg)
-                    return error_msg
-            
-            # Execute reminder action directly - no need for timed feedback
+                response = self.reminder_manager.handle_reminder_action(tool_response)
+              
+                print(f"Reminder response: {response}")
+                ai_response = self.get_ai_response(response, is_tool_response=True)
+                self.audio_processors.speak(ai_response)
+                return response
             reminder_action()
             print("Reminder action completed. Ready for next command.")
 
@@ -902,7 +880,7 @@ User: {user_message}"""
         # Initialize wake word detection variables
         print("Wake word model already loaded in WakeWordDetector")
 
-        self.window_duration = 1.5  # seconds (back to training size for accuracy)
+        self.window_duration = 2.5  # seconds (back to training size for accuracy)
         self.step_duration = 0.3    # seconds (faster than 0.5 but not too fast)
         self.window_samples = int(self.window_duration * self.sample_rate)
         
