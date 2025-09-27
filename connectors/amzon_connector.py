@@ -411,7 +411,7 @@ if __name__ == '__main__':
     # Default single-product flow
    tool_request = {
        "action": "single_product_search",  # or "single_product_search"
-       "query": "vivo x 200 pro"
+       "query": "moto g 96"
    }
    tool_result = get_amazon_result(tool_request)
    with open('amazon_vivo_x_fold_5_product_info.json', 'w', encoding='utf-8') as f:
