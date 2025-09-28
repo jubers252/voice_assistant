@@ -205,32 +205,37 @@ class SpotifyConnector:
         self.spotify.next_track(device_id=device_id)
 
     def open_spotify_in_edge(self):
-        """Open Spotify Web Player in Microsoft Edge"""
+        """Open Spotify Web Player in browser (Linux compatible)"""
         try:
             spotify_url = "https://open.spotify.com"
             
-            # Command to open URL in Microsoft Edge
-            edge_command = [
-                "msedge",
-                spotify_url
+            # Try different browsers on Linux/Raspberry Pi
+            browsers = [
+                "chromium-browser",  # Raspberry Pi default
+                "firefox",
+                "google-chrome",
+                "chromium",
+                "xdg-open"  # Default opener
             ]
-            # Try to open with msedge command
+            
+            for browser in browsers:
+                try:
+                    subprocess.run([browser, spotify_url], check=True)
+                    print(f"Opened Spotify in {browser}")
+                    return
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    continue
+            
+            # If no browser worked, try generic open
             try:
-                subprocess.run(edge_command, check=True)
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                # Fallback: use start command with edge
-                subprocess.run([
-                    "cmd", "/c", "start", "msedge", spotify_url
-                ], shell=True)
+                import webbrowser
+                webbrowser.open(spotify_url)
+                print("Opened Spotify in default web browser")
+            except:
+                print("Could not open Spotify web player")
                 
         except Exception as e:
-            # Final fallback: use default browser
-            try:
-                subprocess.run([
-                    "cmd", "/c", "start", spotify_url
-                ], shell=True)
-            except:
-                pass
+            print(f"Error opening Spotify: {e}")
 
     def handle_action(self, tool_info, device_id=None):
         """Handle structured tool_info input and perform the requested Spotify action with enhanced search."""
@@ -356,4 +361,8 @@ class SpotifyConnector:
         
 if __name__ == "__main__":
     # Create a temporary connector just to open Spotify in Edge
+    tool_data = {"action": "stop", "name": "saiyyara", "target": "artist"}
+    obj = SpotifyConnector(None)
+    # obj.open_spotify_in_edge()
+    obj.main(tool_data)
     pass
