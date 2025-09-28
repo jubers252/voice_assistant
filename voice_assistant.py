@@ -112,7 +112,7 @@ class VoiceAssistantRefactored:
                 samplerate=self.wake_word_manager.sample_rate,
                 channels=1,
                 dtype='float32',
-                callback=self.audio_processors.audio_callbackc  
+                callback=self.audio_processors.audio_callback
             )
             
             with stream:

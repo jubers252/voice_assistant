@@ -1,5 +1,6 @@
 
 import json
+import os
 
 CONVERSATION_FILE = "data/conversation_history.json"
 
@@ -11,6 +12,9 @@ class ConversationManager:
     def load_conversation_history(self):
         """Load conversation history from file or create a new one"""
         try:
+            if not os.path.exists(self.file_path):
+                os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
+
             with open(self.file_path, 'r') as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):

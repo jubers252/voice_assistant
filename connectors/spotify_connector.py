@@ -396,4 +396,5 @@ class SpotifyConnector:
         
 if __name__ == "__main__":
     # Create a temporary connector just to open Spotify in Edge
+    
     pass
