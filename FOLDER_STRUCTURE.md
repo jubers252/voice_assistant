@@ -1,182 +1,252 @@
-# Official Voice Assistant Project Structure
+# 📁 Voice Assistant - Folder Structure Documentation
 
-## Overview
-This document outlines the official folder structure for the Voice Assistant project after refactoring for better modularity, maintainability, and scalability.
+This document provides a comprehensive overview of the project's folder structure and the purpose of each component.
 
-## Project Structure
+## 🏗️ Project Architecture Overview
 
 ```
 voice_assistant/
-│
-├── 📁 audio/                          # Audio processing components
-│   ├── __init__.py
-│   ├── audio_processor.py             # Audio recording, streaming, callbacks
-│   ├── wake_word_detector.py          # Wake word detection logic
-│   └── feature_extractor.py           # MFCC and audio feature extraction
-│
-├── 📁 speech/                         # Speech recognition and TTS
-│   ├── __init__.py
-│   ├── speech_recognizer.py           # Speech-to-text functionality
-│   ├── text_to_speech.py              # TTS with interruption support
-│   └── voice_profiles.py              # Voice selection and profiles
-│
-├── 📁 conversation/                   # Conversation management
-│   ├── __init__.py
-│   ├── conversation_manager.py        # Conversation flow and history
-│   ├── ai_response_handler.py         # OpenAI API interactions
-│   └── context_manager.py             # Context and memory management
-│
-├── 📁 handlers/                       # Tool-specific handlers
-│   ├── __init__.py
-│   ├── base_handler.py                # Base class for all handlers
-│   ├── spotify_handler.py             # Spotify integration
-│   ├── weather_handler.py             # Weather and time services
-│   ├── amazon_handler.py              # Amazon product search
-│   ├── search_handler.py              # Web search functionality
-│   └── order_tracking_handler.py      # Amazon order tracking
-│
-├── 📁 config/                         # Configuration management
-│   ├── __init__.py
-│   ├── config.py                      # Main configuration class
-│   ├── audio_config.py                # Audio-specific settings
-│   ├── api_config.py                  # API keys and endpoints
-│   └── device_config.py               # Device-specific configurations
-│
-├── 📁 utils/                          # Utility functions
-│   ├── __init__.py
-│   ├── audio_utils.py                 # Audio utility functions
-│   ├── text_utils.py                  # Text processing utilities
-│   ├── file_utils.py                  # File handling utilities
-│   └── decorators.py                  # Common decorators (retry, timing, etc.)
-│
-├── 📁 connectors/                     # External service connectors (existing)
-│   ├── __init__.py
-│   ├── spotify_connector.py           # Original Spotify connector
-│   ├── weather_connector.py           # Original weather connector
-│   ├── amazon_connector.py            # Original Amazon connector
-│   ├── search_engine.py               # Original search engine
-│   └── ... (other existing connectors)
-│
-├── 📁 model/                          # ML models (existing)
-│   └── WWD_improved.h5                # Wake word detection model
-│
-├── 📁 model_training/                 # Model training scripts (existing)
-│   ├── training.py
-│   ├── prediction.py
-│   └── ... (other training files)
-│
-├── 📁 data/                           # Data storage
-│   ├── conversation_history.json      # Moved from root
-│   ├── user_preferences.json          # User settings
-│   └── cache/                         # Temporary cache files
-│
-├── 📁 beep/                           # Audio assets (existing)
-│   ├── short-beep-tone-47916.mp3
-│   └── startup_sound.wav
-│
-├── 📁 output/                         # Output files (existing)
-│   ├── amazon_session.pkl
-│   └── ... (other output files)
-│
-├── 📁 tests/                          # Unit and integration tests
-│   ├── __init__.py
-│   ├── test_audio_processor.py        # Audio processing tests
-│   ├── test_speech_services.py        # Speech service tests
-│   ├── test_conversation_manager.py   # Conversation tests
-│   ├── test_handlers.py               # Handler tests
-│   └── test_integration.py            # End-to-end tests
-│
-├── 📁 docs/                           # Documentation
-│   ├── API.md                         # API documentation
-│   ├── SETUP.md                       # Setup instructions
-│   ├── ARCHITECTURE.md                # Architecture overview
-│   └── CONTRIBUTING.md                # Contribution guidelines
-│
-├── 📄 voice_assistant.py              # Main orchestrator class (refactored)
-├── 📄 main.py                         # Entry point for the application
-├── 📄 requirements.txt                # Python dependencies
-├── 📄 .env.example                    # Environment variables template
-├── 📄 .gitignore                      # Git ignore file
-├── 📄 README.md                       # Project overview
-├── 📄 CHANGELOG.md                    # Version history
-└── 📄 FOLDER_STRUCTURE.md             # This file
+├── 🎵 audio/              # Audio processing and text-to-speech
+├── 🔌 connectors/         # External service integrations  
+├── 💬 conversation/       # AI chat and conversation management
+├── 🎯 handlers/           # Coordination and routing logic
+├── 🗣️ speech/            # Speech recognition
+├── 🧠 model/             # Machine learning models
+├── 📊 model_training/     # Training scripts and data
+├── 🔊 beep/              # Audio notification files
+├── 📊 data/              # Application data storage
+├── 📤 output/            # Generated output files
+└── 🧪 tests/             # Unit tests and testing
 ```
 
-## Module Descriptions
+## 📂 Detailed Directory Structure
 
-### 🎵 Audio Module (`audio/`)
-Handles all audio-related operations including recording, streaming, wake word detection, and feature extraction.
+### 🎵 `audio/` - Audio Processing Module
+```
+audio/
+├── __init__.py                    # Module initialization
+├── audio_processor.py            # Core audio I/O and TTS processing
+└── wake_word_detector.py         # Neural network-based wake word detection
+```
 
-**Key Files:**
-- `audio_processor.py` - Main audio processing class
-- `wake_word_detector.py` - Wake word detection logic
-- `feature_extractor.py` - MFCC and audio feature extraction
+**Purpose**: Handles all audio-related functionality including:
+- Text-to-speech synthesis (Edge TTS with Hindi/English support)
+- Audio input/output stream management
+- Wake word detection using trained neural network
+- Audio callback handling and buffering
 
-### 🗣️ Speech Module (`speech/`)
-Manages speech recognition and text-to-speech functionality with advanced features like interruption support.
+### 🔌 `connectors/` - External Service Integrations
+```
+connectors/
+├── __init__.py                    # Module initialization
+├── spotify_connector.py          # Spotify Web API integration
+├── weather_connector.py          # Weather API integration  
+├── search_engine.py              # DuckDuckGo web search
+├── amazon_order_tracker.py       # Amazon order tracking logic
+├── amzon_connector.py            # Amazon web scraping utilities
+├── reminder_manager.py           # Reminder system management
+├── amazon_in_constants.py        # Amazon India specific constants
+└── amazon_in_selectors.py        # Web scraping selectors for Amazon
+```
 
-**Key Files:**
-- `speech_recognizer.py` - Speech-to-text conversion
-- `text_to_speech.py` - TTS with interruption and threading
-- `voice_profiles.py` - Voice selection and configuration
+**Purpose**: Contains all external service integrations:
+- **Spotify**: Music playback, playlist management, search
+- **Weather**: Real-time weather data fetching
+- **Search**: Web search capabilities via DuckDuckGo
+- **Amazon**: Order tracking and account management
+- **Reminders**: Time-based reminder system
 
-### 💬 Conversation Module (`conversation/`)
-Handles conversation flow, AI interactions, and context management.
+### 💬 `conversation/` - AI Chat Management
+```
+conversation/
+├── __init__.py                    # Module initialization
+├── conversation_manager.py       # Conversation state and history
+├── ai_respons_handler.py         # OpenAI API integration
+└── feedback_handler.py           # User feedback processing
+```
 
-**Key Files:**
-- `conversation_manager.py` - Main conversation orchestrator
-- `ai_response_handler.py` - OpenAI API integration
-- `context_manager.py` - Context and memory management
+**Purpose**: Manages AI-powered conversations:
+- **ConversationManager**: Maintains conversation history and context
+- **AIResponseHandler**: Interfaces with OpenAI GPT-4 API
+- **FeedbackHandler**: Processes user feedback and responses
 
-### 🔧 Handlers Module (`handlers/`)
-Contains tool-specific handlers for various external services.
+### 🎯 `handlers/` - Coordination Logic
+```
+handlers/
+├── __init__.py                    # Module initialization
+├── wake_word_manager.py          # Wake word detection coordination
+├── command_processor.py          # User command routing and processing
+└── tool_action_handler.py        # AI-powered intent recognition
+```
 
-**Key Files:**
-- `base_handler.py` - Base class with common functionality
-- Individual handler files for each service (Spotify, Weather, Amazon, etc.)
+**Purpose**: Acts as the "traffic control" layer:
+- **WakeWordManager**: Coordinates wake word detection with audio processing
+- **CommandProcessor**: Routes user commands to appropriate connectors
+- **ToolActionHandler**: Uses AI to determine user intent and route to tools
 
-### ⚙️ Config Module (`config/`)
-Centralized configuration management for all aspects of the application.
+### 🗣️ `speech/` - Speech Recognition
+```
+speech/
+├── __init__.py                    # Module initialization
+└── speech_recognizer.py          # Speech-to-text processing
+```
 
-**Key Files:**
-- `config.py` - Main configuration class
-- Specific config files for different components
+**Purpose**: Handles speech-to-text conversion:
+- Voice activity detection
+- Speech recognition using system APIs
+- Audio preprocessing for better recognition
 
-### 🛠️ Utils Module (`utils/`)
-Common utility functions used across the application.
+### 🧠 `model/` - Machine Learning Models
+```
+model/
+└── WWD_improved.h5               # Trained wake word detection model
+```
 
-**Key Files:**
-- Various utility modules for different purposes
-- `decorators.py` - Common decorators for retry, timing, etc.
+**Purpose**: Stores trained machine learning models:
+- **WWD_improved.h5**: Wake word detection neural network model
 
-## Migration Benefits
+### 📊 `model_training/` - Training Infrastructure
+```
+model_training/
+├── training.py                   # Main model training script
+├── PreparingData.py             # Audio data collection and preparation
+├── PreprocessingData.py         # Data preprocessing and feature extraction
+├── prediction.py                # Model prediction and testing
+├── audio_data/                  # Wake word audio samples
+│   ├── wakeword_0.wav
+│   ├── wakeword_1.wav
+│   └── ... (training samples)
+├── background_sound/            # Background noise samples
+├── final_audio_data_csv/        # Processed training data in CSV format
+└── saved_model/                 # Model checkpoints and versions
+```
 
-### 1. **Separation of Concerns**
-Each module has a specific responsibility, making the code easier to understand and maintain.
+**Purpose**: Complete training pipeline for wake word detection:
+- Data collection and augmentation
+- Feature extraction and preprocessing
+- Model training and validation
+- Performance testing and evaluation
 
-### 2. **Improved Testability**
-Individual components can be tested in isolation with unit tests.
+### 🔊 `beep/` - Audio Assets
+```
+beep/
+├── short-beep-tone-47916.mp3    # Wake word detection notification
+└── startup_sound.wav            # Application startup sound
+```
 
-### 3. **Better Scalability**
-New features can be added as separate modules without affecting existing functionality.
+**Purpose**: Audio notification files for user feedback
 
-### 4. **Enhanced Reusability**
-Modules can be reused in other projects or imported independently.
+### 📊 `data/` - Application Data
+```
+data/
+└── conversation_history.json    # Persistent conversation logs
+```
 
-### 5. **Easier Debugging**
-Issues can be isolated to specific modules, making debugging more efficient.
+**Purpose**: Stores application data and user information
 
-### 6. **Team Development**
-Multiple developers can work on different modules simultaneously.
+### 📤 `output/` - Generated Files
+```
+output/
+├── amazon_session.pkl           # Amazon login session data
+├── orders_last_5_days_page_0.html # Amazon order pages (cached)
+└── orders_last_5_days_page_1.html
+```
 
-## Implementation Strategy
+**Purpose**: Temporary and cached files generated during operation
 
-1. **Phase 1**: Create module structure and base classes
-2. **Phase 2**: Extract and refactor existing functionality
-3. **Phase 3**: Implement new modular architecture
-4. **Phase 4**: Add comprehensive tests
-5. **Phase 5**: Update documentation and examples
+## 🔧 Root Level Files
 
-## Backward Compatibility
+```
+├── voice_assistant.py              # Main application entry point
+├── requirements.txt                # Python package dependencies
+├── .env                           # Environment variables (create manually)
+├── setup.txt                     # Setup and installation instructions
+├── reminders.json                # Persistent reminder storage
+├── temp_audio.wav                # Temporary audio recording file
+├── README.md                     # Project documentation
+└── FOLDER_STRUCTURE.md           # This file
+```
 
-The refactored structure maintains backward compatibility with existing code while providing a cleaner, more maintainable architecture for future development.
+## 🔄 Data Flow Architecture
+
+```
+User Voice Input
+       ↓
+🎵 audio/wake_word_detector.py
+       ↓
+🎯 handlers/wake_word_manager.py
+       ↓
+🗣️ speech/speech_recognizer.py
+       ↓
+🎯 handlers/command_processor.py
+       ↓
+🎯 handlers/tool_action_handler.py (AI Intent Recognition)
+       ↓
+🔌 connectors/* (Appropriate Service)
+       ↓
+💬 conversation/ai_respons_handler.py (If needed)
+       ↓
+🎵 audio/audio_processor.py (TTS Output)
+       ↓
+User Audio Output
+```
+
+## 🎛️ Module Dependencies
+
+### Core Dependencies
+- `audio/` ← Base audio processing
+- `speech/` ← Speech recognition
+- `conversation/` ← AI conversation management
+
+### Handler Dependencies
+- `handlers/wake_word_manager.py` ← `audio/`, `speech/`
+- `handlers/command_processor.py` ← `connectors/*`, `conversation/`
+- `handlers/tool_action_handler.py` ← OpenAI API
+
+### Connector Dependencies
+- `connectors/spotify_connector.py` ← Spotify Web API
+- `connectors/weather_connector.py` ← Weather API
+- `connectors/search_engine.py` ← DuckDuckGo
+- `connectors/amazon_*.py` ← Web scraping libraries
+
+## 🚀 Extension Points
+
+### Adding New Connectors
+1. Create new file in `connectors/`
+2. Implement standard interface methods
+3. Add routing logic in `handlers/command_processor.py`
+4. Update intent recognition in `handlers/tool_action_handler.py`
+
+### Adding New Audio Features
+1. Extend `audio/audio_processor.py` for new TTS capabilities
+2. Modify `audio/wake_word_detector.py` for additional detection models
+
+### Adding New AI Capabilities
+1. Extend `conversation/ai_respons_handler.py` for new AI models
+2. Add new conversation types in `conversation/conversation_manager.py`
+
+## 📈 Performance Considerations
+
+### Memory Usage
+- **Model Loading**: Wake word model (~50MB) loaded at startup
+- **Audio Buffers**: Real-time audio buffering (~1-2MB)
+- **Conversation History**: Limited to recent conversations
+
+### Processing Speed
+- **Wake Word Detection**: Real-time processing with 300ms latency
+- **Speech Recognition**: 1-2 seconds for typical commands
+- **AI Response**: 2-3 seconds depending on OpenAI API
+
+### Optimization Tips
+- Models loaded once at startup
+- Audio processing in separate threads
+- Caching for frequently used data
+- Efficient memory management for audio buffers
+
+---
+
+This modular architecture ensures:
+- **Maintainability**: Easy to modify individual components
+- **Scalability**: Simple to add new features and connectors
+- **Testability**: Each module can be tested independently
+- **Readability**: Clear separation of concerns and responsibilities

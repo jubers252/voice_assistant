@@ -76,12 +76,31 @@ class AudioProcessors:
             return None
         
 
-    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang="en"):
+    def detect_language(self, text):
+        """Detect if text is in Hindi or English"""
+        import re
+        
+        # Check for Hindi (Devanagari) characters
+        hindi_pattern = r'[\u0900-\u097F]'
+        if re.search(hindi_pattern, text):
+            return "hi"
+        return "en"
+    
+    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang=None):
         """
-        Threaded TTS function with interruption support
+        Threaded TTS function with interruption support and improved Hindi handling
         """
         # Stop any current speech first
         self.stop_speech()
+        
+        # Auto-detect language if not specified
+        if lang is None:
+            lang = self.detect_language(text)
+        
+        # Improve Hindi voice selection and rate
+        if lang == "hi":
+            voice = "hi-IN-AartiNeural"  # Better Hindi voice
+            rate = "+0%"  # Slower rate for better Hindi pronunciation
         
         # Start new speech thread
         self.speech_thread = threading.Thread(
@@ -125,16 +144,24 @@ class AudioProcessors:
                 os.unlink(tmp_file_path)
     
     def _speak_threaded(self, text, voice, rate, speed_multiplier, lang):
-        """Threaded speech function with interruption support"""
+        """Threaded speech function with interruption support and improved Hindi processing"""
         self.is_speaking = True
         self.speech_interrupted = False
         
         try:
-            # Set voice based on language
+            # Enhanced voice selection based on language
             if lang == "hi":
-                voice = "hi-IN-AartiNeural"
+                # Use better Hindi voices and adjust rate
+                available_hindi_voices = [
+                    "hi-IN-AartiNeural"      # Female, fallback
+                ]
+                voice = available_hindi_voices[0]  # Use the best one
+                rate = "+0%"  # Normal rate for better clarity
+                
+                # Clean up text for better Hindi pronunciation
+                text = self._clean_hindi_text(text)
             
-            print(f"Speaking with Edge TTS: {text}")
+            print(f"Speaking with Edge TTS ({voice}): {text}")
             
             # Call the simplified function directly
             self._generate_and_play_simple(text, voice, rate, speed_multiplier)
@@ -143,6 +170,21 @@ class AudioProcessors:
             print(f"Edge TTS failed: {e}")
         finally:
             self.is_speaking = False
+    
+    def _clean_hindi_text(self, text):
+        """Clean and prepare Hindi text for better TTS pronunciation"""
+        import re
+        
+        # Remove excessive punctuation that might affect pronunciation
+        text = re.sub(r'[^\w\s\u0900-\u097F.,!?]', '', text)
+        
+        # Add pauses after sentences for better clarity
+        text = re.sub(r'([.!?])', r'\1 ', text)
+        
+        # Ensure proper spacing
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
     
     def stop_speech(self):
         """Stop current speech immediately"""

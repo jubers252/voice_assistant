@@ -201,6 +201,30 @@ class GeminiSearch:
             "web_search_queries": web_queries,
             "response_time": response_time,
         }
+    
+    def handle_search_action_with_feedback(self, tool_response):
+        """Handle search actions using Gemini Search - returns raw result for processing"""
+        try:
+            print(f"Search tool_response: {tool_response}")
+            
+            # Extract the query string from the tool response
+            query = tool_response.get("query", "")
+            if not query:
+                return "I need a search query to help you."
+            
+            # Get language for search
+            lang = tool_response.get("lang", "en")
+            answer = self.quick_search(query, lang)  # Pass just the query string, not the whole dict
+      
+            if answer:
+                return answer  # Return raw result for AI processing
+            else:
+                return "I couldn't complete your search request."
+            
+        except Exception as e:
+            error_message = str(e)
+            print(f"Search error: {error_message}")
+            return "Sorry, I couldn't search for that information right now."
 
 
 def _ensure_api_key() -> None:
