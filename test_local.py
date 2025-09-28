@@ -1,12 +1,89 @@
 import requests
 import json
 import time
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
 OLLAMA_URL = "http://localhost:11434/api/chat"
-MODEL = "gemma3:1b-it-q8_0"
+MODEL = "tinydolphin:latest"
 
 # Create a session for connection reuse
 session = requests.Session()
+
+
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # Set your API key in environment or pass as argument
+
+
+def chat_with_openai(messages, model="gpt-3.5-turbo", api_key=None, temperature=0.7, max_tokens=512):
+    """
+    Send a chat completion request to OpenAI API.
+    messages: list of dicts [{"role": "user"|"system"|"assistant", "content": str}]
+    model: OpenAI model name (default: gpt-3.5-turbo)
+    api_key: API key (default: from env OPENAI_API_KEY)
+    temperature: float (default: 0.7)
+    max_tokens: int (default: 512)
+    Returns: response text or None
+    """
+    if api_key is None:
+        api_key = OPENAI_API_KEY
+    if not api_key:
+        raise ValueError("OpenAI API key not set. Set OPENAI_API_KEY env variable or pass as argument.")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+    try:
+        response = requests.post(OPENAI_API_URL, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        return None
+
+
+def is_personal_query(query):
+    """Detect if a query contains personal information or references"""
+    personal_keywords = [
+        'my wife', 'my husband', 'my name', 'my family', 'my friend', 'my birthday',
+        'my address', 'my phone', 'my email', 'my password', 'my job', 'my work',
+        'my home', 'my car', 'my bank', 'my account', 'my credit card', 'my mother',
+        'my father', 'my brother', 'my sister', 'my child', 'my daughter', 'my son',
+        'personal', 'private', 'confidential', 'secret', 'remember me', 'know me',
+        'about me', 'tell me about myself', 'my history', 'my past', 'my preference'
+    ]
+    
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in personal_keywords)
+
+def smart_chat_router(messages, user_query, use_streaming=True):
+    """Route queries to appropriate LLM based on content"""
+    if is_personal_query(user_query):
+        print("[Routing to Local LLM - Personal Query]")
+        if use_streaming:
+            return chat_with_gemma_streaming(messages), "local"
+        else:
+            return chat_with_gemma(messages), "local"
+    else:
+        print("[Routing to OpenAI - General Query]")
+        try:
+            response = chat_with_openai(messages)
+            return response, "openai"
+        except Exception as e:
+            print(f"OpenAI failed, falling back to local: {e}")
+            if use_streaming:
+                return chat_with_gemma_streaming(messages), "local_fallback"
+            else:
+                return chat_with_gemma(messages), "local_fallback"
 
 def preload_model():
     """Pre-load the model into memory for faster responses"""
@@ -93,6 +170,7 @@ if __name__ == "__main__":
         }
     ]
     print("Chat with Sofi! Type 'exit' to quit.")
+    print("📍 Smart Routing: Personal queries → Local LLM, General queries → OpenAI")
     print("Choose mode: 's' for streaming (faster), 'n' for non-streaming")
     mode = input("Mode (s/n): ").lower()
     
@@ -108,11 +186,10 @@ if __name__ == "__main__":
             
         messages.append({"role": "user", "content": user_input})
         
-        print("Gemma: ", end='', flush=True)
-        if use_streaming:
-            reply = chat_with_gemma_streaming(messages)
-        else:
-            reply = chat_with_gemma(messages)
+        print("Sofi: ", end='', flush=True)
+        reply, routing_info = smart_chat_router(messages, user_input, use_streaming)
+        
+        if not use_streaming and reply:
             print(reply)
             
         if reply:
