@@ -6,10 +6,37 @@ import speech_recognition as sr
 load_dotenv()
 
 class SpeechRecognizer:
-    def __init__(self, device_index=1):
+    def __init__(self, device_index=None):
+        # Auto-detect PulseAudio device if not specified
+        if device_index is None:
+            device_index = self._find_pulse_device()
         self.device_index = device_index
         self.recognizer = sr.Recognizer()
         self._setup_recognizer()
+
+    def _find_pulse_device(self):
+        """Find best audio device for speech recognition (cross-platform)"""
+        try:
+            import platform
+            mic_list = sr.Microphone.list_microphone_names()
+            
+            # On Linux, prefer PulseAudio device
+            if platform.system() == "Linux":
+                for i, name in enumerate(mic_list):
+                    if 'pulse' in name.lower():
+                        return i
+            
+            # On Windows or if no pulse device found, use USB microphone
+            for i, name in enumerate(mic_list):
+                if 'usb' in name.lower() or 'microphone' in name.lower():
+                    print(f" Speech recognizer using device: {name}")
+                    return i
+                    
+        except Exception as e:
+            print(f"Device detection error: {e}")
+        
+        print("Speech recognizer using default device")
+        return 1  # Fallback
 
     def _setup_recognizer(self):
         self.recognizer.energy_threshold = 400
