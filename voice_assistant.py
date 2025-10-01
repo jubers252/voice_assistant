@@ -9,10 +9,6 @@ import threading
 import sounddevice as sd
 from dotenv import load_dotenv
 from collections import deque
-import platform
-# Configure audio system to use PulseAudio instead of ALSA
-os.environ['PULSE_RUNTIME_PATH'] = '/run/user/1000/pulse'
-os.environ['SDL_AUDIODRIVER'] = 'pulse'
 
 # Component imports
 from audio.audio_processor import AudioProcessors
@@ -110,31 +106,6 @@ class VoiceAssistantRefactored:
         self.wake_word_manager.start_detection()
         
         try:
-            # Configure sounddevice for cross-platform compatibility
-            try:
-              
-                devices = sd.query_devices()
-                
-                # On Linux, prefer PulseAudio device
-                if platform.system() == "Linux":
-                    pulse_device = None
-                    for i, device in enumerate(devices):
-                        if 'pulse' in device['name'].lower():
-                            pulse_device = i
-                            break
-                    
-                    if pulse_device is not None:
-                        sd.default.device = pulse_device
-                        print(f"Using PulseAudio device: {devices[pulse_device]['name']}")
-                    else:
-                        print("PulseAudio device not found, using default")
-                else:
-                    # On Windows, use default system
-                    print(f"Using default audio system on {platform.system()}")
-                    
-            except Exception as e:
-                print(f"Audio configuration error: {e}, using default")
-            
             self.audio_processors.play_beep_sound(beep_file="beep/startup_sound.wav")
             
             stream = sd.InputStream(
