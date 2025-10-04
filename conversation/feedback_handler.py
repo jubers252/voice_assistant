@@ -9,98 +9,44 @@ class FeedbackHandler:
         self.audio_processors = audio_processors
 
     def give_processing_feedback(self, tool_type, query_hint=""):
-        """Provide immediate feedback while processing different types of requests"""
+        """Provide immediate feedback while processing AI agent requests"""
         
+        # Only keep langchain_agent feedback messages since we're using AI agent for everything
         feedback_messages = {
-            "spotify": [
-                "Let me control your music for you",
-                "Connecting to Spotify",
-                "Working on your music request",
-                "I'm handling your music command"
-            ],
-            "weather": [
-                "Let me check the weather for you",
-                "Getting the latest weather information", 
-                "Fetching weather details",
-                "I'm checking the current conditions"
-            ],
-            "amazon": [
-                "Let me search for that product",
-                "I'm fetching product details for you",
-                "Searching Amazon for your request",
-                "Let me find that on Amazon",
-                "I'm looking up that product"
-            ],
-            "search": [
-                "Let me search for that information",
-                "I'm looking that up for you",
-                "Searching for the latest details",
-                "Let me find that information",
-                "I'm searching the web for you"
-            ],
-            "google_search": [
-                "Let me search for that information",
-                "I'm looking that up for you", 
-                "Searching for the latest details",
-                "Let me find that information",
-                "I'm searching the web for you"
-            ],
-            "web_search": [
-                "Let me search for that information",
-                "I'm looking that up for you",
-                "Searching for the latest details",
-                "Let me find that information",
-                "I'm searching the web for you"
-            ],
-            "amazon_order_tracking": [
-                "Let me check your order status",
-                "I'm fetching your order details",
-                "Checking your recent orders",
-                "Let me track that order for you",
-                "Looking up your order history"
+            "langchain_agent": [
+                "I'm processing your request",
+                "Let me think about that",
+                "Working on your request",
+                "I'm analyzing what you need",
+                "Processing your command",
+                "Let me help you with that",
+                "I'm working on it",
+                "Give me a moment to process that"
             ]
         }
         
-        # Get appropriate message for the tool type
-        messages = feedback_messages.get(tool_type, ["I'm working on your request"])
+        # Get appropriate message for the agent
+        messages = feedback_messages.get("langchain_agent", ["I'm working on your request"])
         
-        # Select message based on query content for more context
-        if tool_type == "amazon" and query_hint:
-            if "price" in query_hint.lower():
-                message = "Let me check the price for you"
-            elif "review" in query_hint.lower():
-                message = "I'm fetching reviews for you"
-            elif "compare" in query_hint.lower():
-                message = "Let me compare those products"
+        # Select context-aware message based on query content
+        if query_hint:
+            query_lower = query_hint.lower()
+            if any(word in query_lower for word in ["weather", "temperature", "forecast"]):
+                message = "Let me check the weather for you"
+            elif any(word in query_lower for word in ["amazon", "product", "buy", "order"]):
+                message = "Let me search for that product"
+            elif any(word in query_lower for word in ["music", "play", "spotify", "song"]):
+                message = "Let me handle your music request"
+            elif any(word in query_lower for word in ["search", "find", "look up"]):
+                message = "Let me search for that information"
+            elif any(word in query_lower for word in ["telegram", "message", "send"]):
+                message = "Let me send that for you"
+            elif any(word in query_lower for word in ["reminder", "remind", "remember"]):
+                message = "Let me set that reminder"
             else:
-                message = random.choice(messages)
-        elif tool_type == "amazon_order_tracking" and query_hint:
-            if "status" in query_hint.lower() or "track" in query_hint.lower():
-                message = "Let me track that order for you"
-            elif "recent" in query_hint.lower() or "latest" in query_hint.lower():
-                message = "Checking your recent orders"
-            elif "delivery" in query_hint.lower():
-                message = "Let me check the delivery status"
-            else:
-                message = random.choice(messages)
-        elif tool_type == "weather" and query_hint:
-            if "time" in query_hint.lower():
-                message = "Let me check the current time"
-            elif "tomorrow" in query_hint.lower():
-                message = "I'm checking tomorrow's weather"
-            else:
-                message = random.choice(messages)
-        elif tool_type == "spotify" and query_hint:
-            if "play" in query_hint.lower():
-                message = "Let me play that for you"
-            elif "stop" in query_hint.lower():
-                message = "I'm stopping the music"
-            elif "next" in query_hint.lower():
-                message = "Skipping to the next song"
-            else:
+                # Use random message for variety
                 message = random.choice(messages)
         else:
-            # Use random message for variety
             message = random.choice(messages)
         
         # Speak the feedback immediately
@@ -128,9 +74,9 @@ class FeedbackHandler:
         result_ready = False
         
         def delayed_feedback():
-            """Give feedback after 5 seconds if action is still running"""
+            """Give feedback after 10 seconds if action is still running"""
             nonlocal feedback_given
-            time.sleep(5.0)  # Wait 5 seconds
+            time.sleep(20)  # Wait 15 seconds
             if not result_ready and not feedback_given:  # Check if action is still running
                 feedback_given = True
                 self.give_processing_feedback(tool_type, query_hint)

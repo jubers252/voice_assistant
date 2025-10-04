@@ -4,7 +4,7 @@ from connectors.amzon_connector import get_amazon_result
 from connectors.amazon_order_tracker import get_order
 from connectors.spotify_connector import SpotifyConnector
 from connectors.search_engine import GeminiSearch
-
+from connectors.telegram_bot import TelegramBot
 
 class CommandProcessor:
     """Processes user commands and routes them to appropriate handlers"""
@@ -20,6 +20,7 @@ class CommandProcessor:
         self.conversation_history = conversation_history
         self.audio_processors = audio_processors
         self.reminder_manager = reminder_manager
+        self.telegram_bot = TelegramBot()
         
         # Tool action methods
         self.handle_weather_action = handle_tool_requests
@@ -58,7 +59,10 @@ class CommandProcessor:
             
         elif tool_response["tool"] == "reminder":
             return self._handle_reminder_command(user_command, tool_response)
-            
+
+        elif tool_response["tool"] == "telegram":
+            return self._handle_telegram_command(user_command, tool_response)
+
         elif tool_response["tool"] == "none":
             return self.ai_response_handler.handle_direct_response(tool_response, user_command)
             
@@ -101,7 +105,17 @@ class CommandProcessor:
         def amazon_action():
             response = get_amazon_result(tool_response)
             print(f"Amazon API response: {response}")
+            
+            # Get AI summary for speaking
             ai_response = self.ai_response_handler.get_ai_response(response, is_tool_response=True)
+            
+            # Save both original response and AI summary to history properly
+            # First save the raw response as a separate entry
+            self.conversation_history.append({
+                "role": "system", 
+                "content": f"Amazon search results (with links): {response}"
+            })
+            
             self.audio_processors.speak(ai_response)
             return response
         
@@ -161,4 +175,19 @@ class CommandProcessor:
             
         reminder_action()
         print("Reminder action completed. Ready for next command.")
+        return False
+    
+    def _handle_telegram_command(self, user_command, tool_response):
+        """Handle Telegram commands"""
+        self.conversation_history.append({"role": "user", "content": user_command})
+        
+        def telegram_action():
+            response = self.telegram_bot.telegram_handler(tool_response)
+            print(f"Telegram response: {response}")
+            ai_response = self.ai_response_handler.get_ai_response(response, is_tool_response=True)
+            self.audio_processors.speak(ai_response)
+            return response
+            
+        telegram_action()
+        print("Telegram action completed. Ready for next command.")
         return False

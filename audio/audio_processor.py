@@ -1,5 +1,6 @@
 # audio/audio_processor.py
 import os
+import platform
 import time
 from dotenv import load_dotenv
 import sounddevice as sd
@@ -91,7 +92,12 @@ class AudioProcessors:
         Threaded TTS function with interruption support and improved Hindi handling
         """
         # Stop any current speech first
-        self.stop_speech()
+        if self.is_speaking:
+            self.stop_speech()
+            time.sleep(0.1)  # Brief pause to ensure cleanup
+        
+        # Reset interruption flag
+        self.speech_interrupted = False
         
         # Auto-detect language if not specified
         if lang is None:
@@ -111,37 +117,40 @@ class AudioProcessors:
         self.speech_thread.start()
 
     def _generate_and_play_simple(self, text, voice, rate, speed_multiplier):
-        """Simplified synchronous TTS generation and playback with interruption"""
-        # Generate TTS
+        """Simple TTS generation and playback"""
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp_file_path = tmp_file.name
         tmp_file.close()
         
         try:
-            # Generate TTS synchronously
+            # Generate TTS
             communicate = edge_tts.Communicate(text, voice, rate=rate)
             asyncio.run(communicate.save(tmp_file_path))
             
-            # Play with interruption
-            if os.path.exists(tmp_file_path) and not self.speech_interrupted:
-                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+            # Play audio
+            if os.path.exists(tmp_file_path):
+                pygame.mixer.init()
                 pygame.mixer.music.load(tmp_file_path)
                 pygame.mixer.music.play()
                 
+                # Wait for playback to finish
                 while pygame.mixer.music.get_busy() and not self.speech_interrupted:
-                    time.sleep(0.05)  # Check every 50ms for interruption
+                    time.sleep(0.1)
                 
-                if self.speech_interrupted:
-                    pygame.mixer.music.stop()
-                    print("Speech interrupted!")
-                
+                # Cleanup
+                pygame.mixer.music.stop()
                 pygame.mixer.quit()
                 
         except Exception as e:
-            print(f"TTS generation/playback error: {e}")
+            print(f"TTS error: {e}")
         finally:
-            if os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
+            # Delete temp file
+            try:
+                if os.path.exists(tmp_file_path):
+                    time.sleep(0.2)  # Brief wait
+                    os.unlink(tmp_file_path)
+            except:
+                pass
     
     def _speak_threaded(self, text, voice, rate, speed_multiplier, lang):
         """Threaded speech function with interruption support and improved Hindi processing"""
@@ -189,6 +198,7 @@ class AudioProcessors:
     def stop_speech(self):
         """Stop current speech immediately"""
         if self.is_speaking:
+            print("DEBUG: stop_speech() called - interrupting current speech")
             self.speech_interrupted = True
             try:
                 if pygame.mixer.get_init():

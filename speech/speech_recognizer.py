@@ -15,8 +15,8 @@ class SpeechRecognizer:
         self.recognizer.energy_threshold = 400
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.pause_threshold = 1.5
-        self.recognizer.phrase_threshold = 0.3
-        self.recognizer.non_speaking_duration = 1.0
+        self.recognizer.phrase_threshold = 0.5
+        self.recognizer.non_speaking_duration = 1.5
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:

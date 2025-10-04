@@ -2,7 +2,7 @@
 import json
 import os
 
-CONVERSATION_FILE = "data/conversation_history.json"
+CONVERSATION_FILE = os.path.join("data", "conversation_history.json")
 
 class ConversationManager:
     def __init__(self, file_path=CONVERSATION_FILE):

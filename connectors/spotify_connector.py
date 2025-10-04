@@ -7,6 +7,8 @@ import spotipy as sp
 from spotipy.oauth2 import SpotifyOAuth
 import time
 
+
+
 class InvalidSearchError(Exception):
     pass
 
@@ -16,7 +18,7 @@ class SpotifyConnector:
     def __init__(self, spotify: Spotify):
         self.spotify = spotify
         self.device_id = None
-    
+        
 
     def _find_device(self):
         """Find and cache the first active device. Returns dict with id/name or False."""
@@ -209,26 +211,38 @@ class SpotifyConnector:
         try:
             spotify_url = "https://open.spotify.com"
             
-            # Command to open URL in Microsoft Edge
-            edge_command = [
-                "msedge",
-                spotify_url
-            ]
-            # Try to open with msedge command
-            try:
-                subprocess.run(edge_command, check=True)
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                # Fallback: use start command with edge
-                subprocess.run([
-                    "cmd", "/c", "start", "msedge", spotify_url
-                ], shell=True)
+            import platform
+            current_os = platform.system()
+            
+            if current_os == "Windows":
+                # Command to open URL in Microsoft Edge
+                edge_command = [
+                    "msedge",
+                    spotify_url
+                ]
+                # Try to open with msedge command
+                try:
+                    subprocess.run(edge_command, check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    # Fallback: use start command with edge
+                    subprocess.run([
+                        "cmd", "/c", "start", "msedge", spotify_url
+                    ], shell=True)
+            elif current_os == "Linux":
+                # Linux - try common browsers
+                try:
+                    subprocess.run(["xdg-open", spotify_url], check=True)
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    try:
+                        subprocess.run(["firefox", spotify_url], check=True)
+                    except (subprocess.CalledProcessError, FileNotFoundError):
+                        subprocess.run(["google-chrome", spotify_url], check=True)
                 
         except Exception as e:
             # Final fallback: use default browser
             try:
-                subprocess.run([
-                    "cmd", "/c", "start", spotify_url
-                ], shell=True)
+                import webbrowser
+                webbrowser.open(spotify_url)
             except:
                 pass
 
@@ -395,6 +409,8 @@ class SpotifyConnector:
             return False
         
 if __name__ == "__main__":
-    # Create a temporary connector just to open Spotify in Edge
-    
     pass
+    # Create a temporary connector just to open Spotify in Edge
+    # tool_data = {"tool": "spotify", "action": "play", "target": "track", "name": "Shape of You"}
+    # spotify_connector = SpotifyConnector(None)
+    # spotify_connector.handle_spotify_action_with_feedback(tool_data, MockAudioProcessor(), conversation_history)

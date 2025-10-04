@@ -15,14 +15,13 @@ from audio.audio_processor import AudioProcessors
 from audio.wake_word_detector import WakeWordDetector
 from speech.speech_recognizer import SpeechRecognizer
 from conversation.conversation_manager import ConversationManager
-from conversation.ai_respons_handler import AIResponseHandler
-from conversation.feedback_handler import FeedbackHandler
+# from conversation.ai_respons_handler import AIResponseHandler  
+from conversation.feedback_handler import FeedbackHandler     
 from connectors.reminder_manager import ReminderManager
 
-# New handler imports
-from handlers.tool_action_handler import ToolActionHandler
 from handlers.wake_word_manager import WakeWordManager
-from handlers.command_processor import CommandProcessor
+# from handlers.command_processor import CommandProcessor  # Replaced by LangChain processor
+from handlers.langchain_command_processor import LangChainAgentProcessor
 
 load_dotenv()
 
@@ -55,14 +54,14 @@ class VoiceAssistantRefactored:
             print(f"Warning: wake word model not loaded during init: {e}")
             self.wake_word_detector = None
         
-        # Specialized handlers
-        self.tool_action_handler = ToolActionHandler(self.conversation_history)
-        self.ai_response_handler = AIResponseHandler(
-            conversation_manager=self.conversation_manager,
-            audio_processors=self.audio_processors,
-            recognizer=self.recognizer
-        )
-        self.feedback_handler = FeedbackHandler(self.audio_processors)
+        
+        # Note: These handlers are no longer needed with LangChain implementation  
+        # self.tool_action_handler = ToolActionHandler(self.conversation_history)
+        # self.ai_response_handler = AIResponseHandler(
+        #     conversation_manager=self.conversation_manager,
+        #     audio_processors=self.audio_processors,
+        #     recognizer=self.recognizer
+        # )
         
         # Wake word manager
         self.wake_word_manager = WakeWordManager(
@@ -72,16 +71,20 @@ class VoiceAssistantRefactored:
         )
         
         # Command processor
-        self.command_processor = CommandProcessor(
-            tool_action_handler=self.tool_action_handler,
-            ai_response_handler=self.ai_response_handler,
-            feedback_handler=self.feedback_handler,
-            conversation_manager=self.conversation_manager,
+        # self.command_processor = CommandProcessor(
+        #     tool_action_handler=self.tool_action_handler,
+        #     ai_response_handler=self.ai_response_handler,
+        #     feedback_handler=self.feedback_handler,
+        #     conversation_manager=self.conversation_manager,
+        #     conversation_history=self.conversation_history,
+        #     audio_processors=self.audio_processors,
+        #     reminder_manager=self.reminder_manager
+        # )
+        self.command_processor = LangChainAgentProcessor(
             conversation_history=self.conversation_history,
             audio_processors=self.audio_processors,
-            reminder_manager=self.reminder_manager
         )
-    
+
     def check_and_announce_reminders(self):
         """Check for due reminders and announce them"""
         try:

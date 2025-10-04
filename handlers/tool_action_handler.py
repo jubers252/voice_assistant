@@ -41,6 +41,9 @@ Rules:
 - For amazon order history for upto nth days: use get_recent_orders action
 - For reminders (set, add, check, list or cancel reminders): "reminder"
 - For default location, use Pisoli, Pune, India
+- For any queries related to sending updates/notifications to user's phone: "telegram"
+- For Telegram bot actions (send message, photo, document, video): "telegram"
+- Telegram keywords: "send message", "telegram me", "notify me", "message me", "send to phone", "update me"
 - Default: "none"
 
 Examples:
@@ -55,6 +58,14 @@ Examples:
 {{"tool":"amazon_order_tracking","action":"get_recent_orders","days":5}}
 {{"tool":"reminder","action":"add","text":"Take medicine","time":"in 30 minutes"}}
 {{"tool":"reminder","action":"list/set/check/cancel"}}
+
+Telegram Examples:
+{{"tool":"telegram","action":"send_message","message":"Hello World"}} (from "send telegram saying Hello World")
+{{"tool":"telegram","action":"send_message","message":"Meeting at 3pm"}} (from "telegram me meeting at 3pm")
+{{"tool":"telegram","action":"send_photo","photo":"path/to/image.jpg","caption":"Photo caption"}}
+
+Note: Extract the exact message content after "saying", "me", or similar phrases.
+
 {{"tool":"none","lang":"en"}}
 
 User: {user_message}"""

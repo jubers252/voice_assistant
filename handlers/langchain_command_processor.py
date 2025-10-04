@@ -1,0 +1,851 @@
+"""
+LangChain-based Command Processor (Dummy Version)
+This replaces your current CommandProcessor with an intelligent agent
+"""
+
+
+import os
+import threading
+import platform
+import time
+import speech_recognition as sr
+from typing import Dict, Any
+from dotenv import load_dotenv
+import re
+# LangChain imports (install with: pip install langchain langchain-openai)
+from langchain.agents import AgentExecutor, create_openai_functions_agent
+from langchain.memory import ConversationBufferWindowMemory
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.tools import Tool
+
+# Import your existing connectors
+from connectors.weather_connector import handle_tool_requests
+from connectors.amzon_connector import get_amazon_result
+from connectors.amazon_order_tracker import get_order
+from connectors.spotify_connector import SpotifyConnector
+from connectors.search_engine import GeminiSearch
+from connectors.telegram_bot import TelegramBot
+from connectors.reminder_manager import ReminderManager
+from speech.speech_recognizer import SpeechRecognizer
+
+load_dotenv()
+
+
+class LangChainAgentProcessor:
+    """
+    LangChain-based replacement for CommandProcessor
+    This intelligently decides which tools to use based on user input
+    """
+    
+    def __init__(self, conversation_history, audio_processors):
+        """
+        Initialize LangChain Agent Processor
+        
+        Required parameters:
+        - conversation_history: List to store conversation history
+        - audio_processors: Handler for speech/TTS functionality
+        """
+        
+        # Store the handlers that are actually used
+        self.conversation_history = conversation_history
+        self.audio_processors = audio_processors
+        self.reminder_manager = ReminderManager()
+
+        # Initialize connectors (same as original)
+        self.spotify_connector = SpotifyConnector(None)
+        self.search_connector = GeminiSearch()
+        self.telegram_bot = TelegramBot()
+        
+        # LangChain-specific setup
+        self.agent_executor = None
+        self.tools = []
+        
+        self._setup_langchain_agent()
+    
+    def _create_current_weather_tool(self) -> Tool:
+        """Get current weather for a location"""
+        def current_weather_function(location: str) -> str:
+            try:
+                tool_request = {
+                    "tool": "weather", 
+                    "action": "get_current_weather",
+                    "location": location
+                }
+                result = handle_tool_requests(tool_request)
+                return f"Current weather in {location}: {result}"
+            except Exception as e:
+                return f"Current weather error: {str(e)}"
+        
+        return Tool(
+            name="get_current_weather",
+            description="Get current weather conditions for a specific location. Input should be a city name or location.",
+            func=current_weather_function
+        )
+    
+    def _create_weather_forecast_tool(self) -> Tool:
+        """Get weather forecast for a location"""
+        def forecast_function(location: str) -> str:
+            try:
+                tool_request = {
+                    "tool": "weather", 
+                    "action": "get_forecast",
+                    "location": location
+                }
+                result = handle_tool_requests(tool_request)
+                return f"Weather forecast for {location}: {result}"
+            except Exception as e:
+                return f"Weather forecast error: {str(e)}"
+        
+        return Tool(
+            name="get_weather_forecast",
+            description="Get weather forecast (3-day) for a specific location. Input should be a city name or location.",
+            func=forecast_function
+        )
+    
+    def _create_timezone_tool(self) -> Tool:
+        """Get timezone information for a location"""
+        def timezone_function(location: str) -> str:
+            try:
+                tool_request = {
+                    "tool": "weather", 
+                    "action": "get_timezone",
+                    "location": location
+                }
+                result = handle_tool_requests(tool_request)
+                return f"Timezone for {location}: {result}"
+            except Exception as e:
+                return f"Timezone error: {str(e)}"
+        
+        return Tool(
+            name="get_timezone",
+            description="Get timezone and current local time for a specific location. Input should be a city name or location.",  
+            func=timezone_function
+        )
+    
+    def _create_spotify_play_track_tool(self) -> Tool:
+        """Play a specific track on Spotify"""
+        def play_track_function(track_name: str) -> str:
+            try:
+                def spotify_thread_func():
+                    tool_response = {
+                        "tool": "spotify",
+                        "action": "play",
+                        "target": "track",
+                        "name": track_name
+                    }
+                    return self.spotify_connector.handle_spotify_action_with_feedback(
+                        tool_response, self.audio_processors, self.conversation_history
+                    )
+                
+                # Run Spotify in separate thread to avoid audio conflicts
+                spotify_thread = threading.Thread(target=spotify_thread_func, daemon=True)
+                spotify_thread.start()
+                
+                return f"Starting track playback: {track_name}"
+            except Exception as e:
+                return f"Spotify track error: {str(e)}"
+        
+        return Tool(
+            name="play_spotify_track",
+            description="Play a specific song/track on Spotify. Input should be the track name.",
+            func=play_track_function
+        )
+    
+    def _create_spotify_play_album_tool(self) -> Tool:
+        """Play a specific album on Spotify"""
+        def play_album_function(album_name: str) -> str:
+            try:
+                def spotify_thread_func():
+                    tool_response = {
+                        "tool": "spotify",
+                        "action": "play",
+                        "target": "album",
+                        "name": album_name
+                    }
+                    return self.spotify_connector.handle_spotify_action_with_feedback(
+                        tool_response, self.audio_processors, self.conversation_history
+                    )
+                
+                # Run Spotify in separate thread to avoid audio conflicts
+                spotify_thread = threading.Thread(target=spotify_thread_func, daemon=True)
+                spotify_thread.start()
+                
+                return f"Starting album playback: {album_name}"
+            except Exception as e:
+                return f"Spotify album error: {str(e)}"
+        
+        return Tool(
+            name="play_spotify_album",
+            description="Play a specific album on Spotify. Input should be the album name.",
+            func=play_album_function
+        )
+    
+    def _create_spotify_play_artist_tool(self) -> Tool:
+        """Play music by a specific artist on Spotify"""
+        def play_artist_function(artist_name: str) -> str:
+            try:
+                def spotify_thread_func():
+                    tool_response = {
+                        "tool": "spotify",
+                        "action": "play",
+                        "target": "artist",
+                        "name": artist_name
+                    }
+                    return self.spotify_connector.handle_spotify_action_with_feedback(
+                        tool_response, self.audio_processors, self.conversation_history
+                    )
+                
+                # Run Spotify in separate thread to avoid audio conflicts
+                spotify_thread = threading.Thread(target=spotify_thread_func, daemon=True)
+                spotify_thread.start()
+                
+                return f"Starting artist playback: {artist_name}"
+            except Exception as e:
+                return f"Spotify artist error: {str(e)}"
+        
+        return Tool(
+            name="play_spotify_artist",
+            description="Play music by a specific artist on Spotify. Input should be the artist name.",
+            func=play_artist_function
+        )
+    
+    def _create_spotify_control_tool(self) -> Tool:
+        """Control Spotify playback (pause, resume, next)"""
+        def control_function(action: str) -> str:
+            try:
+                action_lower = action.lower().strip()
+                
+                if action_lower in ['pause', 'stop']:
+                    spotify_action = "stop"
+                elif action_lower in ['resume', 'continue', 'play']:
+                    spotify_action = "resume"
+                elif action_lower in ['next', 'skip']:
+                    spotify_action = "next"
+                else:
+                    return "Use: pause, resume, or next"
+                
+                def spotify_control_thread_func():
+                    tool_response = {
+                        "tool": "spotify",
+                        "action": spotify_action
+                    }
+                    return self.spotify_connector.handle_spotify_action_with_feedback(
+                        tool_response, self.audio_processors, self.conversation_history
+                    )
+                
+                # Run Spotify control in separate thread to avoid audio conflicts
+                spotify_thread = threading.Thread(target=spotify_control_thread_func, daemon=True)
+                spotify_thread.start()
+                
+                return f"Spotify control: {action_lower}"
+            except Exception as e:
+                return f"Spotify control error: {str(e)}"
+        
+        return Tool(
+            name="control_spotify_playback",
+            description="Control Spotify playback. Use 'pause', 'resume', or 'next'.",
+            func=control_function
+        )
+    
+    def _create_search_tool(self) -> Tool:
+        """Convert search connector to LangChain tool"""
+        def search_function(query: str) -> str:
+            try:
+                # Use your existing search connector
+                tool_request = {"query": query, "tool": "search"}
+                result = self.search_connector.handle_search_action_with_feedback(tool_request)
+                return result[:500]  # Limit response length
+            except Exception as e:
+                return f"Search error: {str(e)}"
+        
+        return Tool(
+            name="search_web",
+            description="Search the internet for information. Input should be a search query or question.",
+            func=search_function
+        )
+    
+    def _create_amazon_single_product_tool(self) -> Tool:
+        """Search Amazon for detailed information about a single product"""
+        def single_product_function(query: str) -> str:
+            try:
+                tool_request = {
+                    "tool": "amazon", 
+                    "action": "single_product_search",
+                    "query": query
+                }
+                result = get_amazon_result(tool_request)
+                # Format the result nicely for the LLM
+                if isinstance(result, dict):
+                    title = result.get('title', 'Unknown Product')
+                    price = result.get('price', 'Price not available')
+                    rating = result.get('rating', 'No rating')
+                    url = result.get('url', 'N/A')
+                    asin = result.get('asin', 'N/A')
+                    
+                    # Include more details if available
+                    response = f"Product: {title}\n Price: {price}\n Rating: {rating}/5\n Link: {url}"
+                    
+                    # Add image if available
+                    if result.get('image'):
+                        response += f"\n Image: {result.get('image')}"
+                    
+                    # Add ASIN for reference
+                    if asin != 'N/A':
+                        response += f"\nASIN: {asin}"
+                    
+                    return response
+                return f"Single product result: {str(result)[:800]}..."
+            except Exception as e:
+                return f"Amazon single product search error: {str(e)}"
+        
+        return Tool(
+            name="search_amazon_single_product",
+            description="Search Amazon for detailed information about a specific single product with price, rating, and direct product link. Use when user wants detailed info about one product.",
+            func=single_product_function
+        )
+    
+    def _create_amazon_multi_product_tool(self) -> Tool:
+        """Search Amazon for multiple products (comparison/browse)"""
+        def multi_product_function(query: str) -> str:
+            try:
+                tool_request = {
+                    "tool": "amazon", 
+                    "action": "multi_product_search",
+                    "query": query,
+                    "max_results": 5
+                }
+                result = get_amazon_result(tool_request)
+                # Format multiple products nicely
+                if isinstance(result, list):
+                    formatted_results = []
+                    for i, product in enumerate(result[:3], 1):  # Limit to top 3 for readability
+                        title = product.get('title', 'Unknown Product')
+                        price = product.get('price', 'Price not available')
+                        url = product.get('url', 'N/A')
+                        rating = product.get('rating', 'No rating')
+                        
+                        product_info = f"{i}.  {title}\n    {price}\n   {rating}/5\n   {url}"
+                        formatted_results.append(product_info)
+                    
+                    return f"🛒 Amazon Search Results:\n\n" + "\n\n".join(formatted_results)
+                return f"Multiple products result: {str(result)[:800]}..."
+            except Exception as e:
+                return f"Amazon multi-product search error: {str(e)}"
+        
+        return Tool(
+            name="search_amazon_multiple_products",
+            description="Search Amazon for multiple products to compare options with prices, ratings, and direct product links. Use when user wants to see several product choices or browse options.",
+            func=multi_product_function
+        )
+    
+    def _create_amazon_order_tracking_tool(self) -> Tool:
+        """Track Amazon orders from recent days"""
+        def order_tracking_function(days_input: str) -> str:
+            try:
+                # Extract number of days, default to 5
+               
+                days = 5
+                numbers = re.findall(r'\d+', days_input)
+                if numbers:
+                    days = max(1, min(int(numbers[0]), 30))  # Limit 1-30 days
+                
+                tool_request = {
+                    "tool": "amazon_order_tracking",
+                    "action": "get_recent_orders", 
+                    "days": days
+                }
+                result = get_order(tool_request)
+                
+                if isinstance(result, list) and result:
+                    return f"Found {len(result)} orders from last {days} days: {str(result)[:400]}..."
+                elif isinstance(result, list):
+                    return f"No orders found from the last {days} days."
+                else:
+                    return f"Order tracking: {str(result)[:300]}..."
+            except Exception as e:
+                return f"Order tracking error: {str(e)}"
+        
+        return Tool(
+            name="track_amazon_orders",
+            description="Track Amazon orders from recent days. Input: number of days (e.g., '5' or 'last 7 days').",
+            func=order_tracking_function
+        )
+    
+    def _create_reminder_tool(self) -> Tool:
+        """Convert reminder manager to LangChain tool"""
+        def reminder_function(reminder_text: str) -> str:
+            try:
+                # Use your existing reminder manager with proper format
+                tool_request = {
+                    "tool": "reminder", 
+                    "text": reminder_text,
+                    "reminder_text": reminder_text  # Some methods might expect this key
+                }
+                result = self.reminder_manager.handle_reminder_action(tool_request)
+                return f"Reminder: {result}"
+            except Exception as e:
+                return f"Reminder error: {str(e)}"
+        
+        return Tool(
+            name="set_reminder",
+            description="Set a reminder for the user. Input should be the reminder text or task.",
+            func=reminder_function
+        )
+    
+    def _create_telegram_message_tool(self) -> Tool:
+        """Send text message via Telegram"""
+        def telegram_message_function(message: str) -> str:
+            try:
+                tool_response = {
+                    "action": "send_message",
+                    "message": message
+                }
+                result = self.telegram_bot.telegram_handler(tool_response)
+                return f"Message sent to Telegram: {message}"
+            except Exception as e:
+                return f"Telegram message error: {str(e)}"
+        
+        return Tool(
+            name="send_telegram_message",
+            description="Send a text message via Telegram. Input should be the message text.",
+            func=telegram_message_function
+        )
+    
+    def _create_telegram_photo_tool(self) -> Tool:
+        """Send photo via Telegram"""
+        def telegram_photo_function(photo_info: str) -> str:
+            try:
+                # Parse photo_info - expected format: "photo_path|caption" or just "photo_path"
+                parts = photo_info.split('|', 1)
+                photo_path = parts[0].strip()
+                caption = parts[1].strip() if len(parts) > 1 else ""
+                
+                # Validate if it's a URL or file path
+                if photo_path.startswith(('http://', 'https://')):
+                    # For URLs, we need to note that Telegram may have restrictions
+                    caption_note = f"{caption}\n[Note: URL photo - may require download first]" if caption else "[Note: URL photo - may require download first]"
+                else:
+                    caption_note = caption
+                
+                tool_response = {
+                    "action": "send_photo",
+                    "photo": photo_path,
+                    "caption": caption_note
+                }
+                result = self.telegram_bot.telegram_handler(tool_response)
+                
+                if result and result.get('message_id'):
+                    return f"Photo sent successfully to Telegram: {photo_path[:50]}..."
+                else:
+                    return f"Failed to send photo to Telegram. Note: URLs may need to be downloaded first. Path: {photo_path[:50]}..."
+            except Exception as e:
+                return f"Telegram photo error: {str(e)}. Note: For URLs, try downloading the image first."
+        
+        return Tool(
+            name="send_telegram_photo",
+            description="Send a photo via Telegram. Input format: 'photo_path|caption' or just 'photo_path'. Note: URLs may not work directly - local files preferred.",
+            func=telegram_photo_function
+        )
+    
+    def _create_telegram_document_tool(self) -> Tool:
+        """Send document via Telegram"""
+        def telegram_document_function(doc_info: str) -> str:
+            try:
+                # Parse doc_info - expected format: "document_path|caption" or just "document_path"
+                parts = doc_info.split('|', 1)
+                doc_path = parts[0].strip()
+                caption = parts[1].strip() if len(parts) > 1 else ""
+                
+                tool_response = {
+                    "action": "send_document",
+                    "document": doc_path,
+                    "caption": caption
+                }
+                result = self.telegram_bot.telegram_handler(tool_response)
+                return f"Document sent to Telegram: {doc_path}"
+            except Exception as e:
+                return f"Telegram document error: {str(e)}"
+        
+        return Tool(
+            name="send_telegram_document",
+            description="Send a document via Telegram. Input format: 'document_path|caption' or just 'document_path'.",
+            func=telegram_document_function
+        )
+    
+    def _create_telegram_video_tool(self) -> Tool:
+        """Send video via Telegram"""
+        def telegram_video_function(video_info: str) -> str:
+            try:
+                # Parse video_info - expected format: "video_path|caption" or just "video_path"
+                parts = video_info.split('|', 1)
+                video_path = parts[0].strip()
+                caption = parts[1].strip() if len(parts) > 1 else ""
+                
+                tool_response = {
+                    "action": "send_video",
+                    "video": video_path,
+                    "caption": caption
+                }
+                result = self.telegram_bot.telegram_handler(tool_response)
+                return f"Video sent to Telegram: {video_path}"
+            except Exception as e:
+                return f"Telegram video error: {str(e)}"
+        
+        return Tool(
+            name="send_telegram_video",
+            description="Send a video via Telegram. Input format: 'video_path|caption' or just 'video_path'.",
+            func=telegram_video_function
+        )
+    
+    def _create_volume_control_tool(self) -> Tool:
+        """Control system volume - cross-platform version"""
+        def volume_control_function(command: str) -> str:
+            try:
+                import subprocess
+                
+                command_lower = command.lower()
+                current_os = platform.system()
+                
+                if current_os == "Windows":
+                    # Windows implementation
+                    if 'mute' in command_lower:
+                        try:
+                            subprocess.run(['nircmd.exe', 'mutesysvolume', '1'], shell=True)
+                            return "Volume muted"
+                        except:
+                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_MUTE}")'])
+                            return "Volume muted"
+                    
+                    elif 'unmute' in command_lower:
+                        try:
+                            subprocess.run(['nircmd.exe', 'mutesysvolume', '0'], shell=True)
+                            return "Volume unmuted"
+                        except:
+                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_MUTE}")'])
+                            return "Volume unmuted"
+                    
+                    elif 'up' in command_lower or 'increase' in command_lower:
+                        try:
+                            subprocess.run(['nircmd.exe', 'changesysvolume', '2000'], shell=True)
+                            return "Volume increased"
+                        except:
+                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_UP}")'])
+                            return "Volume increased"
+                    
+                    elif 'down' in command_lower or 'decrease' in command_lower:
+                        try:
+                            subprocess.run(['nircmd.exe', 'changesysvolume', '-2000'], shell=True)
+                            return "Volume decreased"
+                        except:
+                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_DOWN}")'])
+                            return "Volume decreased"
+                            
+                elif current_os == "Linux":
+                    # Linux implementation using amixer
+                    if 'mute' in command_lower:
+                        subprocess.run(['amixer', 'set', 'Master', 'mute'], check=True)
+                        return "Volume muted"
+                    
+                    elif 'unmute' in command_lower:
+                        subprocess.run(['amixer', 'set', 'Master', 'unmute'], check=True)
+                        return "Volume unmuted"
+                    
+                    elif 'up' in command_lower or 'increase' in command_lower:
+                        subprocess.run(['amixer', 'set', 'Master', '5%+'], check=True)
+                        return "Volume increased"
+                    
+                    elif 'down' in command_lower or 'decrease' in command_lower:
+                        subprocess.run(['amixer', 'set', 'Master', '5%-'], check=True)
+                        return "Volume decreased"
+                
+                else:
+                    return f"Volume control not supported on {current_os}. Only Windows and Linux are supported."
+                    
+                return "Say: volume up, volume down, mute, or unmute"
+                    
+            except Exception as e:
+                return f"Volume control error: {str(e)}"
+        
+        return Tool(
+            name="control_system_volume",
+            description="Control system volume. Say 'volume up', 'volume down', 'mute', or 'unmute'.",
+            func=volume_control_function
+        )
+    
+    def _create_follow_up_question_tool(self) -> Tool:
+        """Tool for the AI to ask follow-up questions and continue listening"""
+        def ask_follow_up_function(question: str) -> str:
+            try:
+                # Speak the follow-up question
+                self.audio_processors.speak(question)
+                
+                # Wait for speech to complete using is_speaking flag
+                print("Waiting for speech to complete...")
+                while hasattr(self.audio_processors, 'is_speaking') and self.audio_processors.is_speaking:
+                    time.sleep(0.1)
+                
+                print("Speech completed, ready for follow-up...")
+                time.sleep(1.0)  # Longer buffer to ensure TTS cleanup
+                
+                # Now listen for follow-up response
+                print(f"AI asked: {question}")
+                print("Now listening for follow-up response...")
+                time.sleep(0.5)  # Longer pause before beep
+                self.audio_processors.play_beep_sound()
+                time.sleep(0.2)  # Longer pause after beep for audio system to settle
+
+                # Create recognizer with better microphone handling
+                recognizer = SpeechRecognizer()
+                
+                # Try to adjust microphone for better recognition
+                try:
+                    with sr.Microphone(device_index=recognizer.device_index) as source:
+                        print("Adjusting microphone for follow-up...")
+                        recognizer.recognizer.adjust_for_ambient_noise(source, duration=1)
+                except Exception as mic_error:
+                    print(f"Microphone adjustment failed: {mic_error}")
+                
+                # Listen with longer timeout for follow-up
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=3)
+                
+                if follow_up_command:
+                    print(f"Received follow-up response: '{follow_up_command}'")
+                    return f"User responded: {follow_up_command}"
+                else:
+                    return "No follow-up response received"
+                    
+            except Exception as e:
+                return f"Follow-up error: {str(e)}"
+        
+        return Tool(
+            name="ask_follow_up_question",
+            description="Use this tool when you need to ask the user a follow-up question or need clarification. The tool will speak your question and automatically listen for the user's response. Input should be your question.",
+            func=ask_follow_up_function
+        )
+    
+    def _setup_langchain_agent(self):
+        """Setup the LangChain agent with tools and memory"""
+        
+        # Create tools from your existing connectors
+        self.tools = [
+            self._create_current_weather_tool(),
+            self._create_weather_forecast_tool(),
+            self._create_timezone_tool(),
+            self._create_spotify_play_track_tool(),
+            self._create_spotify_play_album_tool(),
+            self._create_spotify_play_artist_tool(),
+            self._create_spotify_control_tool(),
+            self._create_search_tool(),
+            self._create_amazon_single_product_tool(),
+            self._create_amazon_multi_product_tool(),
+            self._create_amazon_order_tracking_tool(),
+            self._create_reminder_tool(),
+            self._create_telegram_message_tool(),
+            self._create_telegram_photo_tool(),
+            self._create_telegram_document_tool(),
+            self._create_telegram_video_tool(),
+            self._create_volume_control_tool(),
+            self._create_follow_up_question_tool()
+        ]
+        
+        # Initialize LLM
+        llm = ChatOpenAI(
+            model="gpt-4.1",
+            temperature=0.7,
+            openai_api_key=os.getenv('OPENAI_API_KEY')
+        )
+        
+        # Setup memory for conversation context
+        memory = ConversationBufferWindowMemory(
+            memory_key="chat_history",
+            return_messages=True,
+            k=10  # Remember last 10 exchanges
+        )
+        
+        # Create system prompt
+        system_prompt = """
+        You are a helpful voice assistant named sofi, that can help users with various tasks.
+        
+        Available tools:
+        - get_current_weather: Get current weather conditions for a location
+        - get_weather_forecast: Get 3-day weather forecast for a location  
+        - get_timezone: Get timezone and local time for a location
+        - play_spotify_track: Play a specific song/track on Spotify
+        - play_spotify_album: Play a specific album on Spotify
+        - play_spotify_artist: Play music by a specific artist on Spotify
+        - control_spotify_playback: Control Spotify (pause, resume, next)
+        - search_web: Search the internet for information
+        - search_amazon_single_product: Get detailed info with direct links for one specific product
+        - search_amazon_multiple_products: Browse and compare multiple products with direct links
+        - track_amazon_orders: Check and track recent Amazon orders
+        - set_reminder: Set reminders for the user
+        - send_telegram_message: Send text messages via Telegram
+        - send_telegram_photo: Send photos via Telegram (format: 'path|caption', URLs supported)
+        - send_telegram_document: Send documents via Telegram (format: 'path|caption')
+        - send_telegram_video: Send videos via Telegram (format: 'path|caption')
+        - control_system_volume: Control system volume (up, down, mute, unmute, or set level)
+        - ask_follow_up_question: Use this when you need clarification or more information from the user
+        
+        Language Instructions:
+        - If the user query is in Hindi, respond in Hindi using Devanagari script (हिंदी में जवाब दें)
+        - If the user query is in English, respond in English
+        - Maintain the same helpful and conversational tone in both languages
+        - For mixed language queries, respond in the primary language of the query
+        
+        Instructions:
+        1. Listen carefully to what the user wants
+        2. Choose the appropriate tool(s) to help them
+        3. Use single product search when user wants details about one item
+        4. Use multiple product search when user wants to compare or browse options
+        5. Use order tracking when user asks about their Amazon orders or deliveries
+        6. For Telegram: use message tool for text, photo/document/video tools for media
+        7. Use multiple tools if needed for complex requests
+        8. Provide friendly, conversational responses
+        9. Ask for clarification if the request is unclear
+        10. **IMPORTANT: If user speaks in Hindi, always respond in Hindi Devanagari script**
+        11. **Follow-up Questions**: When you need clarification or more information, use the 'ask_follow_up_question' tool. This will speak your question and automatically listen for the user's response.
+        
+        Be helpful, concise, and natural in your responses in the appropriate language.
+        Use the ask_follow_up_question tool when you need more information from the user!
+        """
+        
+        # Create prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad")
+        ])
+        
+        # Create agent
+        agent = create_openai_functions_agent(
+            llm=llm,
+            tools=self.tools,
+            prompt=prompt
+        )
+        
+        # Create agent executor
+        self.agent_executor = AgentExecutor(
+            agent=agent,
+            tools=self.tools,
+            memory=memory,
+            verbose=True,  # Shows the agent's reasoning process
+            handle_parsing_errors=True,
+            max_iterations=3
+            # Removed early_stopping_method as it's deprecated in newer versions
+        )
+        
+        print("LangChain agent initialized with tools:", [tool.name for tool in self.tools])
+    
+
+    
+
+    
+    def process_user_command(self, user_command: str) -> bool:
+        """
+        Main method that replaces your original process_user_command
+        Now uses intelligent agent instead of manual tool selection
+        Includes follow-up conversation support
+        """
+        
+        # Check for exit commands (same as original)
+        if any(word in user_command.lower() for word in ["exit", "quit", "goodbye", "bye"]):
+            self.audio_processors.speak("Goodbye!")
+            return True
+        
+        try:
+            # Define the agent processing function
+            def agent_processing():
+                result = self.agent_executor.invoke({"input": user_command})
+                response = result["output"]
+                
+                # Add to conversation history
+                self.conversation_history.append({"role": "user", "content": user_command})
+                self.conversation_history.append({"role": "assistant", "content": response})
+                
+                # Speak the response
+                self.audio_processors.speak(response)
+                return response
+            
+            # Process directly without delayed feedback
+            response = agent_processing()
+            
+            # No need to check for follow-up questions - the LLM will use the ask_follow_up_question tool when needed
+            
+            print("Agent processing completed. Ready for next command.")
+            return False
+            
+        except Exception as e:
+            error_msg = f"Sorry, I encountered an error: {str(e)}"
+            print(f"Agent error: {e}")
+            self.audio_processors.speak(error_msg)
+            return False
+    
+    def get_agent_info(self) -> Dict[str, Any]:
+        """Get information about the agent's current state"""
+        return {
+            "tools_count": len(self.tools),
+            "agent_active": self.agent_executor is not None,
+            "tool_names": [tool.name for tool in self.tools] if self.tools else []
+        }
+
+
+
+if __name__ == "__main__":
+    # Test the LangChain processor functionality
+    print("Testing LangChainAgentProcessor...")
+    
+    # Mock handlers for testing
+    class MockHandler:
+        def speak(self, text, lang='en'):
+            print(f"[SPEAK]: {text}")
+        
+        def get_tool_action(self, command):
+            return {"tool": "none", "message": "test"}
+        
+        def handle_reminder_action(self, request):
+            return "Mock reminder created"
+        
+        def telegram_handler(self, request):
+            return "Mock telegram message sent"
+    
+    # Create mock conversation history
+    conversation_history = []
+    
+    try:
+        # Test initialization - only required parameters
+        processor = LangChainAgentProcessor(
+            conversation_history=conversation_history,
+            audio_processors=MockHandler()
+        )
+        
+        print("✓ LangChainAgentProcessor initialized successfully")
+        agent_info = processor.get_agent_info()
+        print(f"✓ Agent info: {agent_info}")
+        print(f"✓ Available tools: {', '.join(agent_info['tool_names'])}")
+        
+        # Test individual tool creation
+        current_weather_tool = processor._create_current_weather_tool()
+        forecast_tool = processor._create_weather_forecast_tool()
+        timezone_tool = processor._create_timezone_tool()
+        single_amazon_tool = processor._create_amazon_single_product_tool()
+        multi_amazon_tool = processor._create_amazon_multi_product_tool()
+        order_tracking_tool = processor._create_amazon_order_tracking_tool()
+        telegram_message_tool = processor._create_telegram_message_tool()
+        telegram_photo_tool = processor._create_telegram_photo_tool()
+        telegram_document_tool = processor._create_telegram_document_tool()
+        telegram_video_tool = processor._create_telegram_video_tool()
+        
+        print("✓ All weather tool creation methods work")
+        print("✓ All Amazon tool creation methods work")
+        print("✓ Amazon order tracking tool created successfully")
+        print("✓ All Telegram tool creation methods work")
+        print("✓ LangChain processor is ready for use!")
+        print(f"✓ Total tools available: {len(processor.tools)}")
+        print("✓ process_user_command method ready for voice assistant integration")
+        
+    except Exception as e:
+        print(f"✗ Error during testing: {e}")
+        import traceback
+        traceback.print_exc()
