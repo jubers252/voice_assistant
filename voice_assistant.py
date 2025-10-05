@@ -15,10 +15,8 @@ from audio.audio_processor import AudioProcessors
 from audio.wake_word_detector import WakeWordDetector
 from speech.speech_recognizer import SpeechRecognizer
 from conversation.conversation_manager import ConversationManager
-# from conversation.ai_respons_handler import AIResponseHandler  
-from conversation.feedback_handler import FeedbackHandler     
-from connectors.reminder_manager import ReminderManager
 
+from connectors.reminder_manager import ReminderManager
 from handlers.wake_word_manager import WakeWordManager
 # from handlers.command_processor import CommandProcessor  # Replaced by LangChain processor
 from handlers.langchain_command_processor import LangChainAgentProcessor
@@ -41,7 +39,10 @@ class VoiceAssistantRefactored:
         self.recognizer = SpeechRecognizer()
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
+
         self.reminder_manager = ReminderManager()
+        self.reminder_manager.set_audio_processors(self.audio_processors)
+        self.reminder_manager.start_reminder_checker()
         
         # Wake word detector
         ww_model_path = f"{model_dir}/WWD_improved.h5"
@@ -85,17 +86,7 @@ class VoiceAssistantRefactored:
             audio_processors=self.audio_processors,
         )
 
-    def check_and_announce_reminders(self):
-        """Check for due reminders and announce them"""
-        try:
-            reminder_message = self.reminder_manager.get_due_reminders_for_speech()
-            if reminder_message and not getattr(self.audio_processors, 'is_speaking', False):
-                print(f"Announcing reminder: {reminder_message}")
-                self.audio_processors.play_beep_sound()
-                time.sleep(0.3)
-                self.audio_processors.speak(reminder_message)
-        except Exception as e:
-            print(f"Error checking reminders: {e}")
+
     
     def run(self):
         """Main loop to run the voice assistant"""
@@ -104,7 +95,6 @@ class VoiceAssistantRefactored:
         # Setup audio buffer through wake word manager
         audio_buffer, buffer_lock = self.wake_word_manager.setup_audio_buffer()
         
-             
         # Start detection
         self.wake_word_manager.start_detection()
         
@@ -127,10 +117,9 @@ class VoiceAssistantRefactored:
                 )
                 detection_thread.start()
                 
-                # Main loop - just check reminders
+                # Main loop - just keep running while detection is active
                 while self.wake_word_manager.detection_running:
-                    self.check_and_announce_reminders()
-                    time.sleep(0.1)
+                    time.sleep(1.0)  # Reduced frequency since reminders run in background
                     
         except KeyboardInterrupt:
             print("\nProgram stopped by user")
@@ -140,8 +129,7 @@ class VoiceAssistantRefactored:
             self.wake_word_manager.stop_detection()
         finally:
             print("Voice assistant shutting down...")
-            if hasattr(self, 'reminder_manager'):
-                self.reminder_manager.stop_reminder_checker()
+          
 
 
 if __name__ == "__main__":

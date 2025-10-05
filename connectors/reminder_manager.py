@@ -1,15 +1,15 @@
 """
 Reminder Manager for Voice Assistant
-Handles setting, checking, and managing reminders using Gemini AI
+Handles setting, checking, and managing reminders with natural language processing
 """
 
 import json
 import os
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+import re
 import threading
 import time
-
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
 
 REMINDERS_FILE = "reminders.json"
 
@@ -21,14 +21,35 @@ class ReminderManager:
         self.reminders = self.load_reminders()
         self.reminder_thread = None
         self.running = False
+        self.audio_processors = None
+        self._last_file_mtime = self._get_file_mtime()
         
-    def load_reminders(self) -> List[Dict]:
-        """Load reminders from file."""
+    def _get_file_mtime(self) -> float:
+        """Get the modification time of the reminders file."""
+        try:
+            return os.path.getmtime(REMINDERS_FILE)
+        except OSError:
+            return 0.0
+    
+    def _check_file_changes(self):
+        """Check if the reminders file has been modified and reload if necessary."""
+        current_mtime = self._get_file_mtime()
+        if current_mtime > self._last_file_mtime:
+            print("Reminders file changed, reloading...")
+            self.reminders = self._load_reminders_from_file()
+            self._last_file_mtime = current_mtime
+    
+    def _load_reminders_from_file(self) -> List[Dict]:
+        """Internal method to load reminders from file."""
         try:
             with open(REMINDERS_FILE, 'r') as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return []
+    
+    def load_reminders(self) -> List[Dict]:
+        """Load reminders from file."""
+        return self._load_reminders_from_file()
     
     def save_reminders(self):
         """Save reminders to file."""
@@ -36,19 +57,8 @@ class ReminderManager:
             json.dump(self.reminders, f, indent=2)
     
     def add_reminder(self, text: str, remind_time: str, description: str = "") -> str:
-        """
-        Add a new reminder.
-        
-        Args:
-            text: The reminder message
-            remind_time: When to remind (parsed by Gemini)
-            description: Optional additional description
-            
-        Returns:
-            Confirmation message
-        """
+        """Add a new reminder with natural language time parsing."""
         try:
-            # Parse the time (you can enhance this with more sophisticated parsing)
             remind_datetime = self._parse_time(remind_time)
             
             if not remind_datetime:
@@ -67,9 +77,6 @@ class ReminderManager:
             self.reminders.append(reminder)
             self.save_reminders()
             
-            # Only start reminder checking thread if not running and this is not during initialization
-            # The voice assistant will start it separately when needed
-            
             time_str = remind_datetime.strftime("%I:%M %p on %B %d")
             return f"Reminder set for {time_str}: {text}"
             
@@ -82,13 +89,11 @@ class ReminderManager:
         time_str = time_str.lower().strip()
         
         try:
-            # Handle "in X minutes/hours"
+            # Handle "in X minutes/hours/days"
             if "in " in time_str:
-                # Extract number more carefully
-                import re
                 numbers = re.findall(r'\d+', time_str)
                 if numbers:
-                    num = int(numbers[0])  # Take the first number found
+                    num = int(numbers[0])
                     if "minute" in time_str:
                         return now + timedelta(minutes=num)
                     elif "hour" in time_str:
@@ -97,38 +102,31 @@ class ReminderManager:
                         return now + timedelta(days=num)
             
             # Handle "tomorrow at X"
-            if "tomorrow" in time_str:
-                tomorrow = now + timedelta(days=1)
-                if "pm" in time_str or "am" in time_str:
-                    import re
-                    numbers = re.findall(r'\d+', time_str)
-                    if numbers:
-                        hour = int(numbers[0])
-                        if "pm" in time_str and hour != 12:
-                            hour += 12
-                        elif "am" in time_str and hour == 12:
-                            hour = 0
-                        return tomorrow.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if "tomorrow" in time_str and ("pm" in time_str or "am" in time_str):
+                numbers = re.findall(r'\d+', time_str)
+                if numbers:
+                    hour = int(numbers[0])
+                    if "pm" in time_str and hour != 12:
+                        hour += 12
+                    elif "am" in time_str and hour == 12:
+                        hour = 0
+                    tomorrow = now + timedelta(days=1)
+                    return tomorrow.replace(hour=hour, minute=0, second=0, microsecond=0)
             
-            # Handle "today at X"
+            # Handle "today at X" or just "X PM/AM"
             if "today" in time_str or any(word in time_str for word in ["pm", "am"]):
-                if "pm" in time_str or "am" in time_str:
-                    import re
-                    numbers = re.findall(r'\d+', time_str)
-                    if numbers:
-                        hour = int(numbers[0])
-                        if "pm" in time_str and hour != 12:
-                            hour += 12
-                        elif "am" in time_str and hour == 12:
-                            hour = 0
-                        
-                        target_time = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-                        
-                        # If the time has passed today, set it for tomorrow
-                        if target_time <= now:
-                            target_time += timedelta(days=1)
-                        
-                        return target_time
+                numbers = re.findall(r'\d+', time_str)
+                if numbers:
+                    hour = int(numbers[0])
+                    if "pm" in time_str and hour != 12:
+                        hour += 12
+                    elif "am" in time_str and hour == 12:
+                        hour = 0
+                    
+                    target_time = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+                    if target_time <= now:
+                        target_time += timedelta(days=1)
+                    return target_time
             
             # Handle specific times like "5:30 PM"
             if ":" in time_str:
@@ -141,17 +139,13 @@ class ReminderManager:
                         second=0,
                         microsecond=0
                     )
-                    
-                    # If the time has passed today, set it for tomorrow
                     if target_time <= now:
                         target_time += timedelta(days=1)
-                    
                     return target_time
                 except:
                     pass
             
-        except Exception as e:
-            print(f"Debug: Error parsing time '{time_str}': {e}")
+        except Exception:
             pass
         
         return None
@@ -204,36 +198,64 @@ class ReminderManager:
         
         return result.strip()
     
+    def set_audio_processors(self, audio_processors):
+        """Set the audio processors for TTS announcements"""
+        self.audio_processors = audio_processors
+    
     def start_reminder_checker(self):
-        """Start the background thread that checks for due reminders."""
+        """Start the background thread that checks and announces reminders every 30 seconds."""
         if self.running and self.reminder_thread and self.reminder_thread.is_alive():
             return  # Thread is already running
         
         self.running = True
-        self.reminder_thread = threading.Thread(target=self._check_reminders_loop, daemon=True)
+        self.reminder_thread = threading.Thread(target=self._reminder_check_loop, daemon=True)
         self.reminder_thread.start()
-        print("Reminder checker started.")
+        print("Reminder checker started - will check every 30 seconds")
     
     def stop_reminder_checker(self):
         """Stop the reminder checker thread."""
         self.running = False
         print("Reminder checker stopped.")
     
-    def _check_reminders_loop(self):
-        """Background loop to check for due reminders."""
+    def _reminder_check_loop(self):
+        """Background loop that checks for due reminders every 30 seconds and announces them."""
         while self.running:
             try:
-                due_reminders = self.get_due_reminders()
-                for reminder in due_reminders:
-                    # This would be handled by the main voice assistant
-                    print(f" REMINDER: {reminder['text']}")
-                    self.mark_reminded(reminder["id"])
+                # Check if file has been modified and reload if necessary
+                self._check_file_changes()
                 
-                time.sleep(60)  # Check every 60 seconds (1 minute)
+                # Check for due reminders
+                due_reminders = self.get_due_reminders()
+                
+                # If there are due reminders, announce them
+                if due_reminders and self.audio_processors:
+                    for reminder in due_reminders:
+                        print(f"REMINDER ALERT: {reminder['text']}")
+                        
+                        # Check if TTS is not currently speaking
+                        if not getattr(self.audio_processors, 'is_speaking', False) and reminder["notified"] == False:
+                            # Play beep sound first
+                            self.audio_processors.play_beep_sound()
+                            time.sleep(0.3)
+                            
+                            # Speak the reminder
+                            reminder_message = f"Reminder: {reminder['text']}"
+                            self.audio_processors.speak(reminder_message)
+                            print("✓ Reminder announced successfully")
+                            
+                            # Mark as notified
+                            self.mark_reminded(reminder["id"])
+                        else:
+                            print("Assistant is speaking, will retry reminder later")
+                
+                # Wait 30 seconds before next check
+                time.sleep(30)
                 
             except Exception as e:
-                print(f"Error in reminder checker: {e}")
-                time.sleep(60)  # Wait longer if there's an error
+                print(f"Error in reminder check loop: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(30)  # Wait on error
     
     def get_due_reminders_for_speech(self) -> Optional[str]:
         """Get due reminders formatted for voice assistant speech."""
@@ -252,107 +274,25 @@ class ReminderManager:
                 self.mark_reminded(reminder["id"])
             return f"You have {len(due_reminders)} reminders: " + ", ".join(reminder_texts)
 
-
-    # Example usage functions for integration
     def handle_reminder_action(self, action_data: Dict) -> str:
         """Handle reminder actions from the voice assistant."""
-        rm = ReminderManager()
-        
         action = action_data.get("action", "")
         
         if action == "set": 
             text = action_data.get("text", "")
             time_str = action_data.get("time", "")
-            return rm.add_reminder(text, time_str)
+            return self.add_reminder(text, time_str)
         
         elif action == "list":
-            return rm.list_reminders()
+            return self.list_reminders()
         
         elif action == "cancel":
             reminder_id = action_data.get("id", 0)
-            return rm.cancel_reminder(reminder_id)
+            return self.cancel_reminder(reminder_id)
         
         elif action == "check":
-            due_reminder = rm.get_due_reminders_for_speech()
+            due_reminder = self.get_due_reminders_for_speech()
             return due_reminder or "No reminders are due right now."
         
         else:
             return "I don't understand that reminder action."
-
-
-def test_reminder_system():
-    """
-    Simple test function that:
-    1. Sets a reminder for 1 minute from now
-    2. Starts a thread that checks every 10 seconds
-    3. Shows when the reminder triggers
-    """
-    print("🧪 Testing Reminder System...")
-    
-    rm = ReminderManager()
-    
-    # Clear any existing reminders for clean test
-    rm.reminders = []
-    rm.save_reminders()
-    
-    # Set a test reminder for 1 minute from now
-    test_message = "Test reminder - this is a 1 minute test!"
-    result = rm.add_reminder(test_message, "in 1 minute")
-    print(f"✅ {result}")
-    
-    # Start the reminder checker with faster check interval for testing
-    print("🔄 Starting reminder checker (checking every 10 seconds)...")
-    
-    def test_check_loop():
-        """Test loop that checks every 10 seconds instead of 60."""
-        check_count = 0
-        while check_count < 12:  # Run for up to 2 minutes (12 * 10 seconds)
-            try:
-                check_count += 1
-                print(f"⏰ Check #{check_count} - {datetime.now().strftime('%H:%M:%S')}")
-                
-                due_reminders = rm.get_due_reminders()
-                if due_reminders:
-                    for reminder in due_reminders:
-                        print(f"🔔 REMINDER TRIGGERED: {reminder['text']}")
-                        rm.mark_reminded(reminder["id"])
-                    print("✅ Test completed - reminder was triggered!")
-                    return
-                else:
-                    print("   No reminders due yet...")
-                
-                time.sleep(10)  # Check every 10 seconds
-                
-            except Exception as e:
-                print(f"❌ Error in test checker: {e}")
-                time.sleep(10)
-        
-        print("⏰ Test timeout reached (2 minutes)")
-    
-    # Start the test thread (don't use daemon so script waits for it)
-    test_thread = threading.Thread(target=test_check_loop, daemon=False)
-    test_thread.start()
-    
-    print(f"📱 Test started at {datetime.now().strftime('%H:%M:%S')}")
-    print("💡 The reminder should trigger in about 1 minute...")
-    print("🛑 Press Ctrl+C to stop the test")
-    
-    try:
-        # Keep the main thread alive and wait for test to complete
-        test_thread.join()
-        print("✅ Test completed successfully!")
-    except KeyboardInterrupt:
-        print("\n🛑 Test stopped by user")
-
-
-if __name__ == "__main__":
-    # Test the reminder manager
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        # Run the test function
-        test_reminder_system()
-    else:
-        # When run directly, run the full test by default
-        print("🚀 Running reminder system test...")
-        test_reminder_system()

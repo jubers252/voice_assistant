@@ -372,25 +372,86 @@ class LangChainAgentProcessor:
             func=order_tracking_function
         )
     
-    def _create_reminder_tool(self) -> Tool:
-        """Convert reminder manager to LangChain tool"""
-        def reminder_function(reminder_text: str) -> str:
+    def _create_set_reminder_tool(self) -> Tool:
+        """Set a reminder tool"""
+        def set_reminder_function(reminder_input: str) -> str:
             try:
-                # Use your existing reminder manager with proper format
-                tool_request = {
-                    "tool": "reminder", 
-                    "text": reminder_text,
-                    "reminder_text": reminder_text  # Some methods might expect this key
+                # Parse reminder input - expected format: "text|time" or just "text"
+                parts = reminder_input.split('|', 1) if '|' in reminder_input else [reminder_input, ""]
+                text = parts[0].strip()
+                time_str = parts[1].strip() if len(parts) > 1 else "in 5 minutes"  # Default time
+                
+                action_data = {
+                    "action": "set",
+                    "text": text,
+                    "time": time_str
                 }
-                result = self.reminder_manager.handle_reminder_action(tool_request)
-                return f"Reminder: {result}"
+                result = self.reminder_manager.handle_reminder_action(action_data)
+                return result
             except Exception as e:
-                return f"Reminder error: {str(e)}"
+                return f"Set reminder error: {str(e)}"
         
         return Tool(
             name="set_reminder",
-            description="Set a reminder for the user. Input should be the reminder text or task.",
-            func=reminder_function
+            description="Set a reminder for the user. Input format: 'reminder text|time' (e.g., 'Call mom|in 30 minutes' or 'Meeting|tomorrow at 2 PM'). If no time specified, defaults to 5 minutes.",
+            func=set_reminder_function
+        )
+    
+    def _create_list_reminders_tool(self) -> Tool:
+        """List all active reminders tool"""
+        def list_reminders_function(query: str) -> str:
+            try:
+                action_data = {"action": "list"}
+                result = self.reminder_manager.handle_reminder_action(action_data)
+                return result
+            except Exception as e:
+                return f"List reminders error: {str(e)}"
+        
+        return Tool(
+            name="list_reminders",
+            description="List all active reminders. No input required.",
+            func=list_reminders_function
+        )
+    
+    def _create_cancel_reminder_tool(self) -> Tool:
+        """Cancel a specific reminder tool"""
+        def cancel_reminder_function(reminder_id: str) -> str:
+            try:
+                # Parse reminder ID
+                try:
+                    id_num = int(reminder_id.strip())
+                except ValueError:
+                    return "Please provide a valid reminder ID number."
+                
+                action_data = {
+                    "action": "cancel",
+                    "id": id_num
+                }
+                result = self.reminder_manager.handle_reminder_action(action_data)
+                return result
+            except Exception as e:
+                return f"Cancel reminder error: {str(e)}"
+        
+        return Tool(
+            name="cancel_reminder",
+            description="Cancel a specific reminder by ID. Input should be the reminder ID number.",
+            func=cancel_reminder_function
+        )
+    
+    def _create_check_reminders_tool(self) -> Tool:
+        """Check for due reminders tool"""
+        def check_reminders_function(query: str) -> str:
+            try:
+                action_data = {"action": "check"}
+                result = self.reminder_manager.handle_reminder_action(action_data)
+                return result
+            except Exception as e:
+                return f"Check reminders error: {str(e)}"
+        
+        return Tool(
+            name="check_reminders",
+            description="Check for any due reminders right now. No input required.",
+            func=check_reminders_function
         )
     
     def _create_telegram_message_tool(self) -> Tool:
@@ -605,7 +666,9 @@ class LangChainAgentProcessor:
                         recognizer.recognizer.adjust_for_ambient_noise(source, duration=1)
                 except Exception as mic_error:
                     print(f"Microphone adjustment failed: {mic_error}")
-                
+                   
+                self.audio_processors.play_beep_sound()
+                time.sleep(0.2)  # Longer pause after beep for audio system to settle
                 # Listen with longer timeout for follow-up
                 follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=3)
                 
@@ -640,7 +703,10 @@ class LangChainAgentProcessor:
             self._create_amazon_single_product_tool(),
             self._create_amazon_multi_product_tool(),
             self._create_amazon_order_tracking_tool(),
-            self._create_reminder_tool(),
+            self._create_set_reminder_tool(),
+            self._create_list_reminders_tool(),
+            self._create_cancel_reminder_tool(),
+            self._create_check_reminders_tool(),
             self._create_telegram_message_tool(),
             self._create_telegram_photo_tool(),
             self._create_telegram_document_tool(),
@@ -665,9 +731,10 @@ class LangChainAgentProcessor:
         
         # Create system prompt
         system_prompt = """
-        You are a helpful voice assistant named sofi, that can help users with various tasks.
+        You are a helpful female voice assistant named sofi, that can help users with various tasks.
         
         Available tools:
+        - if no location provided then use localtion : pisoli, pune, maharashtra, india
         - get_current_weather: Get current weather conditions for a location
         - get_weather_forecast: Get 3-day weather forecast for a location  
         - get_timezone: Get timezone and local time for a location

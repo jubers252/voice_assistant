@@ -37,20 +37,33 @@ class WakeWordManager:
     def handle_wake_word_detection(self, process_command_callback):
         """Handle actions when wake word is detected"""
         print("Wake word detected! Listening for command...")
-        # play beep sound to indicate readiness
-        self.audio_processors.play_beep_sound()
-        self.audio_processors.pause_listening(0.2)  # Minimal pause
         
-        user_command = self.recognizer.listen_for_command()
-        
-        if user_command:
-            should_exit = process_command_callback(user_command)
-            if should_exit:
-                return True  # Signal to break from main loop
-        else:
-            print("No command detected, waiting for next input...")
-        
-        return False  # Continue main loop
+        try:
+            # play beep sound to indicate readiness
+            print("Playing beep sound...")
+            self.audio_processors.play_beep_sound()
+            self.audio_processors.pause_listening(0.2)  # Minimal pause
+            
+            print("Starting speech recognition...")
+            user_command = self.recognizer.listen_for_command()
+            print(f"Speech recognition result: {user_command}")
+            
+            if user_command:
+                print(f"Processing command: {user_command}")
+                should_exit = process_command_callback(user_command)
+                print(f"Command processing result - should_exit: {should_exit}")
+                if should_exit:
+                    return True  # Signal to break from main loop
+            else:
+                print("No command detected, waiting for next input...")
+            
+            return False  # Continue main loop
+            
+        except Exception as e:
+            print(f"Error in handle_wake_word_detection: {e}")
+            import traceback
+            traceback.print_exc()
+            return False  # Continue on error
     
     def main_detection_loop(self, process_command_callback):
         """Main wake word detection loop"""
@@ -88,6 +101,7 @@ class WakeWordManager:
 
                 should_exit = self.handle_wake_word_detection(process_command_callback)
                 if should_exit:
+                    self.detection_running = False  # Set to False before breaking
                     break
                 
                 print("Returning to wake word listening...")

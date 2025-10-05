@@ -127,19 +127,28 @@ class AudioProcessors:
             communicate = edge_tts.Communicate(text, voice, rate=rate)
             asyncio.run(communicate.save(tmp_file_path))
             
-            # Play audio
+            # Play audio with better concurrent audio support
             if os.path.exists(tmp_file_path):
-                pygame.mixer.init()
-                pygame.mixer.music.load(tmp_file_path)
-                pygame.mixer.music.play()
-                
-                # Wait for playback to finish
-                while pygame.mixer.music.get_busy() and not self.speech_interrupted:
-                    time.sleep(0.1)
-                
-                # Cleanup
-                pygame.mixer.music.stop()
-                pygame.mixer.quit()
+                try:
+                    # Initialize pygame mixer with parameters that work better with other audio apps
+                    pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
+                    pygame.mixer.init()
+                    pygame.mixer.music.load(tmp_file_path)
+                    pygame.mixer.music.set_volume(0.8)  # Slightly lower volume to avoid conflicts
+                    pygame.mixer.music.play()
+                    
+                    # Wait for playback to finish
+                    while pygame.mixer.music.get_busy() and not self.speech_interrupted:
+                        time.sleep(0.1)
+                    
+                    # Cleanup
+                    pygame.mixer.music.stop()
+                    pygame.mixer.quit()
+                    
+                except Exception as pygame_error:
+                    print(f"Pygame audio failed: {pygame_error}")
+                    # Try alternative method if pygame fails
+                    self._try_alternative_audio_playback(tmp_file_path)
                 
         except Exception as e:
             print(f"TTS error: {e}")
@@ -217,6 +226,38 @@ class AudioProcessors:
             time.sleep(0.1)
         return not self.is_speaking  # Returns True if speech completed, False if timeout
     
+    def _try_alternative_audio_playback(self, tmp_file_path):
+        """Alternative audio playback method when pygame fails"""
+        try:
+            # Try using Windows' built-in audio player
+            if platform.system() == "Windows":
+                import subprocess
+                subprocess.run([
+                    'powershell', '-c', 
+                    f'Add-Type -AssemblyName presentationCore; '
+                    f'$mediaPlayer = New-Object system.windows.media.mediaplayer; '
+                    f'$mediaPlayer.open([uri]"{tmp_file_path}"); '
+                    f'$mediaPlayer.Play(); '
+                    f'Start-Sleep -Seconds 3'
+                ], capture_output=True, timeout=10)
+            else:
+                # For other platforms, try system commands
+                subprocess.run(['play', tmp_file_path], capture_output=True, timeout=10)
+        except Exception as alt_error:
+            print(f"Alternative audio playback also failed: {alt_error}")
+            self._system_beep()  # Final fallback
+    
+    def _system_beep(self):
+        """Generate a system beep as fallback"""
+        try:
+            if platform.system() == "Windows":
+                import winsound
+                winsound.Beep(800, 300)  # 800Hz for 300ms
+            else:
+                print("\a")  # ASCII bell character
+        except Exception:
+            print("\a")  # Ultimate fallback
+    
         
     def pause_listening(self, seconds=3):
         """Pause listening to avoid detecting the assistant's own voice"""
@@ -246,28 +287,36 @@ class AudioProcessors:
     def play_beep_sound(self, beep_file = None):
         """Play a simple beep sound to indicate assistant is listening"""
         try:
-            import pygame
-            
             # Use the specific beep file
             if not beep_file:
                 beep_file = "beep/short-beep-tone-47916.mp3"
 
             if os.path.exists(beep_file):
-                pygame.mixer.init()
-                pygame.mixer.music.load(beep_file)
-                pygame.mixer.music.play()
-                
-                # Wait for the short beep to finish
-                while pygame.mixer.music.get_busy():
-                    pygame.time.wait(10)
-                
-                pygame.mixer.quit()
+                try:
+                    # Try pygame with better parameters first
+                    import pygame
+                    pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
+                    pygame.mixer.init()
+                    pygame.mixer.music.load(beep_file)
+                    pygame.mixer.music.set_volume(0.6)  # Lower volume for beep
+                    pygame.mixer.music.play()
+                    
+                    # Wait for the short beep to finish
+                    while pygame.mixer.music.get_busy():
+                        pygame.time.wait(10)
+                    
+                    pygame.mixer.quit()
+                except Exception as pygame_error:
+                    print(f"Pygame beep failed: {pygame_error}")
+                    # Fallback to system beep
+                    self._system_beep()
             else:
                 print(f"Beep file not found: {beep_file}")
-                # Fallback to system beep
+                self._system_beep()
 
         except Exception as e:
             print(f"Error playing beep: {e}")
+            self._system_beep()
 
     def audio_callback(self, indata, frames, time_info, status):
         """Audio callback function for real-time audio processing

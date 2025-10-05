@@ -1,32 +1,83 @@
 [
   {
     "id": 1,
-    "text": "Test reminder - this is a 1 minute test!",
+    "text": "take medicine",
     "description": "",
-    "remind_time": "2025-09-20T23:59:06.167399",
-    "created_time": "2025-09-20T23:58:06.167399",
-    "active": false,
-    "notified": true,
-    "repeat_count": 2
+    "remind_time": "2025-10-05T16:21:05.693359",
+    "created_time": "2025-10-05T16:20:05.693359",
+    "active": true,
+    "notified": true
   },
   {
     "id": 2,
-    "text": "Take medicine",
+    "text": "check email",
     "description": "",
-    "remind_time": "2025-09-21T00:14:50.556821",
-    "created_time": "2025-09-21T00:12:50.556821",
-    "active": false,
-    "notified": true,
-    "repeat_count": 2
+    "remind_time": "2025-10-05T16:37:04.279220",
+    "created_time": "2025-10-05T16:36:04.280238",
+    "active": true,
+    "notified": true
   },
   {
     "id": 3,
-    "text": "Reminder",
+    "text": "test alarm sound",
     "description": "",
-    "remind_time": "2025-09-21T00:28:17.753785",
-    "created_time": "2025-09-21T00:26:17.753785",
-    "active": false,
-    "notified": true,
-    "repeat_count": 2
+    "remind_time": "2025-10-05T16:42:20.016499",
+    "created_time": "2025-10-05T16:40:20.016499",
+    "active": true,
+    "notified": true
+  },
+  {
+    "id": 999,
+    "text": "IMMEDIATE TEST ALARM - THIS SHOULD PLAY SOUND",
+    "description": "",
+    "remind_time": "2025-10-05T16:41:41.859793",
+    "created_time": "2025-10-05T16:41:42.859793",
+    "active": true,
+    "notified": true
+  },
+  {
+    "id": 5,
+    "text": "check email",
+    "description": "",
+    "remind_time": "2025-10-05T04:54:33.484458",
+    "created_time": "2025-10-05T16:52:33.484458",
+    "active": true,
+    "notified": true
+  },
+  {
+    "id": 6,
+    "text": "check email",
+    "description": "",
+    "remind_time": "2025-10-05T17:24:44.571378",
+    "created_time": "2025-10-05T17:14:44.572336",
+    "active": true,
+    "notified": true
+  },
+  {
+    "id": 7,
+    "text": "take medicine",
+    "description": "",
+    "remind_time": "2025-10-05T17:31:36.097861",
+    "created_time": "2025-10-05T17:25:36.097861",
+    "active": true,
+    "notified": true
+  },
+  {
+    "id": 8,
+    "text": "TEST REMINDER - should work",
+    "description": "",
+    "remind_time": "2025-10-05T17:32:07.871492",
+    "created_time": "2025-10-05T17:31:07.871492",
+    "active": true,
+    "notified": true
+  },
+  {
+    "id": 9,
+    "text": "take medicine",
+    "description": "",
+    "remind_time": "2025-10-05T17:45:07.382635",
+    "created_time": "2025-10-05T17:40:07.382635",
+    "active": true,
+    "notified": true
   }
 ]
