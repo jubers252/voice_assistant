@@ -28,7 +28,7 @@ from connectors.search_engine import GeminiSearch
 from connectors.telegram_bot import TelegramBot
 from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
-
+from connectors.bigbasket_connector import BigBasketTools
 load_dotenv()
 
 
@@ -56,6 +56,7 @@ class LangChainAgentProcessor:
         self.spotify_connector = SpotifyConnector(None)
         self.search_connector = GeminiSearch()
         self.telegram_bot = TelegramBot()
+        self.big_basket_connector = BigBasketTools()
         
         # LangChain-specific setup
         self.agent_executor = None
@@ -634,6 +635,7 @@ class LangChainAgentProcessor:
             func=volume_control_function
         )
     
+
     def _create_follow_up_question_tool(self) -> Tool:
         """Tool for the AI to ask follow-up questions and continue listening"""
         def ask_follow_up_function(question: str) -> str:
@@ -687,6 +689,56 @@ class LangChainAgentProcessor:
             func=ask_follow_up_function
         )
     
+    def _create_bigbasket_tool(self) -> Tool:
+        """BigBasket shopping tool: add products, clear cart, checkout, place order"""
+        def bigbasket_function(input_str: str) -> str:
+            try:
+                # Parse input - handle formats: "action", "action|product", "action|product|quantity"
+                parts = input_str.split("|")
+                action = parts[0].lower().strip()
+                product = parts[1].strip() if len(parts) > 1 else ""
+                quantity = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
+                
+                if action == "login":
+                    result = self.big_basket_connector.login_to_bigbasket()
+                    return f"BigBasket login: {result}"
+                elif action == "search":
+                    if not product:
+                        return "Please specify a product to search."
+                    result = self.big_basket_connector.search_product_info(product)
+                    return f"BigBasket search results: {result}"
+                elif action == "clear_cart":
+                    result = self.big_basket_connector.clear_cart()
+                    return f"BigBasket clear cart: {result}"
+                elif action == "add_product":
+                    if not product:
+                        return "Please specify a product to add."
+                    result = self.big_basket_connector.add_product_to_cart(product, quantity)
+                    return f"BigBasket add product (quantity: {quantity}): {result}"
+                elif action == "add_multiple":
+                    if not product:
+                        return "Please specify products to add in format: product1:qty1,product2:qty2"
+                    result = self.big_basket_connector.add_multiple_products(product)
+                    return f"BigBasket add multiple products: {result}"
+                elif action == "checkout":
+                    result = self.big_basket_connector.proceed_to_checkout()
+                    return f"BigBasket checkout: {result}"
+                elif action == "place_order":
+                    result = self.big_basket_connector.place_order_cod()
+                    return f"BigBasket place order: {result}"
+                elif action == "close_browser":
+                    self.big_basket_connector.close_browser()
+                    return f"BigBasket browser session closed."
+                else:
+                    return "Supported actions: login, search, clear_cart, add_product, add_multiple, checkout, place_order, close_browser"
+            except Exception as e:
+                return f"BigBasket tool error: {str(e)}"
+        return Tool(
+            name="bigbasket_tool",
+            description="Interact with BigBasket for grocery shopping. Use format: 'action|product|quantity' for add_product (e.g., 'add_product|milk|2'), 'add_multiple|product1:qty1,product2:qty2' for multiple products (e.g., 'add_multiple|milk:2,bread:1,eggs:6'), 'action|product' for search (e.g., 'search|bread'), or just 'action' for others (e.g., 'login', 'checkout'). Quantity defaults to 1 if not specified.",
+            func=bigbasket_function
+        )
+
     def _setup_langchain_agent(self):
         """Setup the LangChain agent with tools and memory"""
         
@@ -712,7 +764,8 @@ class LangChainAgentProcessor:
             self._create_telegram_document_tool(),
             self._create_telegram_video_tool(),
             self._create_volume_control_tool(),
-            self._create_follow_up_question_tool()
+            self._create_follow_up_question_tool(),
+            self._create_bigbasket_tool()
         ]
         
         # Initialize LLM
@@ -731,50 +784,25 @@ class LangChainAgentProcessor:
         
         # Create system prompt
         system_prompt = """
-        You are a helpful female voice assistant named sofi, that can help users with various tasks.
+        You are Sofi, a helpful female voice assistant.
         
-        Available tools:
-        - if no location provided then use localtion : pisoli, pune, maharashtra, india
-        - get_current_weather: Get current weather conditions for a location
-        - get_weather_forecast: Get 3-day weather forecast for a location  
-        - get_timezone: Get timezone and local time for a location
-        - play_spotify_track: Play a specific song/track on Spotify
-        - play_spotify_album: Play a specific album on Spotify
-        - play_spotify_artist: Play music by a specific artist on Spotify
-        - control_spotify_playback: Control Spotify (pause, resume, next)
-        - search_web: Search the internet for information
-        - search_amazon_single_product: Get detailed info with direct links for one specific product
-        - search_amazon_multiple_products: Browse and compare multiple products with direct links
-        - track_amazon_orders: Check and track recent Amazon orders
-        - set_reminder: Set reminders for the user
-        - send_telegram_message: Send text messages via Telegram
-        - send_telegram_photo: Send photos via Telegram (format: 'path|caption', URLs supported)
-        - send_telegram_document: Send documents via Telegram (format: 'path|caption')
-        - send_telegram_video: Send videos via Telegram (format: 'path|caption')
-        - control_system_volume: Control system volume (up, down, mute, unmute, or set level)
-        - ask_follow_up_question: Use this when you need clarification or more information from the user
+        Available capabilities: weather, Spotify music, web search, Amazon shopping, reminders, Telegram messaging, volume control, BigBasket grocery shopping.
         
-        Language Instructions:
-        - If the user query is in Hindi, respond in Hindi using Devanagari script (हिंदी में जवाब दें)
-        - If the user query is in English, respond in English
-        - Maintain the same helpful and conversational tone in both languages
-        - For mixed language queries, respond in the primary language of the query
+        Default location: Pisoli, Pune, Maharashtra, India
+        Language: Match user's language (Hindi: Devanagari script, English: English)
+        
+        BigBasket Shopping:
+        - Workflow: login → search → show results → ask selection → clear_cart → add_product → checkout → place_order → close_browser
+        - For 'search'/'add_product': pass both action and product parameters
+        - Always get confirmation from user before calling 'place_order'
+        - Always show search results and clear the cart before adding to cart
         
         Instructions:
-        1. Listen carefully to what the user wants
-        2. Choose the appropriate tool(s) to help them
-        3. Use single product search when user wants details about one item
-        4. Use multiple product search when user wants to compare or browse options
-        5. Use order tracking when user asks about their Amazon orders or deliveries
-        6. For Telegram: use message tool for text, photo/document/video tools for media
-        7. Use multiple tools if needed for complex requests
-        8. Provide friendly, conversational responses
-        9. Ask for clarification if the request is unclear
-        10. **IMPORTANT: If user speaks in Hindi, always respond in Hindi Devanagari script**
-        11. **Follow-up Questions**: When you need clarification or more information, use the 'ask_follow_up_question' tool. This will speak your question and automatically listen for the user's response.
-        
-        Be helpful, concise, and natural in your responses in the appropriate language.
-        Use the ask_follow_up_question tool when you need more information from the user!
+        - Be conversational and helpful
+        - Use ask_follow_up_question for clarification
+        - Use multiple tools for complex requests
+        - Amazon: single product for details, multiple products for comparison
+        - Telegram: message/photo/document/video tools available
         """
         
         # Create prompt template
@@ -799,16 +827,14 @@ class LangChainAgentProcessor:
             memory=memory,
             verbose=True,  # Shows the agent's reasoning process
             handle_parsing_errors=True,
-            max_iterations=3
+            max_iterations=10
             # Removed early_stopping_method as it's deprecated in newer versions
         )
         
         print("LangChain agent initialized with tools:", [tool.name for tool in self.tools])
     
 
-    
-
-    
+        
     def process_user_command(self, user_command: str) -> bool:
         """
         Main method that replaces your original process_user_command
@@ -904,15 +930,15 @@ if __name__ == "__main__":
         telegram_document_tool = processor._create_telegram_document_tool()
         telegram_video_tool = processor._create_telegram_video_tool()
         
-        print("✓ All weather tool creation methods work")
-        print("✓ All Amazon tool creation methods work")
-        print("✓ Amazon order tracking tool created successfully")
-        print("✓ All Telegram tool creation methods work")
-        print("✓ LangChain processor is ready for use!")
-        print(f"✓ Total tools available: {len(processor.tools)}")
-        print("✓ process_user_command method ready for voice assistant integration")
+        print("All weather tool creation methods work")
+        print("All Amazon tool creation methods work")
+        print("Amazon order tracking tool created successfully")
+        print("All Telegram tool creation methods work")
+        print("LangChain processor is ready for use!")
+        print(f"Total tools available: {len(processor.tools)}")
+        print("process_user_command method ready for voice assistant integration")
         
     except Exception as e:
-        print(f"✗ Error during testing: {e}")
+        print(f" Error during testing: {e}")
         import traceback
         traceback.print_exc()

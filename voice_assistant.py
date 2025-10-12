@@ -133,11 +133,17 @@ class VoiceAssistantRefactored:
 
 
 if __name__ == "__main__":
-    try:
-        assistant = VoiceAssistantRefactored()
-        assistant.run()
-    except Exception as e:
-        import traceback
-        print("\n Voice assistant stopped due to an error:")
-        traceback.print_exc()
-        print(f"Error details: {type(e).__name__}: {e}")
+    import time
+    while True:
+        try:
+            assistant = VoiceAssistantRefactored()
+            assistant.run()
+        except KeyboardInterrupt:
+            print("Program stopped by user.")
+            break
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"Fatal error: {e}")
+            print("Restarting assistant in 3 seconds...")
+            time.sleep(3)
