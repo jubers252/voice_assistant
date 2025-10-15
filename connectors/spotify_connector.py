@@ -21,6 +21,8 @@ class SpotifyConnector:
     def _find_device(self):
         """Find and cache the first active device. Returns dict with id/name or False."""
         try:
+            # Clear cached device_id to force refresh
+            self.device_id = None
             devices = self.spotify.devices()
             print(devices)
             if len(devices['devices']) > 0:
@@ -205,32 +207,54 @@ class SpotifyConnector:
         self.spotify.next_track(device_id=device_id)
 
     def open_spotify_in_edge(self):
-        """Open Spotify Web Player in Microsoft Edge"""
+        """Open Spotify Web Player in new browser session with cleared cache"""
         try:
             spotify_url = "https://open.spotify.com"
             
-            # Command to open URL in Microsoft Edge
-            edge_command = [
-                "msedge",
-                spotify_url
-            ]
-            # Try to open with msedge command
-            try:
-                subprocess.run(edge_command, check=True)
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                # Fallback: use start command with edge
-                subprocess.run([
-                    "cmd", "/c", "start", "msedge", spotify_url
-                ], shell=True)
+            # Detect operating system
+            import platform
+            system = platform.system().lower()
+            
+            if system == "linux":
+                # Linux - try browsers with incognito/private mode to clear cache
+                browsers = [
+                    ["chromium-browser", "--incognito", "--new-window"],
+                    ["chromium", "--incognito", "--new-window"], 
+                    ["google-chrome", "--incognito", "--new-window"],
+                    ["firefox", "--private-window"],
+                    ["microsoft-edge", "--inprivate", "--new-window"]
+                ]
                 
+                                   
+                # Fallback to default browser
+                subprocess.Popen(["xdg-open", spotify_url])
+                print("Opened Spotify in default browser")
+                
+            elif system == "windows":
+                # Windows - try with incognito mode
+                try:
+                    subprocess.run(["msedge", "--inprivate", "--new-window", spotify_url], check=True)
+                    print("Opened Spotify in Edge (InPrivate mode)")
+                except (subprocess.CalledProcessError, FileNotFoundError):
+                    try:
+                        subprocess.run(["cmd", "/c", "start", "msedge", "--inprivate", spotify_url], shell=True)
+                        print("Opened Spotify in Edge (InPrivate mode via cmd)")
+                    except:
+                        subprocess.run(["cmd", "/c", "start", spotify_url], shell=True)
+                        print("Opened Spotify in default browser")
+            else:
+                # macOS or other
+                try:
+                    subprocess.run(["open", "-a", "Microsoft Edge", "--args", "--inprivate", spotify_url], check=True)
+                except:
+                    subprocess.run(["open", spotify_url], check=True)
+                    
         except Exception as e:
-            # Final fallback: use default browser
-            try:
-                subprocess.run([
-                    "cmd", "/c", "start", spotify_url
-                ], shell=True)
-            except:
-                pass
+            print(f"Error opening browser: {e}")
+            # Last resort - Python webbrowser
+            import webbrowser
+            webbrowser.open(spotify_url)
+            print("Opened Spotify using Python webbrowser")
 
     def handle_action(self, tool_info, device_id=None):
         """Handle structured tool_info input and perform the requested Spotify action with enhanced search."""
@@ -353,48 +377,27 @@ class SpotifyConnector:
             return result
         except Exception as e:
             return f"Error: {e}"
-    
-    def handle_spotify_action_with_feedback(self, tool_response, audio_processors, conversation_history):
-        """Handle Spotify actions with enhanced feedback and error handling"""
-        try:
-            print(f"tool_response: {tool_response}")
-            
-            # Execute the Spotify action using the main method
-            result = self.main(tool_response)
-            
-            if result:
-                audio_processors.speak(result)
-                
-                # Additional context for certain actions
-                action = tool_response.get("action", "")
-                if action == "play":
-                    print("Music started. Ready for next command.")
-                elif action == "stop":
-                    print("Music stopped. Ready for next command.")
-                elif action == "resume":
-                    print("Music resumed. Ready for next command.")
-                elif action == "next":
-                    print("Skipped to next track. Ready for next command.")
-            else:
-                audio_processors.speak("Spotify action completed, but I didn't receive details about what happened.")
-            conversation_history.append({"role": "assistant", "content": result})
-            return True
-        except Exception as e:
-            error_message = str(e)
-            print(f"Spotify error: {error_message}")
-            
-            # Provide more specific error messages
-            if "No active Spotify device" in error_message:
-                audio_processors.speak("I couldn't find an active Spotify device. Please open Spotify on your device and try again.")
-            elif "No track" in error_message or "No album" in error_message or "No artist" in error_message:
-                audio_processors.speak("I couldn't find that song on Spotify. Try using different keywords or check the spelling.")
-            elif "internet" in error_message.lower() or "connection" in error_message.lower():
-                audio_processors.speak("I'm having trouble connecting to Spotify. Please check your internet connection.")
-            else:
-                audio_processors.speak("Sorry, I couldn't control Spotify right now. There was an unexpected error.")
-            return False
         
 if __name__ == "__main__":
-    # Create a temporary connector just to open Spotify in Edge
+    # Test dummy payloads for different Spotify actions
+    
+    # Dummy payload examples for testing
+    dummy_payloads = {
+            "tool": "spotify",
+            "action": "stop", 
+            "target": "track",
+            "name": "Saiyaara"
+        
+    }
+    
+    print("=== Spotify Connector Test ===")
+    print("Available dummy payloads:")
+
+    try:
+        connector = SpotifyConnector(None)  # We'll initialize properly in main()
+        result = connector.main(dummy_payloads)
+        print(f"Result: {result}")
+    except Exception as e:
+        print(f"Test error: {e}")
     
     pass

@@ -309,3 +309,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 **Made with care by Juber**
 
 *For support, please open an issue on GitHub*
+
+librespot --name "VoiceBot-$(date +%s)" \
+  --device-type computer \
+  --backend pulseaudio \
+  --device bluez_output.62_0A_43_7C_8F_0C.1 \
+  --bitrate 320 \
+  --cache /tmp/librespot-cache \
+  --enable-volume-normalisation
