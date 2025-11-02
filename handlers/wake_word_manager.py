@@ -12,12 +12,13 @@ class WakeWordManager:
         self.audio_processors = audio_processors
         self.recognizer = recognizer
         self.sample_rate = sample_rate
-        
         # Wake word detection parameters
-        self.window_duration = 2.0  # seconds
-        self.step_duration = 0.3    # seconds
+        # Use a 1.5 second analysis window for wake-word detection (sliding window)
+        self.window_duration = 1.5  # seconds
+        # How often (seconds) to step/check the buffer for a new window
+        self.step_duration = 0.15    # seconds
         self.window_samples = int(self.window_duration * self.sample_rate)
-        
+
         # State variables
         self.detection_running = False
         self.debug_mode = True
@@ -42,7 +43,6 @@ class WakeWordManager:
             # play beep sound to indicate readiness
             print("Playing beep sound...")
             self.audio_processors.play_beep_sound()
-            self.audio_processors.pause_listening(0.2)  # Minimal pause
             
             print("Starting speech recognition...")
             user_command = self.recognizer.listen_for_command()

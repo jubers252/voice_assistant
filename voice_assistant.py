@@ -8,7 +8,7 @@ import time
 import threading
 import sounddevice as sd
 from dotenv import load_dotenv
-from collections import deque
+
 
 # Component imports
 from audio.audio_processor import AudioProcessors
@@ -84,6 +84,7 @@ class VoiceAssistantRefactored:
         self.command_processor = LangChainAgentProcessor(
             conversation_history=self.conversation_history,
             audio_processors=self.audio_processors,
+            conversation_manager=self.conversation_manager
         )
 
 

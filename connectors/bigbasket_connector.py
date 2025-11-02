@@ -10,7 +10,7 @@ import time
 from bigbasket_raw import BigBasketAutomation
 
 class BigBasketTools:
-    def __init__(self, headless=True):
+    def __init__(self, headless=False):
         """
         Initialize BigBasket tools for LangChain agent
         Args:
@@ -27,6 +27,104 @@ class BigBasketTools:
             self.automation = BigBasketAutomation(headless=self.headless)
             print("Browser session started")
         return self.automation is not None
+
+    def _find_best_match_index(self, product_name: str, alternatives: list, top_n: int = 5) -> int:
+        """Find best matching alternative index for a product name.
+
+        Args:
+            product_name: user-specified product name to match
+            alternatives: list of alternatives as returned by automation.get_alternative_products()
+                each item can be a dict with a 'name' key and optional 'index', or a plain string.
+            top_n: consider only first top_n alternatives (if available)
+
+        Returns:
+            The chosen product_index (int). If no good match found, returns 0 (first item).
+        """
+        try:
+            import re
+
+            def normalize(s: str) -> list:
+                s = s.lower()
+                # remove punctuation except digits/letters, keep spaces
+                s = re.sub(r"[^a-z0-9\s]", " ", s)
+                tokens = [t for t in s.split() if t]
+                return tokens
+
+            target_tokens = set(normalize(product_name or ""))
+            if not target_tokens:
+                return 0
+
+            best_score = -1.0
+            best_index = 0
+
+            # Limit alternatives to top_n
+            candidates = alternatives[:top_n] if alternatives else []
+
+            for alt in candidates:
+                # alt may be dict or string
+                if isinstance(alt, dict):
+                    alt_name = alt.get('name', '')
+                    alt_index = alt.get('index', None)
+                else:
+                    alt_name = str(alt)
+                    alt_index = None
+
+                alt_tokens = set(normalize(alt_name))
+                if not alt_tokens:
+                    continue
+
+                # Exact substring match gives high score
+                if ' '.join(target_tokens) in ' '.join(alt_tokens):
+                    score = 1.0
+                else:
+                    # Jaccard similarity on token sets
+                    inter = target_tokens.intersection(alt_tokens)
+                    union = target_tokens.union(alt_tokens)
+                    jaccard = len(inter) / len(union) if union else 0.0
+
+                    # Longest common run of tokens ratio (approx)
+                    # compute longest common subsequence of tokens by simple window
+                    lt = 0
+                    t_list = list(target_tokens)
+                    a_list = list(alt_tokens)
+                    for i in range(min(len(t_list), len(a_list))):
+                        if t_list[i] == a_list[i]:
+                            lt += 1
+
+                    lcs_ratio = lt / max(1, len(a_list))
+
+                    score = max(jaccard, lcs_ratio)
+
+                # Slight preference for items that include numeric size tokens from the target
+                try:
+                    # if target contains digits like '500 ml' encourage matches containing same token
+                    import re as _re
+                    nums = _re.findall(r'\d+', product_name)
+                    if nums and any(n in alt_name for n in nums):
+                        score += 0.1
+                except Exception:
+                    pass
+
+                # Normalize score
+                if score > best_score:
+                    best_score = score
+                    # If alternative provided index use it, otherwise use position
+                    if alt_index is not None:
+                        best_index = int(alt_index)
+                    else:
+                        # compute position in overall alternatives list
+                        try:
+                            best_index = alternatives.index(alt)
+                        except Exception:
+                            best_index = 0
+
+            # If best score is very low, default to 0
+            if best_score < 0.15:
+                return 0
+            return best_index
+        except Exception as e:
+            print(f"Match index helper error: {e}")
+            return 0
     
     # ============================================================================
     # LANGCHAIN TOOLS - Simple Individual Actions
@@ -159,23 +257,39 @@ class BigBasketTools:
             # Parse the products string
             try:
                 products_list = []
-                items = products_string.split(',')
-                
-                for item in items:
-                    if ':' in item:
-                        product_name, qty_str = item.split(':', 1)
-                        product_name = product_name.strip()
+                import re
+
+                # Pattern: capture any characters (non-greedy) before ':' followed by an integer qty.
+                # This allows product names to include commas (e.g. 'Amul Gold..., 1 L:2').
+                pattern = re.compile(r"\s*(.+?)\s*:\s*(\d+)\s*(?:,|$)")
+                matches = list(pattern.finditer(products_string))
+
+                if matches:
+                    for m in matches:
+                        product_name = m.group(1).strip().strip('"').strip("'")
                         try:
-                            quantity = int(qty_str.strip())
-                        except ValueError:
+                            quantity = int(m.group(2))
+                        except Exception:
                             quantity = 1
-                    else:
-                        product_name = item.strip()
-                        quantity = 1
-                    
-                    if product_name:
-                        products_list.append({'name': product_name, 'quantity': quantity})
-                
+                        if product_name:
+                            products_list.append({'name': product_name, 'quantity': quantity})
+                else:
+                    # Fallback: simple comma split (legacy behavior)
+                    items = [p.strip() for p in products_string.split(',') if p.strip()]
+                    for item in items:
+                        if ':' in item:
+                            product_name, qty_str = item.split(':', 1)
+                            product_name = product_name.strip()
+                            try:
+                                quantity = int(qty_str.strip())
+                            except ValueError:
+                                quantity = 1
+                        else:
+                            product_name = item.strip()
+                            quantity = 1
+                        if product_name:
+                            products_list.append({'name': product_name, 'quantity': quantity})
+
                 print(f"Parsed {len(products_list)} products: {products_list}")
                 
             except Exception as e:
@@ -208,8 +322,16 @@ class BigBasketTools:
                         failed_adds += 1
                         continue
                     
-                    # Use the new quantity approach on product listing page
-                    if self.automation.add_to_cart(product_index=0, quantity=quantity):
+                    # Determine the best product index from alternatives (prefer exact/closest match)
+                    alternatives = self.automation.get_alternative_products() or []
+                    chosen_index = 0
+                    try:
+                        chosen_index = self._find_best_match_index(product_name, alternatives, top_n=5)
+                    except Exception as e:
+                        print(f"Index selection error, defaulting to 0: {e}")
+                 
+                    # Use the new quantity approach on product listing page by passing chosen index
+                    if self.automation.add_to_cart(product_index=chosen_index, quantity=quantity):
                         result = {
                             'product': product_name,
                             'quantity': quantity,
@@ -467,11 +589,13 @@ def demo_langchain_tools():
         print("\n1. Agent Tool: Login (starts browser)")
         result1 = tools.login_to_bigbasket()
         print(f"Login Result: {result1}")
+        result2 = tools.search_product_info("Amul Gold Full Cream Milk 500 ml - Pouch")
+        print(f"Search Product Info Result: {result2}")
         result3 = tools.clear_cart()
         print(f"Clear Cart Result: {result3}")
         print("\n2. Agent Tool: Search Product Info (browser stays open)")
         'add_multiple|milk:2,bread:1,eggs:6'
-        result2 = tools.add_multiple_products("mccains:2,toast:3")
+        result2 = tools.add_multiple_products("Amul Gold Full Cream Milk 500 ml - Pouch:2")
         print(f"Clear Cart Result: {result2}")
         
         # print("\n3. Agent Tool: Add Product (browser stays open)")

@@ -38,7 +38,7 @@ class LangChainAgentProcessor:
     This intelligently decides which tools to use based on user input
     """
     
-    def __init__(self, conversation_history, audio_processors):
+    def __init__(self, conversation_history, audio_processors, conversation_manager=None):
         """
         Initialize LangChain Agent Processor
         
@@ -51,6 +51,8 @@ class LangChainAgentProcessor:
         self.conversation_history = conversation_history
         self.audio_processors = audio_processors
         self.reminder_manager = ReminderManager()
+        # Optional ConversationManager instance to persist history
+        self.conversation_manager = conversation_manager
 
         # Initialize connectors (same as original)
         self.spotify_connector = SpotifyConnector(None)
@@ -787,10 +789,10 @@ class LangChainAgentProcessor:
         You are Sofi, a helpful female voice assistant.
         
         Available capabilities: weather, Spotify music, web search, Amazon shopping, reminders, Telegram messaging, volume control, BigBasket grocery shopping.
-        
+        for sending messages/photos/documents/videos via Telegram for e.g message sending use send_telegram_message tool.
         Default location: Pisoli, Pune, Maharashtra, India
-        Language: Match user's language (Hindi: Devanagari script, English: English)
-        
+        Language: Detect the user's language. If the user speaks Hindi, respond in Hindi using Devanagari script; otherwise respond in English.
+        For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2–4 concise items).
         BigBasket Shopping:
         - Workflow: login → search → show results → ask selection → clear_cart → add_product → checkout → place_order → close_browser
         - For 'search'/'add_product': pass both action and product parameters
@@ -856,7 +858,14 @@ class LangChainAgentProcessor:
                 # Add to conversation history
                 self.conversation_history.append({"role": "user", "content": user_command})
                 self.conversation_history.append({"role": "assistant", "content": response})
-                
+
+                # Persist conversation history if a ConversationManager is provided
+                try:
+                    if getattr(self, 'conversation_manager', None):
+                        self.conversation_manager.save_conversation_history()
+                except Exception as save_err:
+                    print(f"Warning: failed to save conversation history: {save_err}")
+
                 # Speak the response
                 self.audio_processors.speak(response)
                 return response
