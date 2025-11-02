@@ -1,8 +1,14 @@
 
 import json
 import os
+import tempfile
 
-CONVERSATION_FILE = os.path.join("data", "conversation_history.json")
+# Use a project-root relative data directory when possible. This avoids
+# attempting to create a top-level relative 'data' dir if the current
+# working directory is not writable. The file_path is resolved in
+# ConversationManager.__init__ so tests can override it.
+DEFAULT_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "data")
+CONVERSATION_FILE = os.path.join(DEFAULT_DATA_DIR, "conversation_history.json")
 
 class ConversationManager:
     def __init__(self, file_path=CONVERSATION_FILE):
@@ -12,11 +18,20 @@ class ConversationManager:
     def load_conversation_history(self):
         """Load conversation history from file or create a new one"""
         try:
-            if not os.path.exists(self.file_path):
-                os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
+            dir_path = os.path.dirname(self.file_path) or "."
+            try:
+                if not os.path.exists(self.file_path):
+                    os.makedirs(dir_path, exist_ok=True)
 
-            with open(self.file_path, 'r') as f:
-                return json.load(f)
+                with open(self.file_path, 'r') as f:
+                    return json.load(f)
+            except PermissionError:
+                # If we cannot create or read the file due to permissions,
+                # return the default in-memory conversation history. This
+                # allows the assistant to continue running without persisting
+                # history.
+                print(f"Warning: cannot create or read conversation file at {self.file_path} due to PermissionError. Using in-memory history.")
+                return []
         except (FileNotFoundError, json.JSONDecodeError):
             # Start with system message to establish assistant personality
             return [
@@ -30,8 +45,16 @@ class ConversationManager:
             # Always keep the system message (first message)
             self.conversation_history = [self.conversation_history[0]] + self.conversation_history[-20:]
         
-        with open(CONVERSATION_FILE, 'w') as f:
-            json.dump(self.conversation_history, f)
+        try:
+            dir_path = os.path.dirname(CONVERSATION_FILE) or "."
+            if not os.path.exists(dir_path):
+                os.makedirs(dir_path, exist_ok=True)
+            with open(CONVERSATION_FILE, 'w') as f:
+                json.dump(self.conversation_history, f)
+        except PermissionError:
+            print(f"Warning: cannot save conversation history to {CONVERSATION_FILE} due to PermissionError. History will not be persisted.")
+        except Exception as e:
+            print(f"Warning: failed to save conversation history: {e}")
 
   
 

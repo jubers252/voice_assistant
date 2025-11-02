@@ -6,10 +6,22 @@ import speech_recognition as sr
 load_dotenv()
 
 class SpeechRecognizer:
-    def __init__(self, device_index=1):
+    def __init__(self, device_index=None):
+        """Initialize recognizer and pick a safe microphone device index.
+
+        On Linux the device index used on Windows (e.g. 1) may be invalid and
+        attempting to open it causes ALSA/PyAudio errors. We try to pick a
+        working device automatically and fall back to the system default.
+        """
         self.device_index = device_index
         self.recognizer = sr.Recognizer()
         self._setup_recognizer()
+        try:
+            self._choose_device_index()
+        except Exception:
+            # Non-fatal: leave device_index as-is (None will let speech_recognition
+            # use the system default device)
+            self.device_index = None
 
     def _setup_recognizer(self):
         self.recognizer.energy_threshold = 400
@@ -37,11 +49,42 @@ class SpeechRecognizer:
         retry_count = 0
         while retry_count <= max_retries:
             try:
-                with sr.Microphone(device_index=self.device_index) as source:
-                    self._print_attempt(retry_count, is_follow_up)
-                    print("i m listening...")
-                    listen_timeout = timeout if retry_count == 0 else timeout + 3
-                    audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=12)
+                # Try opening the microphone. If the configured device_index is
+                # invalid on this platform this may raise - catch and try to find
+                # an alternative device.
+                try:
+                    mic_kwargs = {}
+                    if self.device_index is not None:
+                        mic_kwargs['device_index'] = self.device_index
+                    with sr.Microphone(**mic_kwargs) as source:
+                        self._print_attempt(retry_count, is_follow_up)
+                        print("i m listening...")
+                        listen_timeout = timeout if retry_count == 0 else timeout + 3
+
+                        # Ensure recognizer exists
+                        if not self.recognizer:
+                            print("[ASSISTANT] Speech recognizer not initialized")
+                            retry_count += 1
+                            continue
+
+                        audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=12)
+
+                except Exception as mic_open_error:
+                    # Try to recover by choosing a different device index once
+                    print(f"[ASSISTANT] Microphone open failed: {mic_open_error}")
+                    if self._choose_device_index(force_search=True):
+                        print(f"[ASSISTANT] Retrying with device_index={self.device_index}")
+                        retry_count += 1
+                        continue
+                    else:
+                        retry_count += 1
+                        continue
+
+                # Basic validation of audio object
+                if audio is None or not hasattr(audio, 'frame_data') or not hasattr(audio, 'sample_rate'):
+                    print("[ASSISTANT] Invalid audio captured, retrying...")
+                    retry_count += 1
+                    continue
 
                 print(f"[ASSISTANT] Audio length: {len(audio.frame_data) / audio.sample_rate:.2f} seconds")
                 print("Recognizing...")
@@ -63,6 +106,7 @@ class SpeechRecognizer:
                 retry_count += 1
                 continue
             except Exception as e:
+                # Keep trying but avoid crashing on unexpected errors
                 print(f"[ASSISTANT] Recognition failed: {e}. Trying again... ({retry_count + 1}/{max_retries + 1})")
                 retry_count += 1
                 continue
@@ -81,3 +125,50 @@ class SpeechRecognizer:
         except (sr.RequestError, sr.UnknownValueError) as e:
             print(f"[ASSISTANT] Recognition error: {e}.")
             return None
+        except Exception as e:
+            print(f"[ASSISTANT] Unexpected recognition error: {e}")
+            return None
+
+    def list_available_microphones(self):
+        """Return a list of available microphone names."""
+        try:
+            names = sr.Microphone.list_microphone_names()
+            return names
+        except Exception:
+            return []
+
+    def _choose_device_index(self, force_search=False):
+        """Choose a working device index.
+
+        If self.device_index is already set and valid, keep it. Otherwise try
+        to find a suitable index. Returns True if a device was selected.
+        """
+        names = self.list_available_microphones()
+        if not names:
+            # No microphones found
+            self.device_index = None
+            return False
+
+        # If caller provided an index, verify it's in range
+        if self.device_index is not None and isinstance(self.device_index, int):
+            if 0 <= self.device_index < len(names):
+                return True
+
+        # Prefer default (None) so speech_recognition uses the system default
+        if not force_search:
+            self.device_index = None
+            return True
+
+        # Force search: try indices 0..len(names)-1 and test opening
+        for idx in range(len(names)):
+            try:
+                # Try opening briefly to validate
+                with sr.Microphone(device_index=idx) as _:
+                    self.device_index = idx
+                    return True
+            except Exception:
+                continue
+
+        # Last resort - use None
+        self.device_index = None
+        return False

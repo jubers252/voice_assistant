@@ -30,12 +30,15 @@ class AudioProcessors:
         """Initialize the voice assistant components"""
         print("Initializing Voice Assistant...")
 
-        # Initialize speech recognizer
+        # Initialize speech recognizer. Do NOT open a Microphone here with a
+        # hardcoded device index — that works on Windows but often fails on
+        # Linux where device indices differ and ALSA will complain. The
+        # SpeechRecognizer class will choose a working device.
         self.recognizer = sr.Recognizer()
-        self.microphone = sr.Microphone(device_index=1) 
+        self.microphone = None
         self.audio_channels = 1  # Channel configuration for microphone recording
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
-        self.mic_device_id = 1   # USB microphone device ID
+        self.mic_device_id = None   # Will use system default unless configured
         self.mic_gain_factor = 0.8  # Reduce gain for sensitive USB mic
 
         # Audio processing
@@ -268,21 +271,30 @@ class AudioProcessors:
     def check_microphones(self):
         """Check available microphones and their indices"""
         print("\nAvailable microphones:")
-        for i, microphone_name in enumerate(sr.Microphone.list_microphone_names()):
-            print(f"  {i}: {microphone_name}")
-        print(f"Currently using microphone index: {self.mic_device_id}")
+        try:
+            names = sr.Microphone.list_microphone_names()
+            for i, microphone_name in enumerate(names):
+                print(f"  {i}: {microphone_name}")
+            print(f"Currently using microphone index: {self.mic_device_id}")
+        except Exception as e:
+            print(f"Error listing microphones: {e}")
+            return
         
         # Test current microphone
         try:
             recognizer = sr.Recognizer()
-            with sr.Microphone(device_index=self.mic_device_id) as source:
-                print(f"Testing microphone {self.mic_device_id}...")
+            mic_kwargs = {}
+            if self.mic_device_id is not None:
+                mic_kwargs['device_index'] = self.mic_device_id
+            # Use a context manager to test the microphone briefly
+            with sr.Microphone(**mic_kwargs) as source:
+                print(f"Testing microphone {mic_kwargs.get('device_index', 'default')}...")
                 recognizer.adjust_for_ambient_noise(source, duration=1)
                 print(f"Energy threshold: {recognizer.energy_threshold}")
                 print("Microphone is working!")
         except Exception as e:
             print(f"Error with current microphone: {e}")
-            print("Consider changing the device_index in the code")
+            print("Consider calling check_microphones() and updating mic_device_id")
     
     def play_beep_sound(self, beep_file = None):
         """Play a simple beep sound to indicate assistant is listening"""

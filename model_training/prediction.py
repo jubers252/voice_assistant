@@ -34,4 +34,4 @@ while True :
 
     else:
         print(f"Wake Word NOT Detected")
-        print("Confidence:", prediction[:, 0])4
+        print("Confidence:", prediction[:, 0])
