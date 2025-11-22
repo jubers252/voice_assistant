@@ -1,6 +1,7 @@
 import json
 from spotipy import Spotify
 import os
+import sys
 import pandas as pd
 import subprocess
 import spotipy as sp
@@ -358,7 +359,7 @@ class SpotifyConnector:
             if not device_info:
                 print("No active device found, opening Spotify in Edge...")
                 connector.open_spotify_in_edge()
-                time.sleep(10)
+                time.sleep(12)
                 device_info = connector._find_device()
             if not device_info:
                 return "No active device found after opening Spotify."
@@ -368,49 +369,40 @@ class SpotifyConnector:
         except Exception as e:
             return f"Error: {e}"
     
-    def handle_spotify_action_with_feedback(self, tool_response, audio_processors, conversation_history):
+    def handle_spotify_action_with_feedback(self, tool_response, conversation_history):
         """Handle Spotify actions with enhanced feedback and error handling"""
         try:
             print(f"tool_response: {tool_response}")
             
             # Execute the Spotify action using the main method
             result = self.main(tool_response)
-            
-            if result:
-                audio_processors.speak(result)
-                
+            print(f"result: {result}")
+            if result:          
                 # Additional context for certain actions
                 action = tool_response.get("action", "")
                 if action == "play":
-                    print("Music started. Ready for next command.")
+                    return("Music started. Ready for next command.")
                 elif action == "stop":
-                    print("Music stopped. Ready for next command.")
+                    return("Music stopped. Ready for next command.")
                 elif action == "resume":
-                    print("Music resumed. Ready for next command.")
+                    return("Music resumed. Ready for next command.")
                 elif action == "next":
-                    print("Skipped to next track. Ready for next command.")
+                    return("Skipped to next track. Ready for next command.")
             else:
-                audio_processors.speak("Spotify action completed, but I didn't receive details about what happened.")
+                return("No result from Spotify action.")
             conversation_history.append({"role": "assistant", "content": result})
-            return True
         except Exception as e:
             error_message = str(e)
             print(f"Spotify error: {error_message}")
             
             # Provide more specific error messages
-            if "No active Spotify device" in error_message:
-                audio_processors.speak("I couldn't find an active Spotify device. Please open Spotify on your device and try again.")
-            elif "No track" in error_message or "No album" in error_message or "No artist" in error_message:
-                audio_processors.speak("I couldn't find that song on Spotify. Try using different keywords or check the spelling.")
-            elif "internet" in error_message.lower() or "connection" in error_message.lower():
-                audio_processors.speak("I'm having trouble connecting to Spotify. Please check your internet connection.")
-            else:
-                audio_processors.speak("Sorry, I couldn't control Spotify right now. There was an unexpected error.")
+         
             return False
         
 if __name__ == "__main__":
     pass
     # Create a temporary connector just to open Spotify in Edge
-    # tool_data = {"tool": "spotify", "action": "play", "target": "track", "name": "Shape of You"}
+    # tool_data = {"tool": "spotify", "action": "stop", "target": "track", "name": "Shape of You"}
     # spotify_connector = SpotifyConnector(None)
-    # spotify_connector.handle_spotify_action_with_feedback(tool_data, MockAudioProcessor(), conversation_history)
+    # conversation_history = {}
+    # print(spotify_connector.handle_spotify_action_with_feedback(tool_data, conversation_history))

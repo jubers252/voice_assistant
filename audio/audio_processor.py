@@ -99,6 +99,19 @@ class AudioProcessors:
             self.stop_speech()
             time.sleep(0.1)  # Brief pause to ensure cleanup
         
+        # Clear the wake word audio buffer to prevent TTS from triggering false detections
+        # This allows interruption (since new audio will refill buffer) but prevents 
+        # the assistant's own voice from causing false positives
+        if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
+            try:
+                with self._external_buffer_lock:
+                    self._external_buffer.clear()
+                    if self.debug_mode:
+                        print("Audio buffer cleared before TTS to prevent false wake word triggers")
+            except Exception as e:
+                if self.debug_mode:
+                    print(f"Warning: Could not clear audio buffer: {e}")
+        
         # Reset interruption flag
         self.speech_interrupted = False
         

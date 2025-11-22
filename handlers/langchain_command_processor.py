@@ -138,7 +138,7 @@ class LangChainAgentProcessor:
                         "name": track_name
                     }
                     return self.spotify_connector.handle_spotify_action_with_feedback(
-                        tool_response, self.audio_processors, self.conversation_history
+                        tool_response, self.conversation_history
                     )
                 
                 # Run Spotify in separate thread to avoid audio conflicts
@@ -167,7 +167,7 @@ class LangChainAgentProcessor:
                         "name": album_name
                     }
                     return self.spotify_connector.handle_spotify_action_with_feedback(
-                        tool_response, self.audio_processors, self.conversation_history
+                        tool_response, self.conversation_history
                     )
                 
                 # Run Spotify in separate thread to avoid audio conflicts
@@ -196,7 +196,7 @@ class LangChainAgentProcessor:
                         "name": artist_name
                     }
                     return self.spotify_connector.handle_spotify_action_with_feedback(
-                        tool_response, self.audio_processors, self.conversation_history
+                        tool_response, self.conversation_history
                     )
                 
                 # Run Spotify in separate thread to avoid audio conflicts
@@ -234,7 +234,7 @@ class LangChainAgentProcessor:
                         "action": spotify_action
                     }
                     return self.spotify_connector.handle_spotify_action_with_feedback(
-                        tool_response, self.audio_processors, self.conversation_history
+                        tool_response,  self.conversation_history
                     )
                 
                 # Run Spotify control in separate thread to avoid audio conflicts
@@ -801,7 +801,7 @@ class LangChainAgentProcessor:
         
         Instructions:
         - Be conversational and helpful
-        - Use ask_follow_up_question for clarification
+        - Use ask_follow_up_question for clarification and follow-ups
         - Use multiple tools for complex requests
         - Amazon: single product for details, multiple products for comparison
         - Telegram: message/photo/document/video tools available
