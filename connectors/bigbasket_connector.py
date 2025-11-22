@@ -589,7 +589,7 @@ def demo_langchain_tools():
         print("\n1. Agent Tool: Login (starts browser)")
         result1 = tools.login_to_bigbasket()
         print(f"Login Result: {result1}")
-        result2 = tools.search_product_info("Amul Gold Full Cream Milk 500 ml - Pouch")
+        result2 = tools.search_product_info("milk")
         print(f"Search Product Info Result: {result2}")
         result3 = tools.clear_cart()
         print(f"Clear Cart Result: {result3}")

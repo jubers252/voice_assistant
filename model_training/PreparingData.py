@@ -6,7 +6,7 @@ import os
 
 SAMPLE_RATE = 16000
 RECORD_SECONDS = 1
-SAVE_DIR = os.path.join(os.path.dirname(__file__), "background_sound")  # Always save in model_training/audio
+SAVE_DIR = os.path.join(os.path.dirname(__file__), "audio_data")  # Always save in model_training/audio
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
@@ -25,8 +25,8 @@ def record_audio_and_save(save_path, n_times=50):
     """
 
     input("To start recording Wake Word press Enter: ")
-    for i in range(203, n_times):
-        fs = 44100  # Original recording sample rate
+    for i in range(300, n_times):
+        fs = 22050  # Original recording sample rate
         seconds = 2
 
         myrecording = sd.rec(int(seconds * fs), samplerate=fs, channels=1)
@@ -52,8 +52,8 @@ def record_background_sound(save_path, n_times=900):
     """
 
     input("To start recording your background sounds press Enter: ")
-    for i in range(502, n_times):
-        fs = 44100  # Original recording sample rate
+    for i in range(900, n_times):
+        fs = 22050  # Original recording sample rate
         seconds = 2 
 
         myrecording = sd.rec(int(seconds * fs), samplerate=fs, channels=1)
@@ -63,11 +63,12 @@ def record_background_sound(save_path, n_times=900):
 
 # Step 1: Record yourself saying the Wake Word
 # print("Recording the Wake Word:\n")
-record_background_sound(SAVE_DIR, n_times=900) 
+# record_background_sound(SAVE_DIR, n_times=1000) 
 # Step 2: Record your background sounds (Just let it run, it will auto
 # matically record)
 # print("Recording the Background sounds:\n")
-# record_background_sound("background_sound/", n_times=200)
+record_audio_and_save(SAVE_DIR, n_times=350)
+
 
 
 # print('Wake word recording tool')
