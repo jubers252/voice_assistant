@@ -491,6 +491,33 @@ class BigBasketAutomation:
                 continue
         return 0
     
+    def _check_if_out_of_stock(self, container):
+        """Check if product is out of stock"""
+        try:
+            out_of_stock_indicators = [
+                ".//div[contains(text(),'Out of stock')]",
+                ".//div[contains(text(),'Currently unavailable')]",
+                ".//span[contains(text(),'Out of stock')]",
+                ".//span[contains(text(),'Currently unavailable')]",
+                ".//button[contains(text(),'Notify') and contains(text(),'available')]",
+                ".//button[contains(@class,'notify') or contains(@class,'Notify')]",
+                ".//div[contains(@class,'out-of-stock') or contains(@class,'outOfStock')]"
+            ]
+            
+            for selector in out_of_stock_indicators:
+                try:
+                    elements = container.find_elements(By.XPATH, selector)
+                    for element in elements:
+                        if element.is_displayed():
+                            print("⚠️ Product is out of stock")
+                            return True
+                except:
+                    continue
+            return False
+        except Exception as e:
+            print(f"Error checking stock status: {e}")
+            return False
+    
     def _click_button_multiple_methods(self, button, button_name="button"):
         """Try multiple click methods for reliability"""
         methods = [
@@ -509,7 +536,9 @@ class BigBasketAutomation:
         return False
 
     def add_to_cart(self, product_index=0, quantity=1):
-        """Add product from search results page with specified quantity"""
+        """Add product from search results page with specified quantity
+        Returns: dict with 'success' (bool), 'reason' (str), 'out_of_stock' (bool)
+        """
         print(f"🛒 Adding product (index: {product_index}, quantity: {quantity})")
         
         try:
@@ -533,11 +562,15 @@ class BigBasketAutomation:
             
             if not containers or product_index >= len(containers):
                 print("❌ Product container not found")
-                return False
+                return {'success': False, 'reason': 'product_not_found', 'out_of_stock': False}
             
             target_product = containers[product_index]
             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", target_product)
             time.sleep(1)
+            
+            # Check if product is out of stock FIRST
+            if self._check_if_out_of_stock(target_product):
+                return {'success': False, 'reason': 'out_of_stock', 'out_of_stock': True}
             
             # Get current quantity
             current_quantity = self._get_current_quantity(target_product)
@@ -564,15 +597,18 @@ class BigBasketAutomation:
             if current_quantity == 0:
                 add_button = self._find_element_with_selectors(target_product, add_button_selectors, "add")
                 if not add_button:
-                    print("❌ No Add button found")
-                    return False
+                    print("❌ No Add button found - possibly out of stock")
+                    # Double-check for out of stock
+                    if self._check_if_out_of_stock(target_product):
+                        return {'success': False, 'reason': 'out_of_stock', 'out_of_stock': True}
+                    return {'success': False, 'reason': 'add_button_not_found', 'out_of_stock': False}
                 
                 if self._click_button_multiple_methods(add_button, "Add button"):
                     current_quantity = 1
                     time.sleep(3)  # Wait for UI update
                 else:
                     print("❌ Failed to click Add button")
-                    return False
+                    return {'success': False, 'reason': 'add_button_click_failed', 'out_of_stock': False}
             
             # Adjust quantity
             if quantity > current_quantity:
@@ -582,7 +618,7 @@ class BigBasketAutomation:
                 
                 if not increment_button:
                     print("❌ No increment button found")
-                    return False
+                    return {'success': False, 'reason': 'increment_button_not_found', 'out_of_stock': False}
                 
                 time.sleep(1)
                 for i in range(increments_needed):
@@ -590,7 +626,7 @@ class BigBasketAutomation:
                         time.sleep(1.5)
                     else:
                         print(f"❌ Failed increment {i+1}")
-                        return False
+                        return {'success': False, 'reason': f'increment_failed_at_{i+1}', 'out_of_stock': False}
                         
             elif quantity < current_quantity:
                 # Decrement
@@ -599,21 +635,21 @@ class BigBasketAutomation:
                 
                 if not decrement_button:
                     print("❌ No decrement button found")
-                    return False
+                    return {'success': False, 'reason': 'decrement_button_not_found', 'out_of_stock': False}
                 
                 for i in range(decrements_needed):
                     if self._click_button_multiple_methods(decrement_button, f"Decrement {i+1}"):
                         time.sleep(0.8)
                     else:
                         print(f"❌ Failed decrement {i+1}")
-                        return False
+                        return {'success': False, 'reason': f'decrement_failed_at_{i+1}', 'out_of_stock': False}
             
             print(f"✅ Successfully set quantity to {quantity}")
-            return True
+            return {'success': True, 'reason': 'added_successfully', 'out_of_stock': False}
             
         except Exception as e:
             print(f"❌ Error: {e}")
-            return False
+            return {'success': False, 'reason': f'exception: {str(e)}', 'out_of_stock': False}
 
     def get_alternative_products(self):
         """Get first 5 products when target product is not available"""
@@ -870,6 +906,128 @@ class BigBasketAutomation:
         except Exception as e:
             print(f"Failed to navigate to basket URL: {e}")
             return False
+    
+    def get_cart_items(self):
+        """Get list of items currently in cart with details (name, price, quantity)"""
+        print("Getting cart items...")
+        cart_items = []
+        
+        try:
+            # Navigate to cart first
+            if not self.goto_cart():
+                print("Failed to access cart")
+                return []
+            
+            time.sleep(3)
+            
+            # Check if cart is empty
+            empty_indicators = [
+                "//div[contains(text(),'Your basket is empty')]",
+                "//div[contains(text(),'No items in cart')]"
+            ]
+            
+            for indicator in empty_indicators:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, indicator)
+                    if elements and any(el.is_displayed() for el in elements):
+                        print("Cart is empty")
+                        return []
+                except:
+                    continue
+            
+            # Find cart item containers
+            item_selectors = [
+                "//div[contains(@class,'BasketItemDetails')]",
+                "//div[contains(@class,'cart-item')]",
+                "//div[contains(@class,'basket-item')]",
+                "//li[contains(@class,'cart')]//div[contains(@class,'product')]"
+            ]
+            
+            items = []
+            for selector in item_selectors:
+                try:
+                    items = self.driver.find_elements(By.XPATH, selector)
+                    if items:
+                        print(f"Found {len(items)} items using selector: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not items:
+                print("No cart items found")
+                return []
+            
+            # Extract details from each item
+            for i, item in enumerate(items):
+                try:
+                    item_info = {
+                        'name': '',
+                        'price': '',
+                        'quantity': 1,
+                        'brand': ''
+                    }
+                    
+                    # Get product name
+                    name_selectors = [
+                        ".//div[contains(@class,'truncate')]",
+                        ".//h3",
+                        ".//span[contains(@class,'name')]",
+                        ".//div[contains(@class,'product-name')]"
+                    ]
+                    
+                    for sel in name_selectors:
+                        try:
+                            name_elem = item.find_element(By.XPATH, sel)
+                            if name_elem and name_elem.text.strip():
+                                item_info['name'] = name_elem.text.strip()
+                                break
+                        except:
+                            continue
+                    
+                    # Get price
+                    price_selectors = [
+                        ".//span[contains(text(),'₹')]",
+                        ".//div[contains(text(),'₹')]"
+                    ]
+                    
+                    for sel in price_selectors:
+                        try:
+                            price_elem = item.find_element(By.XPATH, sel)
+                            if price_elem and '₹' in price_elem.text:
+                                item_info['price'] = price_elem.text.strip()
+                                break
+                        except:
+                            continue
+                    
+                    # Get quantity
+                    qty_selectors = [
+                        ".//span[contains(@class,'label')]",
+                        ".//div[contains(@class,'quantity')]//span"
+                    ]
+                    
+                    for sel in qty_selectors:
+                        try:
+                            qty_elem = item.find_element(By.XPATH, sel)
+                            qty_text = qty_elem.text.strip()
+                            if qty_text.isdigit():
+                                item_info['quantity'] = int(qty_text)
+                                break
+                        except:
+                            continue
+                    
+                    if item_info['name']:
+                        cart_items.append(item_info)
+                        print(f"Cart item {i+1}: {item_info['name']} - {item_info['price']} (qty: {item_info['quantity']})")
+                    
+                except Exception as e:
+                    print(f"Error extracting item {i}: {e}")
+                    continue
+            
+            return cart_items
+            
+        except Exception as e:
+            print(f"Error getting cart items: {e}")
+            return []
     
     def clear_cart(self):
         """Clear all items from the cart by directly navigating to basket URL"""
@@ -1768,7 +1926,7 @@ if __name__ == "__main__":
     
     try:
         # Run automation for a specific product
-        product_to_search = "eggs"
+        product_to_search = "Amul Taaza Milk, 500 ml"
         result = automation.run_automation(product_to_search, quantity=6)
         
         if result:

@@ -197,7 +197,7 @@ class BigBasketTools:
         Args: 
             product_name (str): Product to search and add
             quantity (int): Quantity to add (default: 1)
-        Returns: {'status': 'success'/'alternatives'/'failed', 'product_added': bool, 'alternatives': list}
+        Returns: {'status': 'success'/'out_of_stock'/'alternatives'/'failed', 'product_added': bool, 'message': str, 'alternatives': list}
         """
         print(f"TOOL: ADD TO CART")
         print(f"Product: {product_name}, Quantity: {quantity}")
@@ -216,21 +216,60 @@ class BigBasketTools:
                 return {'status': 'failed', 'error': 'Product search failed'}
             
             # Use the new approach: increment quantity on product listing page
-            if self.automation.add_to_cart(quantity):
-                print(f"Product added to cart (quantity: {quantity})")
-                return {'status': 'success', 'product_added': True, 'quantity_added': quantity}
+            result = self.automation.add_to_cart(quantity=quantity)
             
-            # If we reach here, no products were added
-            print("Product not found, getting alternatives...")
-            alternatives = self.automation.get_alternative_products()
-            if alternatives:
-                return {
-                    'status': 'alternatives',
-                    'product_added': False,
-                    'alternatives': alternatives[:5]
-                }
-            else:
-                return {'status': 'failed', 'error': 'Product not found'}
+            # Check if result is dict (new format) or bool (backward compatibility)
+            if isinstance(result, dict):
+                if result['success']:
+                    print(f"Product added to cart (quantity: {quantity})")
+                    
+                    # Get cart items to return exact product details
+                    cart_items = self.automation.get_cart_items()
+                    response = {'status': 'success', 'product_added': True, 'quantity_added': quantity}
+                    
+                    # Add latest cart item details (last item added)
+                    if cart_items:
+                        latest_item = cart_items[-1]  # Last item is the one just added
+                        response['cart_items'] = cart_items
+                        response['added_item'] = latest_item
+                    
+                    return response
+                elif result['out_of_stock']:
+                    # Product is out of stock - get alternatives
+                    print(f"⚠️ Product is out of stock: {product_name}")
+                    alternatives = self.automation.get_alternative_products()
+                    return {
+                        'status': 'out_of_stock',
+                        'product_added': False,
+                        'message': f"'{product_name}' is currently out of stock. Would you like to try one of these alternatives?",
+                        'alternatives': alternatives[:5] if alternatives else [],
+                        'product_name': product_name
+                    }
+                else:
+                    # Other failure reason
+                    print(f"Failed to add product: {result['reason']}")
+                    alternatives = self.automation.get_alternative_products()
+                    if alternatives:
+                        return {
+                            'status': 'alternatives',
+                            'product_added': False,
+                            'message': f"Could not add '{product_name}'. Here are some alternatives:",
+                            'alternatives': alternatives[:5]
+                        }
+                    return {'status': 'failed', 'error': f"Could not add product: {result['reason']}"}
+          
+            else:  # Backward compatibility with bool False
+                # If we reach here, no products were added
+                print("Product not found, getting alternatives...")
+                alternatives = self.automation.get_alternative_products()
+                if alternatives:
+                    return {
+                        'status': 'alternatives',
+                        'product_added': False,
+                        'alternatives': alternatives[:5]
+                    }
+                else:
+                    return {'status': 'failed', 'error': 'Product not found'}
             
         except Exception as e:
             print(f"Add to cart error: {e}")
@@ -331,7 +370,47 @@ class BigBasketTools:
                         print(f"Index selection error, defaulting to 0: {e}")
                  
                     # Use the new quantity approach on product listing page by passing chosen index
-                    if self.automation.add_to_cart(product_index=chosen_index, quantity=quantity):
+                    add_result = self.automation.add_to_cart(product_index=chosen_index, quantity=quantity)
+                    
+                    # Handle dict response (new format) or bool (backward compatibility)
+                    if isinstance(add_result, dict):
+                        if add_result['success']:
+                            result = {
+                                'product': product_name,
+                                'quantity': quantity,
+                                'status': 'added',
+                                'message': f'Successfully added {quantity} units'
+                            }
+                            results.append(result)
+                            successful_adds += 1
+                            print(f"✓ Added {product_name} (qty: {quantity})")
+                        elif add_result['out_of_stock']:
+                            # Product is out of stock
+                            alternatives = self.automation.get_alternative_products()
+                            result = {
+                                'product': product_name,
+                                'quantity': quantity,
+                                'status': 'out_of_stock',
+                                'message': f"'{product_name}' is out of stock",
+                                'alternatives': alternatives[:3] if alternatives else []
+                            }
+                            results.append(result)
+                            failed_adds += 1
+                            print(f"⚠️ {product_name} is out of stock")
+                        else:
+                            # Other failure
+                            alternatives = self.automation.get_alternative_products()
+                            result = {
+                                'product': product_name,
+                                'quantity': quantity,
+                                'status': 'not_found',
+                                'message': f'Could not add: {add_result["reason"]}',
+                                'alternatives': alternatives[:3] if alternatives else []
+                            }
+                            results.append(result)
+                            failed_adds += 1
+                            print(f"✗ Could not add {product_name}: {add_result['reason']}")
+                    elif add_result:  # Backward compatibility - bool True
                         result = {
                             'product': product_name,
                             'quantity': quantity,
@@ -340,8 +419,8 @@ class BigBasketTools:
                         }
                         results.append(result)
                         successful_adds += 1
-                        print(f"Added {product_name} (qty: {quantity})")
-                    else:
+                        print(f"✓ Added {product_name} (qty: {quantity})")
+                    else:  # Backward compatibility - bool False
                         # Get alternatives if product not found
                         alternatives = self.automation.get_alternative_products()
                         result = {
@@ -595,7 +674,7 @@ def demo_langchain_tools():
         print(f"Clear Cart Result: {result3}")
         print("\n2. Agent Tool: Search Product Info (browser stays open)")
         'add_multiple|milk:2,bread:1,eggs:6'
-        result2 = tools.add_multiple_products("Amul Gold Full Cream Milk 500 ml - Pouch:2")
+        result2 = tools.add_multiple_products("Amul gold full cream milk:2")
         print(f"Clear Cart Result: {result2}")
         
         # print("\n3. Agent Tool: Add Product (browser stays open)")

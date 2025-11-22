@@ -659,17 +659,7 @@ class LangChainAgentProcessor:
                 
                 # Create recognizer with better microphone handling
                 recognizer = SpeechRecognizer()
-                
-                # Try to adjust microphone for better recognition
-                try:
-                    with sr.Microphone(device_index=recognizer.device_index) as source:
-                        print("Adjusting microphone for follow-up...")
-                        recognizer.recognizer.adjust_for_ambient_noise(source, duration=1)
-                except Exception as mic_error:
-                    print(f"Microphone adjustment failed: {mic_error}")
-                
-                # Single beep before listening
-                time.sleep(0.3)
+
                 self.audio_processors.play_beep_sound()
                 time.sleep(0.2)
                 
@@ -687,7 +677,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="ask_follow_up_question",
-            description="Use this tool when you need to ask the user a follow-up question or need clarification. The tool will speak your question and automatically listen for the user's response. Input should be your question.",
+            description="MANDATORY tool when you need to ask ANY question or need clarification from user. If your response would have a question mark '?', you MUST use this tool instead of responding with text. This tool speaks your question and waits for user's voice response. Input: your question text. NEVER ask questions in your text response - ALWAYS use this tool for questions.",
             func=ask_follow_up_function
         )
     
@@ -716,12 +706,79 @@ class LangChainAgentProcessor:
                     if not product:
                         return "Please specify a product to add."
                     result = self.big_basket_connector.add_product_to_cart(product, quantity)
-                    return f"BigBasket add product (quantity: {quantity}): {result}"
+                    
+                    # Handle different result statuses
+                    if result.get('status') == 'success':
+                        msg = f"Added {quantity} x {product} to cart"
+                        
+                        # Use actual cart item details if available
+                        if result.get('added_item'):
+                            item = result['added_item']
+                            msg = f"Added {item['quantity']} x {item['name']}"
+                            if item.get('price'):
+                                msg += f" at {item['price']}"
+                        
+                        return msg + "."
+                    elif result.get('status') == 'out_of_stock':
+                        msg = result.get('message', f"{product} is out of stock")
+                        alternatives = result.get('alternatives', [])
+                        if alternatives:
+                            alt_list = "\n".join([f"{i+1}. {alt.get('name', alt)}" for i, alt in enumerate(alternatives[:5])])
+                            return f"{msg}\n\nAvailable alternatives:\n{alt_list}\n\nWould you like to add any of these alternatives instead?"
+                        return f"{msg}. No alternatives found."
+                    elif result.get('status') == 'alternatives':
+                        msg = result.get('message', 'Product not found')
+                        alternatives = result.get('alternatives', [])
+                        if alternatives:
+                            alt_list = "\n".join([f"{i+1}. {alt.get('name', alt)}" for i, alt in enumerate(alternatives[:5])])
+                            return f"{msg}\n\nDid you mean:\n{alt_list}\n\nPlease confirm which product you want."
+                        return f"{msg}"
+                    else:
+                        error = result.get('error', 'Unknown error')
+                        return f"Failed to add {product}: {error}"
                 elif action == "add_multiple":
                     if not product:
                         return "Please specify products to add in format: product1:qty1,product2:qty2"
                     result = self.big_basket_connector.add_multiple_products(product)
-                    return f"BigBasket add multiple products: {result}"
+                    
+                    # Format response for multiple products
+                    if result.get('status') in ['success', 'partial', 'failed']:
+                        summary = result.get('summary', {})
+                        results_list = result.get('results', [])
+                        
+                        # Build summary message
+                        msg = f"Added {summary.get('successful', 0)} out of {summary.get('total_products', 0)} products.\n\n"
+                        
+                        # List successes
+                        successes = [r for r in results_list if r['status'] == 'added']
+                        if successes:
+                            msg += "✓ Successfully added:\n"
+                            for r in successes:
+                                msg += f"  - {r['product']} (qty: {r['quantity']})\n"
+                        
+                        # List out-of-stock items
+                        out_of_stock = [r for r in results_list if r['status'] == 'out_of_stock']
+                        if out_of_stock:
+                            msg += "\n⚠ Out of stock:\n"
+                            for r in out_of_stock:
+                                msg += f"  - {r['product']}\n"
+                                if r.get('alternatives'):
+                                    msg += f"    Alternatives available: {len(r['alternatives'])} options\n"
+                        
+                        # List failures
+                        failures = [r for r in results_list if r['status'] not in ['added', 'out_of_stock']]
+                        if failures:
+                            msg += "\n✗ Could not add:\n"
+                            for r in failures:
+                                msg += f"  - {r['product']}: {r.get('message', 'Not found')}\n"
+                        
+                        # Ask for confirmation if there are out-of-stock items
+                        if out_of_stock:
+                            msg += "\nWould you like to see alternatives for out-of-stock items?"
+                        
+                        return msg
+                    else:
+                        return f"BigBasket add multiple error: {result.get('error', 'Unknown error')}"
                 elif action == "checkout":
                     result = self.big_basket_connector.proceed_to_checkout()
                     return f"BigBasket checkout: {result}"
@@ -737,7 +794,7 @@ class LangChainAgentProcessor:
                 return f"BigBasket tool error: {str(e)}"
         return Tool(
             name="bigbasket_tool",
-            description="Interact with BigBasket for grocery shopping. Use format: 'action|product|quantity' for add_product (e.g., 'add_product|milk|2'), 'add_multiple|product1:qty1,product2:qty2' for multiple products (e.g., 'add_multiple|milk:2,bread:1,eggs:6'), 'action|product' for search (e.g., 'search|bread'), or just 'action' for others (e.g., 'login', 'checkout'). Quantity defaults to 1 if not specified.",
+            description="BigBasket grocery shopping. When user wants to ORDER/BUY groceries: 1) login 2) clear_cart 3) add_product/add_multiple 4) ask confirmation using ask_follow_up_question 5) checkout 6) place_order 7) close_browser. Format: 'action|product|quantity' for add_product, 'add_multiple|product1:qty1,product2:qty2' for multiple items, or just 'action' for login/checkout/place_order. ALWAYS ask user confirmation before checkout using ask_follow_up_question tool.",
             func=bigbasket_function
         )
 
@@ -785,32 +842,35 @@ class LangChainAgentProcessor:
         )
         
         # Create system prompt
-        system_prompt = """Sofi - voice assistant, Pisoli Pune.
+        system_prompt = """You are Sofi, a voice assistant in Pisoli, Pune.
 
-Available capabilities: weather, Spotify music, web search, Amazon shopping, reminders, Telegram messaging, volume control, BigBasket grocery shopping.
+**CRITICAL RULE - ASKING QUESTIONS:**
+YOU CANNOT ASK QUESTIONS IN YOUR RESPONSE TEXT!
+If your response would contain a question mark "?" → YOU MUST call the ask_follow_up_question tool instead.
+If you need ANY clarification → YOU MUST call ask_follow_up_question tool, NOT respond with text.
+If user has multiple choices → YOU MUST call ask_follow_up_question to ask which one.
 
-**LANGUAGE (CRITICAL):
-- Hindi input → respond ONLY in Devanagari script (हिंदी देवनागरी)
-- English input → respond in English
-- NEVER use Latin/Roman script for Hindi (NO "namaste", use "नमस्ते")
-- NEVER transliterate (NO "mausam", use "मौसम")
-- Example: "मौसम कैसा है" NOT "mausam kaisa hai"
+Examples of WRONG behavior (DO NOT DO THIS):
+ "Would you like to add this to cart?" → WRONG! Must call ask_follow_up_question("Would you like to add this to cart?")
+ "Which size do you want?" → WRONG! Must call ask_follow_up_question("Which size do you want?")
+ "Should I proceed?" → WRONG! Must call ask_follow_up_question("Should I proceed?")
 
-**FOLLOW-UP QUESTIONS (CRITICAL):**
-- If you need clarification → MUST use ask_follow_up_question tool
-- If response has "?" → MUST use ask_follow_up_question tool
-- NEVER just respond with text questions
-- Multiple options → use ask_follow_up_question to ask which one
-- Example: DON'T say "Would you like...?", DO call ask_follow_up_question("Would you like...?")
--  For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
+**LANGUAGE RULE:**
+- Hindi question → respond in Devanagari ONLY (मौसम not mausam)
+- English question → respond in English
+- NEVER mix scripts or transliterate Hindi
+
+**CAPABILITIES:** weather, Spotify, search, Amazon, reminders, Telegram, volume, BigBasket
+
+**BigBasket ORDERING (IMPORTANT):**
+ For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
         BigBasket Shopping:
         - Workflow: login → search → show results → ask selection → clear_cart → add_product → checkout → place_order → close_browser
         - For 'search'/'add_product': pass both action and product parameters
+         - Always show search results and clear the cart before adding to cart
         - Always get confirmation from user before calling 'place_order'
-        - Always show search results and clear the cart before adding to cart
- - Amazon: single product for details, multiple products for comparison
- - Telegram: message/photo/document/video tools available
-Brief TTS responses, no special symbols. BigBasket: login→search→clear_cart→add→checkout→place_order"""
+       
+Brief TTS-friendly, do not add any special character in responses."""
         
         # Create prompt template
         prompt = ChatPromptTemplate.from_messages([
@@ -834,7 +894,7 @@ Brief TTS responses, no special symbols. BigBasket: login→search→clear_cart�
             memory=memory,
             verbose=True,  # Shows the agent's reasoning process
             handle_parsing_errors=True,
-            max_iterations=10
+            max_iterations=25  # Increased for complex workflows like BigBasket ordering
             # Removed early_stopping_method as it's deprecated in newer versions
         )
         
