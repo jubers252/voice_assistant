@@ -75,7 +75,7 @@ print(f"Wake word samples: {len(data_path_dict[1])}")
 for class_label, list_of_files in data_path_dict.items():
     for single_file in list_of_files:
         try:
-            audio, sample_rate = librosa.load(single_file, duration=1.5, sr=22050)
+            audio, sample_rate = librosa.load(single_file, duration=2.0, sr=22050)
             # Skip very short audio files
             if len(audio) < 1000:
                 continue
@@ -104,8 +104,6 @@ for i in range(all_features.shape[0]):
     normalized_features.append(normalized_flat.reshape(desired_length, feature_dim))
 
 df["feature"] = normalized_features
-
-df = pd.DataFrame(all_data, columns=["feature", "class_label"])
 
 ###### SAVING FOR FUTURE USE ###
 print(f"Total samples: {len(df)}")

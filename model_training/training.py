@@ -4,6 +4,7 @@
 # Just run it and check the printed accuracy and classification report!
 
 ####### IMPORTS #############
+import os
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
@@ -21,7 +22,7 @@ import glob
 ##### 1. Load Preprocessed Data (MFCC features) #####
 # This file is created by your PreprocessingData.py script
 # Each sample is a matrix: (time_steps, 120 features - MFCC + deltas)
-df = pd.read_pickle(r"model_training\final_audio_data_csv\audio_data_cnn_improved.pkl")
+df = pd.read_pickle(os.path.join("model_training", "final_audio_data_csv", "audio_data_cnn_improved.pkl"))
 
 ##### 2. Prepare Data for Training #####
 X = np.stack(df["feature"].values)  # shape: (samples, time_steps, 120)
@@ -82,7 +83,7 @@ from keras.callbacks import ReduceLROnPlateau, ModelCheckpoint
 
 early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1)
 reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, verbose=1, min_lr=1e-5)
-checkpoint = ModelCheckpoint(r"model_training\saved_model\best_model.h5", 
+checkpoint = ModelCheckpoint(os.path.join("model_training", "saved_model", "best_model.keras"), 
                            monitor='val_loss', save_best_only=True, verbose=1)
 
 ##### 5. Train the Model with Better Validation #####
@@ -97,10 +98,10 @@ history = model.fit(
 )
 
 # Load the best model
-model.load_weights(r"model_training\saved_model\best_model.h5")
+model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(r"model_training\saved_model\WWD_improved.h5")
+model.save(os.path.join("model_training", "saved_model", "WWD_improved_v3.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")
@@ -201,8 +202,8 @@ def fine_tune_yamnet(wakeword_data, background_data):
 
 
 # Dynamically load all wake word and background audio files
-wakeword_data = glob.glob('model_training/wake_word/*.wav')  # Replace with your wake word directory
-background_data = glob.glob('model_training/background_sound/*.wav')  # Replace with your background directory
+wakeword_data = glob.glob('model_training/audio_data/*.wav')  # Wake word directory
+background_data = glob.glob('model_training/background_sound/*.wav')  # Background directory
 
 # Fine-tune YAMNet
 fine_tuned_model = fine_tune_yamnet(wakeword_data, background_data)

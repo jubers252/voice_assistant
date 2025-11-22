@@ -213,3 +213,4 @@ logs/
 setup.txt
 data/
 output/
+model_training/

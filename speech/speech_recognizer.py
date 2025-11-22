@@ -13,7 +13,7 @@ class SpeechRecognizer:
         attempting to open it causes ALSA/PyAudio errors. We try to pick a
         working device automatically and fall back to the system default.
         """
-        self.device_index = 2
+        self.device_index = None
         self.recognizer = sr.Recognizer()
         self._setup_recognizer()
         try:

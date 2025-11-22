@@ -656,10 +656,7 @@ class LangChainAgentProcessor:
                 # Now listen for follow-up response
                 print(f"AI asked: {question}")
                 print("Now listening for follow-up response...")
-                time.sleep(0.5)  # Longer pause before beep
-                self.audio_processors.play_beep_sound()
-                time.sleep(0.2)  # Longer pause after beep for audio system to settle
-
+                
                 # Create recognizer with better microphone handling
                 recognizer = SpeechRecognizer()
                 
@@ -670,9 +667,12 @@ class LangChainAgentProcessor:
                         recognizer.recognizer.adjust_for_ambient_noise(source, duration=1)
                 except Exception as mic_error:
                     print(f"Microphone adjustment failed: {mic_error}")
-                   
+                
+                # Single beep before listening
+                time.sleep(0.3)
                 self.audio_processors.play_beep_sound()
-                time.sleep(0.2)  # Longer pause after beep for audio system to settle
+                time.sleep(0.2)
+                
                 # Listen with longer timeout for follow-up
                 follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=3)
                 
@@ -799,9 +799,15 @@ class LangChainAgentProcessor:
         - Always get confirmation from user before calling 'place_order'
         - Always show search results and clear the cart before adding to cart
         
+        **CRITICAL - Follow-up Questions:**
+        - **When you need clarification or more information, ALWAYS use the ask_follow_up_question tool**
+        - **When multiple options exist (like product search results), ALWAYS ask which one the user wants**
+        - **When user request is vague or incomplete, ALWAYS ask for specifics using ask_follow_up_question**
+        - Examples requiring follow-up: "which product?", "how many?", "when?", "which one did you mean?"
+        
         Instructions:
         - Be conversational and helpful
-        - Use ask_follow_up_question for clarification and follow-ups
+        - ALWAYS use ask_follow_up_question when you need clarification
         - Use multiple tools for complex requests
         - Amazon: single product for details, multiple products for comparison
         - Telegram: message/photo/document/video tools available

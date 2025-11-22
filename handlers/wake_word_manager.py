@@ -13,8 +13,8 @@ class WakeWordManager:
         self.recognizer = recognizer
         self.sample_rate = sample_rate
         # Wake word detection parameters
-        # Use a 1.5 second analysis window for wake-word detection (sliding window)
-        self.window_duration = 1.5  # seconds
+        # Use a 2.0 second analysis window for wake-word detection (sliding window)
+        self.window_duration = 2.0  # seconds (matches training duration)
         # How often (seconds) to step/check the buffer for a new window
         self.step_duration = 0.15    # seconds
         self.window_samples = int(self.window_duration * self.sample_rate)
@@ -40,10 +40,12 @@ class WakeWordManager:
         print("Wake word detected! Listening for command...")
         
         try:
-            # play beep sound to indicate readiness
-            print("Playing beep sound...")
-            self.audio_processors.play_beep_sound()
+            # Play beep sound asynchronously (non-blocking) to indicate readiness
+            import threading
+            beep_thread = threading.Thread(target=self._play_beep_async, daemon=True)
+            beep_thread.start()
             
+            # Start speech recognition immediately without waiting for beep
             print("Starting speech recognition...")
             user_command = self.recognizer.listen_for_command()
             print(f"Speech recognition result: {user_command}")
@@ -64,6 +66,13 @@ class WakeWordManager:
             import traceback
             traceback.print_exc()
             return False  # Continue on error
+    
+    def _play_beep_async(self):
+        """Play beep sound in background without blocking"""
+        try:
+            self.audio_processors.play_beep_sound()
+        except Exception as e:
+            print(f"Beep sound error: {e}")
     
     def main_detection_loop(self, process_command_callback):
         """Main wake word detection loop"""
@@ -97,7 +106,7 @@ class WakeWordManager:
                         self.audio_processors.stop_speech()
                     except Exception:
                         pass
-                    time.sleep(0.3)  # Brief pause after interruption
+                    time.sleep(0.1)  # Reduced pause after interruption (was 0.3s)
 
                 should_exit = self.handle_wake_word_detection(process_command_callback)
                 if should_exit:
