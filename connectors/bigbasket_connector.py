@@ -10,7 +10,7 @@ import time
 from bigbasket_raw import BigBasketAutomation
 
 class BigBasketTools:
-    def __init__(self, headless=False):
+    def __init__(self, headless=True):
         """
         Initialize BigBasket tools for LangChain agent
         Args:

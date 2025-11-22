@@ -1,5 +1,5 @@
 """
-LangChain-based Command Processor (Dummy Version)
+LangChain-based Command Processor
 This replaces your current CommandProcessor with an intelligent agent
 """
 
@@ -651,7 +651,7 @@ class LangChainAgentProcessor:
                     time.sleep(0.1)
                 
                 print("Speech completed, ready for follow-up...")
-                time.sleep(1.0)  # Longer buffer to ensure TTS cleanup
+                time.sleep(0.5)  # Longer buffer to ensure TTS cleanup
                 
                 # Now listen for follow-up response
                 print(f"AI asked: {question}")

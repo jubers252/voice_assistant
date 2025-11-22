@@ -37,6 +37,9 @@ class WakeWordManager:
     
     def handle_wake_word_detection(self, process_command_callback):
         """Handle actions when wake word is detected"""
+        import time as timing_module
+        
+        t0 = timing_module.time()
         print("Wake word detected! Listening for command...")
         
         try:
@@ -45,9 +48,17 @@ class WakeWordManager:
             beep_thread = threading.Thread(target=self._play_beep_async, daemon=True)
             beep_thread.start()
             
+            t1 = timing_module.time()
+            print(f"⏱️ Time to start beep thread: {(t1-t0)*1000:.0f}ms")
+            
             # Start speech recognition immediately without waiting for beep
             print("Starting speech recognition...")
+            t2 = timing_module.time()
             user_command = self.recognizer.listen_for_command()
+            t3 = timing_module.time()
+            
+            print(f"⏱️ Time to initialize mic and start listening: {(t3-t2)*1000:.0f}ms")
+            print(f"⏱️ Total time from wake word to listening: {(t3-t0)*1000:.0f}ms")
             print(f"Speech recognition result: {user_command}")
             
             if user_command:
@@ -65,6 +76,7 @@ class WakeWordManager:
             print(f"Error in handle_wake_word_detection: {e}")
             import traceback
             traceback.print_exc()
+            return False  # Continue on error
             return False  # Continue on error
     
     def _play_beep_async(self):

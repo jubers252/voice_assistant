@@ -40,6 +40,8 @@ class SpeechRecognizer:
         """
         Listen for user command with follow-up functionality and retry logic.
         """
+        import time as timing_module
+        
         if is_follow_up:
             print("[ASSISTANT] Listening for follow-up response...")
             timeout = min(timeout, 20)
@@ -53,10 +55,14 @@ class SpeechRecognizer:
                 # invalid on this platform this may raise - catch and try to find
                 # an alternative device.
                 try:
+                    t_mic_start = timing_module.time()
                     mic_kwargs = {}
                     if self.device_index is not None:
                         mic_kwargs['device_index'] = self.device_index
                     with sr.Microphone(**mic_kwargs) as source:
+                        t_mic_open = timing_module.time()
+                        print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
+                        
                         self._print_attempt(retry_count, is_follow_up)
                         print("i m listening...")
                         listen_timeout = timeout if retry_count == 0 else timeout + 3
@@ -67,7 +73,10 @@ class SpeechRecognizer:
                             retry_count += 1
                             continue
 
+                        t_listen_start = timing_module.time()
                         audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=12)
+                        t_listen_end = timing_module.time()
+                        print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
 
                 except Exception as mic_open_error:
                     # Try to recover by choosing a different device index once
