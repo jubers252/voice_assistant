@@ -2,6 +2,7 @@
 import os
 import platform
 import time
+import sys
 from dotenv import load_dotenv
 import sounddevice as sd
 import speech_recognition as sr
@@ -12,9 +13,26 @@ import pygame
 import soundfile as sf
 import threading
 from collections import deque
+from contextlib import contextmanager
 
 # Load environment variables
 load_dotenv()
+
+# Suppress ALSA/JACK errors that are just warnings
+@contextmanager
+def suppress_alsa_errors():
+    """Context manager to suppress ALSA/JACK error output"""
+    try:
+        # Redirect stderr to devnull to suppress ALSA errors
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        yield
+    finally:
+        # Restore stderr
+        os.dup2(old_stderr, 2)
+        os.close(old_stderr)
 
 
 CONVERSATION_FILE = "conversation_history.json"
@@ -64,11 +82,30 @@ class AudioProcessors:
     
 
     # Function to record audio (from test_cnn_model.py)
-    def record_audio(self, duration, sample_rate, save_path=None):
+    def record_audio(self, duration, sample_rate, save_path=None, device=None):
+        """Record audio with INMP441 support and ALSA error suppression"""
         try:
             print("Recording...")
-            audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
-            sd.wait()
+            # Use suppress_alsa_errors to hide JACK/ALSA warnings
+            with suppress_alsa_errors():
+                # If device is specified, use it
+                if device is not None:
+                    audio = sd.rec(
+                        int(duration * sample_rate), 
+                        samplerate=sample_rate, 
+                        channels=1, 
+                        dtype='float32',
+                        device=device
+                    )
+                else:
+                    audio = sd.rec(
+                        int(duration * sample_rate), 
+                        samplerate=sample_rate, 
+                        channels=1, 
+                        dtype='float32'
+                    )
+                sd.wait()
+            
             print("Recording complete.")
             audio_flat = audio.flatten()
             if save_path:

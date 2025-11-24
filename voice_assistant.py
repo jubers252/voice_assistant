@@ -102,12 +102,29 @@ class VoiceAssistantRefactored:
         try:
             self.audio_processors.play_beep_sound(beep_file="beep/startup_sound.wav")
             
-            stream = sd.InputStream(
-                samplerate=self.wake_word_manager.sample_rate,
-                channels=1,
-                dtype='float32',
-                callback=self.audio_processors.audio_callback
-            )
+            # Suppress ALSA errors when opening audio stream
+            import sys
+            from contextlib import contextmanager
+            
+            @contextmanager
+            def suppress_alsa_errors():
+                try:
+                    devnull = os.open(os.devnull, os.O_WRONLY)
+                    old_stderr = os.dup(2)
+                    os.dup2(devnull, 2)
+                    os.close(devnull)
+                    yield
+                finally:
+                    os.dup2(old_stderr, 2)
+                    os.close(old_stderr)
+            
+            with suppress_alsa_errors():
+                stream = sd.InputStream(
+                    samplerate=self.wake_word_manager.sample_rate,
+                    channels=1,
+                    dtype='float32',
+                    callback=self.audio_processors.audio_callback
+                )
             
             with stream:
                 # Start wake word detection in separate thread

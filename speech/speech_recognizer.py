@@ -1,9 +1,25 @@
 
 from dotenv import load_dotenv
 import speech_recognition as sr
+import os
+from contextlib import contextmanager
 
 # Load environment variables
 load_dotenv()
+
+# Suppress ALSA/JACK errors
+@contextmanager
+def suppress_alsa_errors():
+    """Context manager to suppress ALSA/JACK error output"""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        old_stderr = os.dup(2)
+        os.dup2(devnull, 2)
+        os.close(devnull)
+        yield
+    finally:
+        os.dup2(old_stderr, 2)
+        os.close(old_stderr)
 
 class SpeechRecognizer:
     def __init__(self, device_index=None):
@@ -24,11 +40,14 @@ class SpeechRecognizer:
             self.device_index = None
 
     def _setup_recognizer(self):
-        self.recognizer.energy_threshold = 400
+        # INMP441 is very sensitive - use lower thresholds
+        self.recognizer.energy_threshold = 150  # Much lower for sensitive INMP441 (was 400)
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 1.0
-        self.recognizer.phrase_threshold = 0.5
-        self.recognizer.non_speaking_duration = 1.0
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_ratio = 1.5
+        self.recognizer.pause_threshold = 0.8  # Shorter pause
+        self.recognizer.phrase_threshold = 0.3  # Lower threshold
+        self.recognizer.non_speaking_duration = 0.8  # Shorter duration
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -51,17 +70,26 @@ class SpeechRecognizer:
         retry_count = 0
         while retry_count <= max_retries:
             try:
-                # Try opening the microphone. If the configured device_index is
-                # invalid on this platform this may raise - catch and try to find
-                # an alternative device.
+                # Try opening the microphone with ALSA error suppression
                 try:
                     t_mic_start = timing_module.time()
                     mic_kwargs = {}
                     if self.device_index is not None:
                         mic_kwargs['device_index'] = self.device_index
-                    with sr.Microphone(**mic_kwargs) as source:
+                    
+                    # Suppress ALSA errors when opening microphone
+                    with suppress_alsa_errors():
+                        microphone = sr.Microphone(**mic_kwargs)
+                    
+                    with microphone as source:
                         t_mic_open = timing_module.time()
                         print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
+                        
+                        # Adjust for ambient noise on first attempt to calibrate INMP441
+                        if retry_count == 0:
+                            print("Calibrating for ambient noise...")
+                            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                            print(f"Energy threshold adjusted to: {self.recognizer.energy_threshold}")
                         
                         self._print_attempt(retry_count, is_follow_up)
                         print("i m listening...")
@@ -171,10 +199,11 @@ class SpeechRecognizer:
         # Force search: try indices 0..len(names)-1 and test opening
         for idx in range(len(names)):
             try:
-                # Try opening briefly to validate
-                with sr.Microphone(device_index=idx) as _:
-                    self.device_index = idx
-                    return True
+                # Try opening briefly to validate - suppress ALSA errors
+                with suppress_alsa_errors():
+                    with sr.Microphone(device_index=idx) as _:
+                        self.device_index = idx
+                        return True
             except Exception:
                 continue
 
