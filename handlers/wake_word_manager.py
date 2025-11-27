@@ -47,18 +47,13 @@ class WakeWordManager:
             import threading
             beep_thread = threading.Thread(target=self._play_beep_async, daemon=True)
             beep_thread.start()
-            
-            t1 = timing_module.time()
-            print(f"⏱️ Time to start beep thread: {(t1-t0)*1000:.0f}ms")
+
             
             # Start speech recognition immediately without waiting for beep
             print("Starting speech recognition...")
-            t2 = timing_module.time()
+
             user_command = self.recognizer.listen_for_command()
-            t3 = timing_module.time()
-            
-            print(f"⏱️ Time to initialize mic and start listening: {(t3-t2)*1000:.0f}ms")
-            print(f"⏱️ Total time from wake word to listening: {(t3-t0)*1000:.0f}ms")
+
             print(f"Speech recognition result: {user_command}")
             
             if user_command:

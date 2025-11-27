@@ -25,7 +25,7 @@ def record_audio_and_save(save_path, n_times=50):
     """
 
     input("To start recording Wake Word press Enter: ")
-    for i in range(300, n_times):
+    for i in range(350, n_times):
         fs = 22050  # Original recording sample rate
         seconds = 2
 
@@ -35,7 +35,7 @@ def record_audio_and_save(save_path, n_times=50):
         write(os.path.join(save_path, filename), fs, myrecording)
         input(f"Press to record next or two stop press ctrl + C ({i + 1}/{n_times}): ")
 
-def record_background_sound(save_path, n_times=900):
+def record_background_sound(save_path, n_times=1000):
     """
     This function will run automatically `n_times` and record your background sounds so you can make some
     keybaord typing sound and saying something gibberish.
@@ -63,11 +63,11 @@ def record_background_sound(save_path, n_times=900):
 
 # Step 1: Record yourself saying the Wake Word
 # print("Recording the Wake Word:\n")
-# record_background_sound(SAVE_DIR, n_times=1000) 
+# record_background_sound(SAVE_DIR, n_times=1100) 
 # Step 2: Record your background sounds (Just let it run, it will auto
 # matically record)
 # print("Recording the Background sounds:\n")
-record_audio_and_save(SAVE_DIR, n_times=350)
+record_audio_and_save(SAVE_DIR, n_times=400)
 
 
 

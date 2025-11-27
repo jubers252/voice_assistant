@@ -36,7 +36,7 @@ class VoiceAssistantRefactored:
         
         # Core components
         self.audio_processors = AudioProcessors()
-        self.recognizer = SpeechRecognizer()
+        self.recognizer = SpeechRecognizer(self.audio_processors)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 
@@ -45,7 +45,7 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
         # Wake word detector
-        ww_model_path = f"{model_dir}/WWD_improved_v4.h5"
+        ww_model_path = f"{model_dir}/WWD_improved_best.h5"
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         

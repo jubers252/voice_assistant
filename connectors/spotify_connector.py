@@ -21,12 +21,21 @@ class SpotifyConnector:
         self.device_id = None
         
 
-    def _find_device(self):
-        """Find and cache the first active device. Returns dict with id/name or False."""
+    def _find_device(self, preferred_device_name=None):
+        """Find and cache device by name from setup.txt or first active device. Returns dict with id/name or False."""
         try:
             devices = self.spotify.devices()
             print(devices)
             if len(devices['devices']) > 0:
+                # Try to find preferred device from setup.txt
+                if preferred_device_name:
+                    for device in devices['devices']:
+                        if device['name'] == preferred_device_name:
+                            self.device_id = device['id']
+                            return {"device_id": device['id'], "device_name": device['name']}
+                    print(f"Preferred device '{preferred_device_name}' not found, using first active device")
+                
+                # Fallback to first active device
                 self.device_id = devices['devices'][0]['id']
                 return {"device_id": devices['devices'][0]['id'], "device_name": devices['devices'][0]['name']}
             self.device_id = None
@@ -108,13 +117,7 @@ class SpotifyConnector:
             if device_id is None:
                 raise Exception("No active Spotify device found.")
             
-            # Try to activate device first
-            try:
-                self.spotify.transfer_playback(device_id=device_id, force_play=False)
-            except Exception:
-                pass
-            
-            # Search for tracks
+            # Search for tracks (removed redundant transfer_playback call)
             tracks = self.search_tracks_by_keyword(keyword, limit=10)
             
             if not tracks:
@@ -128,7 +131,10 @@ class SpotifyConnector:
             best_track = tracks[0]
             
             try:
+                # Small delays to avoid rate limiting
+                time.sleep(0.3)
                 self.set_volume(100, device_id=device_id)
+                time.sleep(0.2)
                 self.spotify.start_playback(device_id=device_id, uris=[best_track['uri']])
                 
                 return {
@@ -139,6 +145,13 @@ class SpotifyConnector:
                 }
                 
             except Exception as play_error:
+                # Check if it's a rate limit error
+                if '429' in str(play_error) or 'rate' in str(play_error).lower():
+                    return {
+                        'success': False,
+                        'message': f"Spotify rate limit reached. Please wait a moment.",
+                        'track_info': best_track
+                    }
                 return {
                     'success': False,
                     'message': f"Found the song but couldn't play it: {play_error}",
@@ -258,14 +271,6 @@ class SpotifyConnector:
                 target = tool_info.get("target")
                 name = tool_info.get("name")
                 
-                # If we have a device but it might be inactive, try to transfer playback first
-                if device_id:
-                    try:
-                        self.spotify.transfer_playback(device_id=device_id, force_play=False)
-                        print("Activated web player")
-                    except Exception as e:
-                        print(f"Note: Could not activate web player: {e}")
-                
                 # Use smart search for tracks (most common use case)
                 if target == "track" or target is None:
                     result = self.smart_play_by_keyword(name, device_id=device_id)
@@ -346,21 +351,28 @@ class SpotifyConnector:
                 return f"Setup file not found at: {setup_path}"
             setup = pd.read_csv(setup_path, sep='=', index_col=0, header=None).squeeze()
             scope = "user-read-private user-read-playback-state user-modify-playback-state user-read-currently-playing"
+            # Use the same cache path where we stored the OAuth tokens from librespot
+            cache_path = "/home/jubers/Documents/voice_assistant/.cache-fh6zfkxud9q06b6j0ihhootyu"
             auth_manager = SpotifyOAuth(
                 client_id=setup['client_id'],
                 client_secret=setup['client_secret'],
                 redirect_uri=setup['redirect_uri'],
                 scope=scope,
-                username=setup['username']
+                username=setup['username'],
+                cache_path=cache_path
             )
             spotify = sp.Spotify(auth_manager=auth_manager)
             connector = SpotifyConnector(spotify)
-            device_info = connector._find_device()
+            
+            # Get preferred device name from setup.txt
+            preferred_device = setup.get('device_name', None)
+            device_info = connector._find_device(preferred_device_name=preferred_device)
+            
             if not device_info:
                 print("No active device found, opening Spotify in Edge...")
                 connector.open_spotify_in_edge()
                 time.sleep(12)
-                device_info = connector._find_device()
+                device_info = connector._find_device(preferred_device_name=preferred_device)
             if not device_info:
                 return "No active device found after opening Spotify."
             print(f"Using active device: {device_info['device_name']} ({device_info['device_id']})")
@@ -402,7 +414,7 @@ class SpotifyConnector:
 if __name__ == "__main__":
     pass
     # Create a temporary connector just to open Spotify in Edge
-    # tool_data = {"tool": "spotify", "action": "stop", "target": "track", "name": "Shape of You"}
-    # spotify_connector = SpotifyConnector(None)
-    # conversation_history = {}
-    # print(spotify_connector.handle_spotify_action_with_feedback(tool_data, conversation_history))
+    tool_data = {"tool": "spotify", "action": "stop", "target": "track", "name": "lal pari"}
+    spotify_connector = SpotifyConnector(None)
+    conversation_history = {}
+    print(spotify_connector.handle_spotify_action_with_feedback(tool_data, conversation_history))

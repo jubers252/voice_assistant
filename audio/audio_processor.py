@@ -12,6 +12,7 @@ import tempfile
 import pygame
 import soundfile as sf
 import threading
+import numpy as np
 from collections import deque
 from contextlib import contextmanager
 
@@ -170,7 +171,7 @@ class AudioProcessors:
         self.speech_thread.start()
 
     def _generate_and_play_simple(self, text, voice, rate, speed_multiplier):
-        """Simple TTS generation and playback"""
+        """Simple TTS generation and playback with Bluetooth speaker support"""
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp_file_path = tmp_file.name
         tmp_file.close()
@@ -186,6 +187,11 @@ class AudioProcessors:
                     # Initialize pygame mixer with parameters that work better with other audio apps
                     pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
                     pygame.mixer.init()
+                    
+                    # Wake up Bluetooth speaker with brief silence before actual audio
+                    # This prevents first words from being cut off
+                    self._play_bluetooth_wakeup()
+                    
                     pygame.mixer.music.load(tmp_file_path)
                     pygame.mixer.music.set_volume(0.8)  # Slightly lower volume to avoid conflicts
                     pygame.mixer.music.play()
@@ -213,6 +219,59 @@ class AudioProcessors:
                     os.unlink(tmp_file_path)
             except:
                 pass
+    
+    def _play_bluetooth_wakeup(self):
+        """Play a very short, quiet sound to wake up Bluetooth speaker
+        
+        This prevents the first words from being cut off on Bluetooth speakers
+        which have a startup delay.
+        """
+        try:
+            # Generate a longer wakeup sound (300ms) for slower Bluetooth speakers
+            duration = 0.3  # 300 milliseconds - longer for Bluetooth lag
+            frequency = 440  # Hz (A4 note, but will be very quiet)
+            sample_rate = 22050
+            
+            # Generate sine wave
+            t = np.linspace(0, duration, int(sample_rate * duration))
+            waveform = np.sin(2 * np.pi * frequency * t)
+            
+            # Make it very quiet (3% volume) so user barely hears it
+            waveform = waveform * 0.03
+            
+            # Convert to 16-bit PCM
+            waveform_int16 = (waveform * 32767).astype(np.int16)
+            
+            # Create a temporary WAV file
+            import wave
+            temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+            temp_wav_path = temp_wav.name
+            temp_wav.close()
+            
+            with wave.open(temp_wav_path, 'w') as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)   # 16-bit
+                wav_file.setframerate(sample_rate)
+                wav_file.writeframes(waveform_int16.tobytes())
+            
+            # Play the wakeup sound
+            sound = pygame.mixer.Sound(temp_wav_path)
+            sound.set_volume(0.03)  # Very quiet
+            sound.play()
+            
+            # Wait for it to finish (300ms + buffer for Bluetooth)
+            time.sleep(0.4)
+            
+            # Clean up
+            try:
+                os.unlink(temp_wav_path)
+            except:
+                pass
+                
+        except Exception as e:
+            # If wakeup fails, just continue - not critical
+            if self.debug_mode:
+                print(f"Bluetooth wakeup sound failed (non-critical): {e}")
     
     def _speak_threaded(self, text, voice, rate, speed_multiplier, lang):
         """Threaded speech function with interruption support and improved Hindi processing"""

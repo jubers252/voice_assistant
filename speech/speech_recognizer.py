@@ -22,7 +22,7 @@ def suppress_alsa_errors():
         os.close(old_stderr)
 
 class SpeechRecognizer:
-    def __init__(self, device_index=None):
+    def __init__(self, audio_processor, device_index=None):
         """Initialize recognizer and pick a safe microphone device index.
 
         On Linux the device index used on Windows (e.g. 1) may be invalid and
@@ -31,6 +31,7 @@ class SpeechRecognizer:
         """
         self.device_index = None
         self.recognizer = sr.Recognizer()
+        self.audio_processor = audio_processor
         self._setup_recognizer()
         try:
             self._choose_device_index()
@@ -143,11 +144,12 @@ class SpeechRecognizer:
                 retry_count += 1
                 continue
             except Exception as e:
-                # Keep trying but avoid crashing on unexpected errors
                 print(f"[ASSISTANT] Recognition failed: {e}. Trying again... ({retry_count + 1}/{max_retries + 1})")
                 retry_count += 1
                 continue
         print("[ASSISTANT] No valid command detected after multiple attempts.")
+        # Speak feedback only after all retries are exhausted
+        self.audio_processor.speak("I didn't hear anything. Please call if you need me.")
         return None
 
     def _recognize_audio(self, audio):
@@ -157,10 +159,12 @@ class SpeechRecognizer:
             cleaned_command = command.lower().strip()
             if len(cleaned_command) < 2:
                 print("[ASSISTANT] Command too short, trying again...")
+                # Don't speak here - let it retry silently
                 return None
             return cleaned_command
         except (sr.RequestError, sr.UnknownValueError) as e:
             print(f"[ASSISTANT] Recognition error: {e}.")
+            # Don't speak here - let the caller handle it to avoid self-listening
             return None
         except Exception as e:
             print(f"[ASSISTANT] Unexpected recognition error: {e}")
