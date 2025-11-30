@@ -29,6 +29,7 @@ from connectors.telegram_bot import TelegramBot
 from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
+
 load_dotenv()
 
 
@@ -38,18 +39,20 @@ class LangChainAgentProcessor:
     This intelligently decides which tools to use based on user input
     """
     
-    def __init__(self, conversation_history, audio_processors, conversation_manager=None):
+    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None):
         """
         Initialize LangChain Agent Processor
         
         Required parameters:
         - conversation_history: List to store conversation history
         - audio_processors: Handler for speech/TTS functionality
+        - pixel_led: Optional PixelLEDController for visual feedback
         """
         
         # Store the handlers that are actually used
         self.conversation_history = conversation_history
         self.audio_processors = audio_processors
+        self.pixel_led = pixel_led
         self.reminder_manager = ReminderManager()
         # Optional ConversationManager instance to persist history
         self.conversation_manager = conversation_manager
@@ -59,7 +62,7 @@ class LangChainAgentProcessor:
         self.search_connector = GeminiSearch()
         self.telegram_bot = TelegramBot()
         self.big_basket_connector = BigBasketTools()
-        
+       
         # LangChain-specific setup
         self.agent_executor = None
         self.tools = []
@@ -642,7 +645,7 @@ class LangChainAgentProcessor:
         """Tool for the AI to ask follow-up questions and continue listening"""
         def ask_follow_up_function(question: str) -> str:
             try:
-                # Speak the follow-up question
+                # Speak the follow-up question (LED controlled in audio_processor)
                 self.audio_processors.speak(question)
                 
                 # Wait for speech to complete using is_speaking flag
@@ -911,10 +914,15 @@ Brief TTS-friendly, do not add any special character in responses."""
         
         # Check for exit commands (same as original)
         if any(word in user_command.lower() for word in ["exit", "quit", "goodbye", "bye"]):
+            # Speak goodbye (LED controlled in audio_processor)
             self.audio_processors.speak("Goodbye!")
             return True
         
         try:
+            # Set LED to processing/thinking state (blinking)
+            if self.pixel_led:
+                self.pixel_led.set_processing()
+            
             # Define the agent processing function
             def agent_processing():
                 result = self.agent_executor.invoke({"input": user_command})
@@ -931,8 +939,9 @@ Brief TTS-friendly, do not add any special character in responses."""
                 except Exception as save_err:
                     print(f"Warning: failed to save conversation history: {save_err}")
 
-                # Speak the response
+                # Speak the response (LED controlled in audio_processor)
                 self.audio_processors.speak(response)
+                
                 return response
             
             # Process directly without delayed feedback
@@ -946,6 +955,7 @@ Brief TTS-friendly, do not add any special character in responses."""
         except Exception as e:
             error_msg = f"Sorry, I encountered an error: {str(e)}"
             print(f"Agent error: {e}")
+            # Speak error message (LED controlled in audio_processor)
             self.audio_processors.speak(error_msg)
             return False
     

@@ -69,6 +69,11 @@ class AudioProcessors:
         self.is_speaking = False
         self.speech_interrupted = False
         self.speech_thread = None
+        self.pixel_led = None  # Will be set by voice assistant if available
+    
+    def set_pixel_led(self, pixel_led):
+        """Set pixel LED controller for visual feedback during speech"""
+        self.pixel_led = pixel_led
     
     def set_audio_buffer(self, buffer, buffer_lock):
         """Set external audio buffer for the callback to use
@@ -278,6 +283,13 @@ class AudioProcessors:
         self.is_speaking = True
         self.speech_interrupted = False
         
+        # Set LED to green when starting to speak
+        if self.pixel_led:
+            print("[DEBUG] Setting LED to GREEN (speaking)")
+            self.pixel_led.set_speaking()
+        else:
+            print("[DEBUG] pixel_led is None - LED not available")
+        
         try:
             # Enhanced voice selection based on language
             if lang == "hi":
@@ -300,6 +312,12 @@ class AudioProcessors:
             print(f"Edge TTS failed: {e}")
         finally:
             self.is_speaking = False
+            # Turn off LED when done speaking
+            if self.pixel_led:
+                print("[DEBUG] Turning LED OFF (finished speaking)")
+                self.pixel_led.off()
+            else:
+                print("[DEBUG] pixel_led is None - LED not available")
     
     def _clean_hindi_text(self, text):
         """Clean and prepare Hindi text for better TTS pronunciation"""

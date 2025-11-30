@@ -22,7 +22,7 @@ def suppress_alsa_errors():
         os.close(old_stderr)
 
 class SpeechRecognizer:
-    def __init__(self, audio_processor, device_index=None):
+    def __init__(self, audio_processor, device_index=None, pixel_led=None):
         """Initialize recognizer and pick a safe microphone device index.
 
         On Linux the device index used on Windows (e.g. 1) may be invalid and
@@ -32,6 +32,7 @@ class SpeechRecognizer:
         self.device_index = None
         self.recognizer = sr.Recognizer()
         self.audio_processor = audio_processor
+        self.pixel_led = pixel_led
         self._setup_recognizer()
         try:
             self._choose_device_index()
@@ -46,9 +47,9 @@ class SpeechRecognizer:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
         self.recognizer.dynamic_energy_ratio = 1.5
-        self.recognizer.pause_threshold = 0.8  # Shorter pause
+        self.recognizer.pause_threshold = 1.2  # Wait 1.2 seconds of silence before stopping
         self.recognizer.phrase_threshold = 0.3  # Lower threshold
-        self.recognizer.non_speaking_duration = 0.8  # Shorter duration
+        self.recognizer.non_speaking_duration = 1.0  # Allow 1 second of non-speaking
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -108,6 +109,7 @@ class SpeechRecognizer:
                         print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
 
                 except Exception as mic_open_error:
+                    self.pixel_led.off()
                     # Try to recover by choosing a different device index once
                     print(f"[ASSISTANT] Microphone open failed: {mic_open_error}")
                     if self._choose_device_index(force_search=True):
@@ -140,6 +142,7 @@ class SpeechRecognizer:
                     continue
 
             except sr.WaitTimeoutError:
+                self.pixel_led.off()
                 print(f"[ASSISTANT] No speech detected. Trying again... ({retry_count + 1}/{max_retries + 1})")
                 retry_count += 1
                 continue
