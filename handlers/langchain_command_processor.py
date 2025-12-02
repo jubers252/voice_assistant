@@ -12,6 +12,12 @@ import speech_recognition as sr
 from typing import Dict, Any
 from dotenv import load_dotenv
 import re
+import warnings
+import urllib3
+
+# Suppress urllib3 warnings from Selenium WebDriver connections
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
 # LangChain imports (install with: pip install langchain langchain-openai)
 from langchain.agents import AgentExecutor, create_openai_functions_agent
 from langchain.memory import ConversationBufferWindowMemory
@@ -29,6 +35,8 @@ from connectors.telegram_bot import TelegramBot
 from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
+from connectors.zepto_order_automation import ZeptoScraper
+import asyncio
 
 load_dotenv()
 
@@ -62,12 +70,64 @@ class LangChainAgentProcessor:
         self.search_connector = GeminiSearch()
         self.telegram_bot = TelegramBot()
         self.big_basket_connector = BigBasketTools()
-       
+        zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
+        # Set headless=False for Windows Firefox stability
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
+        
+        # Create a persistent event loop for Zepto in a dedicated thread
+        self._zepto_loop = None
+        self._zepto_thread = None
+        self._setup_zepto_loop()
+        
         # LangChain-specific setup
         self.agent_executor = None
         self.tools = []
         
         self._setup_langchain_agent()
+    
+    def _setup_zepto_loop(self):
+        """Setup a persistent event loop for Zepto operations in a dedicated thread"""
+        import threading
+        import queue
+        
+        self._zepto_queue = queue.Queue()
+        
+        def run_loop():
+            # Create event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self._zepto_loop = loop
+            
+            # Keep loop running
+            try:
+                loop.run_forever()
+            finally:
+                loop.close()
+        
+        self._zepto_thread = threading.Thread(target=run_loop, daemon=True)
+        self._zepto_thread.start()
+        
+        # Wait for loop to be ready
+        import time
+        timeout = 5
+        start = time.time()
+        while self._zepto_loop is None and (time.time() - start) < timeout:
+            time.sleep(0.1)
+    
+    def _run_in_zepto_loop(self, coro, timeout=120):
+        """Run coroutine in the persistent Zepto event loop"""
+        import concurrent.futures
+        
+        if self._zepto_loop is None:
+            raise RuntimeError("Zepto event loop not initialized")
+        
+        future = asyncio.run_coroutine_threadsafe(coro, self._zepto_loop)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            return "Operation timed out"
+        except Exception as e:
+            raise e
     
     def _create_current_weather_tool(self) -> Tool:
         """Get current weather for a location"""
@@ -640,6 +700,69 @@ class LangChainAgentProcessor:
             func=volume_control_function
         )
     
+    def _zepto_ordering_tool(self) -> Tool:
+        """Zepto grocery ordering tool (placeholder)"""
+        def zepto_function(input_str: str) -> str:
+            try:
+                parts = input_str.split("|")
+                action = parts[0].lower().strip()
+                product = parts[1].strip() if len(parts) > 1 else ""
+                quantity = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
+                product_index = int(parts[3].strip()) if len(parts) > 3 and parts[3].strip().isdigit() else 0
+                
+                if action == "login":
+                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    return "Zepto login initiated."
+                if action == "clear_cart":
+                    if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                        print("Not logged in - try logging in first.")
+                        self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    result = self._run_in_zepto_loop(self.zepto_scraper.clear_cart())
+                    return f"Zepto clear cart result: {result}"
+                elif action == "search":
+                    if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                        print("Not logged in - try logging in first.")
+                        self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    product_list = self._run_in_zepto_loop(self.zepto_scraper.search_and_extract_products(product))
+                    return f"Zepto search results: {product_list}"
+                elif action == "add_product":
+                    if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                        print("Not logged in - try logging in first.")
+                        self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    result = self._run_in_zepto_loop(self.zepto_scraper.add_product_to_cart(product, quantity, product_index))
+                    return f"Zepto add product result: {result}"
+                elif action == "order_details":
+                    if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                        print("Not logged in - try logging in first.")
+                        self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    order_info = self._run_in_zepto_loop(self.zepto_scraper.get_order_details())
+                    return f"Zepto order details: {order_info}"
+                elif action == "checkout":
+                    if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                        print("Not logged in - try logging in first.")
+                        self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    payment_result = self._run_in_zepto_loop(self.zepto_scraper.checkout())
+                    return f"Zepto payment result: {payment_result}"
+                elif action == "place_order":
+                    result = self._run_in_zepto_loop(self.zepto_scraper.click_proceed_final())
+                    if result and result.get("status") == "clicked":
+                        print("Order placed successfully.") 
+                        return "Zepto order placed successfully."
+                    self._run_in_zepto_loop(self.zepto_scraper.cleanup())
+                elif action == "cleanup":
+                    self._run_in_zepto_loop(self.zepto_scraper.cleanup())
+                    return "Zepto browser closed."
+                else:
+                    return f"Unknown action: {action}. Supported: login, search, add_product, order_details, checkout, place_order, cleanup"
+            except Exception as e:
+                return f"Zepto tool error: {str(e)}"
+        
+        return Tool(
+            name="zepto_ordering_tool",
+            description="Zepto grocery shopping. Workflow: 1) login 2)clear_cart 3)search|product_name 4) add_product|product_name|quantity|index 5) order_details 6) checkout (auto-selects COD) 7) ask confirmation 8) place_order 9) cleanup. Format: 'action|product|quantity|index'. ALWAYS ask user confirmation before place_order using ask_follow_up_question tool.",
+            func=zepto_function
+        )
+
 
     def _create_follow_up_question_tool(self) -> Tool:
         """Tool for the AI to ask follow-up questions and continue listening"""
@@ -827,7 +950,8 @@ class LangChainAgentProcessor:
             self._create_telegram_video_tool(),
             self._create_volume_control_tool(),
             self._create_follow_up_question_tool(),
-            self._create_bigbasket_tool()
+            self._create_bigbasket_tool(),
+            self._zepto_ordering_tool()
         ]
         
         # Initialize LLM
@@ -859,19 +983,32 @@ Examples of WRONG behavior (DO NOT DO THIS):
  "Should I proceed?" → WRONG! Must call ask_follow_up_question("Should I proceed?")
 
 **LANGUAGE RULE:**
-- Hindi question → respond in Devanagari ONLY (मौसम not mausam)
-- English question → respond in English
+- Respond in the SAME LANGUAGE as the user's input
+- If user asks in Hindi → respond completely in Hindi Devanagari script dont use roman text (मौसम not mausam)
+- If user asks in English → respond in English
 - NEVER mix scripts or transliterate Hindi
 
-**CAPABILITIES:** weather, Spotify, search, Amazon, reminders, Telegram, volume, BigBasket
+**CAPABILITIES:** weather, Spotify, search, Amazon, reminders, Telegram, volume, BigBasket, Zepto
 
 **BigBasket ORDERING (IMPORTANT):**
  For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
         BigBasket Shopping:
-        - Workflow: login → search → show results → ask selection → clear_cart → add_product → checkout → place_order → close_browser
+        - Workflow: login - search - show results - ask selection - clear_cart - add_product - checkout - place_order - close_browser
         - For 'search'/'add_product': pass both action and product parameters
          - Always show search results and clear the cart before adding to cart
         - Always get confirmation from user before calling 'place_order'
+
+**Zepto ORDERING (IMPORTANT):**
+ For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
+        Zepto Shopping:
+        - Workflow: login -> clear_cart -> search|product_name -> add_product|product_name|quantity|index -> order_details -> checkout -> ask user confirmation -> place_order → cleanup
+        - For 'search': pass action|product_name format
+        - explain search results to user and ask which product to add
+        - For 'add_product': pass action|product_name|quantity|product_index format (index from search results)
+        - checkout action automatically selects COD payment method
+        - ALWAYS get confirmation from user before calling 'place_order' using ask_follow_up_question tool
+        - After order placed, call cleanup to close browser
+        - Always clean the browser session after processing order or failed attempts to avoid multiple logins.
        
 Brief TTS-friendly, do not add any special character in responses."""
         

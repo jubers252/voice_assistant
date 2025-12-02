@@ -96,13 +96,13 @@ class ZeptoScraper(ZeptoLoginAsync):
         
         # Use parent class browser setup
         if await self.start_browser():
-            # Navigate to Zepto URL
+            # Navigate to Zepto URL with longer timeout
             logger.info(f"Navigating to Zepto: {self.base_url}")
-            await self.page.goto(self.base_url, wait_until='domcontentloaded', timeout=10000)
+            await self.page.goto(self.base_url, wait_until='domcontentloaded', timeout=30000)
             
             # Wait for network to be idle with longer timeout (Firefox may need more time)
             try:
-                await self.page.wait_for_load_state('networkidle', timeout=30000)
+                await self.page.wait_for_load_state('networkidle', timeout=15000)
             except Exception as e:
                 logger.warning(f"Network idle timeout (this is normal for Firefox): {e}")
             
@@ -165,7 +165,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             
             location_button_clicked = await self._click_element(location_button_selectors, "Select Location button")
             if location_button_clicked:
-                await self.page.wait_for_timeout(1500)
+                await self.page.wait_for_timeout(2000)
             
             # Click "Use My Current Location"
             current_location_selectors = [
@@ -369,8 +369,8 @@ class ZeptoScraper(ZeptoLoginAsync):
         """Search for products using the given term (Playwright version)"""
         logger.info(f"Searching for products: {search_term}")
         
-        # Ensure still logged in before searching
-        if not await self.ensure_logged_in():
+        # Check if still logged in before searching
+        if not await self.is_logged_in():
             logger.error("Not logged in - cannot search products")
             return False
         
@@ -460,12 +460,27 @@ class ZeptoScraper(ZeptoLoginAsync):
             return False
         
 
-    async def extract_products(self, max_products=5):
-        """Extract product information from search results (Playwright version)"""
-        logger.info(f"Extracting up to {max_products} products from search results")
+    async def search_and_extract_products(self, product_name, max_products=5):
+        """Search for products and extract product information from results.
+        
+        This method combines searching and extraction for convenience.
+        
+        Args:
+            product_name: Product name to search for
+            max_products: Maximum number of products to extract (default 5)
+            
+        Returns:
+            list: List of product dicts with name, price, quantity, etc.
+        """
+        logger.info(f"Searching and extracting up to {max_products} products for: {product_name}")
 
-        # First attempt: DOM-based extraction (more reliable). If it fails or finds nothing,
-        # fallback to the existing text-based extraction.
+        # First search for the product
+        search_success = await self.search_products(product_name)
+        if not search_success:
+            logger.error(f"Search failed for: {product_name}")
+            return []
+
+        # First attempt: DOM-based extraction (more reliable)
         try:
             dom_products = await self.extract_products_dom(max_products)
             if dom_products:
@@ -672,52 +687,6 @@ class ZeptoScraper(ZeptoLoginAsync):
             return None
     
 
-    async def find_product_by_name(self, product_name, pack_size=None):
-        """Find product by name and optionally pack size, return product info with index.
-        
-        Args:
-            product_name: Product name to search for
-            pack_size: Optional pack size filter (e.g., '1 L', '500 ml')
-            
-        Returns:
-            dict with 'index', 'name', 'price', 'quantity', 'href' or None if not found
-        """
-        logger.info(f"Searching for product: {product_name}" + (f" ({pack_size})" if pack_size else ""))
-        
-        try:
-            await self.page.wait_for_timeout(1500)
-            
-            # Get all products
-            products = await self.extract_products_dom(max_products=20)
-            
-            # Search keywords
-            keywords = [w.lower() for w in product_name.split() if len(w) > 2]
-            
-            for idx, product in enumerate(products):
-                name_lower = product['name'].lower()
-                quantity_lower = product.get('quantity', '').lower()
-                
-                # Check if all keywords match
-                if not all(kw in name_lower for kw in keywords):
-                    continue
-                
-                # If pack_size specified, check if it matches
-                if pack_size and pack_size.lower() not in quantity_lower:
-                    continue
-                
-                logger.info(f"Found product at index {idx}: {product['name']} - {product.get('quantity', 'N/A')}")
-                return {
-                    'index': idx,
-                    **product
-                }
-            
-            logger.warning(f"Product not found: {product_name}")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Failed to find product: {e}")
-            return None
-
     async def add_product_to_cart(self, product_name=None, quantity=1, product_index=None):
         """Add a product to cart with specified quantity.
         
@@ -728,14 +697,16 @@ class ZeptoScraper(ZeptoLoginAsync):
         """
         logger.info(f"Adding to cart: {product_name or f'product at index {product_index}'} (quantity: {quantity})")
         
-        # Ensure still logged in before adding to cart
-        if not await self.ensure_logged_in():
+        # Check if still logged in before adding to cart
+        if not await self.is_logged_in():
             logger.error("Not logged in - cannot add to cart")
             return False
         
         try:
             await self.page.wait_for_timeout(2000)
-            
+            if isinstance(product_index, int):
+                logger.info(f"Using product index: {product_index}")    
+                product_index = product_index -1
             # Get all product anchors
             anchors = await self.page.query_selector_all("a[href*='/pn/']")
             logger.info(f"Found {len(anchors)} product anchors")
@@ -865,43 +836,316 @@ class ZeptoScraper(ZeptoLoginAsync):
             logger.error(f"Failed to navigate to cart: {e}")
             return False
 
-    async def ensure_logged_in(self):
-        """Check if still logged in and re-login if needed (can be called anytime)"""
+    async def goto_account(self):
+        """Navigate to account page by clicking the profile button."""
+        logger.info("Navigating to account/profile page")
+        
         try:
-            if not await self.is_logged_in():
-                logger.warning("Session expired during automation - re-logging in")
-                
-                # Navigate back to home page for login
-                await self.page.goto(self.base_url, wait_until='domcontentloaded')
-                await self.page.wait_for_timeout(2000)
-                
-                # Perform login
-                if await self.perform_login():
-                    await self.handle_popups()
-                    logger.info("Re-login successful")
-                    return True
-                else:
-                    logger.error("Re-login failed")
-                    return False
-            return True
-        except Exception as e:
-            logger.error(f"Login check failed: {e}")
+            # Wait for page to be ready
+            await self.page.wait_for_load_state('domcontentloaded')
+            await self.page.wait_for_timeout(2000)
+            
+            # Find and click profile button
+            profile_selectors = [
+                "a[aria-label='profile']",
+                "a[href='/account']",
+                "[data-testid='my-account']",
+                "a:has([data-testid='my-account'])",
+                "span:has-text('profile')",
+                ".qO5yx a[href='/account']"
+            ]
+            
+            for selector in profile_selectors:
+                try:
+                    profile_btn = await self.page.wait_for_selector(selector, timeout=3000, state='visible')
+                    if profile_btn and await profile_btn.is_visible():
+                        await profile_btn.scroll_into_view_if_needed()
+                        await self.page.wait_for_timeout(500)
+                        await profile_btn.click()
+                        await self.page.wait_for_load_state('networkidle', timeout=2000)
+                        await self.page.wait_for_timeout(2000)
+                        logger.info(f"Navigated to account using: {selector}")
+                        
+                        # Take screenshot in headless mode
+                        if self.headless:
+                            await self.page.screenshot(path=os.path.join(self.output_dir, 'debug_account_page.png'))
+                        
+                        return True
+                except Exception as e:
+                    logger.debug(f"Profile selector {selector} failed: {e}")
+                    continue
+            
+            logger.warning("Profile button not found")
+            # Take debug screenshot
+            if self.headless:
+                await self.page.screenshot(path=os.path.join(self.output_dir, 'debug_profile_not_found.png'))
             return False
-    
+            
+        except Exception as e:
+            logger.error(f"Failed to navigate to account: {e}")
+            return False
+
+    async def get_order_history(self, max_orders=3):
+        """Get order history from account page.
+        
+        Args:
+            max_orders (int): Maximum number of orders to extract (default 3)
+            
+        Returns:
+            list: List of order dictionaries with status, date, amount, etc.
+        """
+        logger.info(f"Getting order history (max {max_orders} orders)")
+        
+        try:
+            # First navigate to account page
+            if not await self.goto_account():
+                logger.error("Failed to navigate to account page")
+                return []
+            
+            await self.page.wait_for_timeout(3000)
+            
+            # Find order containers - each order is in an <a> tag with href="/order/"
+            order_links = await self.page.query_selector_all('a[href*="/order/"]')
+            
+            if not order_links:
+                logger.info("No orders found on account page")
+                return []
+            
+            orders = []
+            
+            for i, order_link in enumerate(order_links[:max_orders]):
+                try:
+                    # Extract order status
+                    status_element = await order_link.query_selector('p.mr-1\\.5.text-heading6')
+                    status = "Unknown"
+                    if status_element:
+                        status_text = await status_element.text_content()
+                        if status_text:
+                            status = status_text.strip()
+                    
+                    # Extract order date/time
+                    date_element = await order_link.query_selector('p.mt-1.text-body2')
+                    date = "Unknown"
+                    if date_element:
+                        date_text = await date_element.text_content()
+                        if date_text:
+                            date = date_text.strip().replace('Placed at ', '')
+                    
+                    # Extract order amount
+                    amount_element = await order_link.query_selector('p.mr-1\\.5.text-heading5')
+                    amount = "Unknown"
+                    if amount_element:
+                        amount_text = await amount_element.text_content()
+                        if amount_text:
+                            amount = amount_text.strip()
+                    
+                    # Extract order ID from href
+                    href = await order_link.get_attribute('href')
+                    order_id = "Unknown"
+                    if href:
+                        # Extract order ID from URL like "/order/019adf78-27d9-7572-a04a-efc2b01a99ae"
+                        parts = href.split('/')
+                        if len(parts) >= 3:
+                            order_id = parts[2].split('?')[0]  # Remove query parameters
+                    
+                    # Count product images to get item count
+                    product_images = await order_link.query_selector_all('img[alt=""][width="46"][height="46"]')
+                    item_count = len(product_images)
+                    
+                    order_info = {
+                        'order_number': i + 1,
+                        'order_id': order_id,
+                        'status': status,
+                        'date': date,
+                        'amount': amount,
+                        'item_count': item_count,
+                        'url': href or 'N/A'
+                    }
+                    
+                    orders.append(order_info)
+                    logger.info(f"Extracted order {i+1}: {status} - {amount} - {date}")
+                    
+                except Exception as e:
+                    logger.debug(f"Failed to extract order {i+1}: {e}")
+                    continue
+            
+            logger.info(f"Successfully extracted {len(orders)} orders")
+            
+            # Take screenshot of orders page
+            if self.headless:
+                await self.page.screenshot(path=os.path.join(self.output_dir, 'debug_orders_page.png'))
+            
+            return orders
+            
+        except Exception as e:
+            logger.error(f"Failed to get order history: {e}")
+            return []
+
+    async def goto_order_details(self, order_index=0):
+        """Navigate to specific order details page by clicking on order at given index.
+        
+        Args:
+            order_index (int): Index of order to click (0-based, default 0 for first order)
+            
+        Returns:
+            dict: Order details information or None if failed
+        """
+        logger.info(f"Navigating to order details for order index {order_index}")
+        
+        try:
+            # First navigate to account page if not already there
+            current_url = self.page.url
+            if '/account' not in current_url:
+                if not await self.goto_account():
+                    logger.error("Failed to navigate to account page")
+                    return None
+            
+            await self.page.wait_for_timeout(2000)
+            
+            # Find order links
+            order_links = await self.page.query_selector_all('a[href*="/order/"]')
+            
+            if not order_links:
+                logger.error("No orders found on account page")
+                return None
+            
+            if order_index >= len(order_links):
+                logger.error(f"Order index {order_index} out of range (found {len(order_links)} orders)")
+                return None
+            
+            # Click on the specified order
+            target_order = order_links[order_index]
+            await target_order.scroll_into_view_if_needed()
+            await target_order.click()
+            
+            # Wait for order details page to load with better error handling
+            try:
+                await self.page.wait_for_load_state('networkidle', timeout=10000)
+            except Exception as e:
+                logger.warning(f"Network idle timeout: {e}")
+                # Continue anyway, page might still be usable
+            
+            # Additional wait and verify we're on order details page
+            await self.page.wait_for_timeout(3000)
+            
+            # Verify we're on the correct page
+            current_url = self.page.url
+            if '/order/' not in current_url:
+                logger.error(f"Navigation failed - not on order page: {current_url}")
+                return None
+            
+            logger.info(f"Successfully navigated to order details for index {order_index}")
+            
+            # Extract order details from the details page
+            order_details = await self._extract_order_details_from_page()
+            
+            # Take screenshot of order details page
+            if self.headless:
+                await self.page.screenshot(path=os.path.join(self.output_dir, f'order_details_{order_index}.png'))
+                logger.info(f"Saved order details screenshot for index {order_index}")
+            
+            return order_details
+            
+        except Exception as e:
+            logger.error(f"Failed to navigate to order details: {e}")
+            return None
+
+    async def _extract_order_details_from_page(self):
+        """Extract order details using known HTML structure."""
+        logger.info("Extracting order details from order page")
+        
+        try:
+            # Wait for page to be stable and fully loaded
+            await self.page.wait_for_load_state('domcontentloaded')
+            await self.page.wait_for_timeout(3000)  # Give page time to stabilize
+            
+            order_details = {}
+            
+            # Extract order ID from URL
+            try:
+                current_url = self.page.url
+                if '/order/' in current_url:
+                    order_details['order_id'] = current_url.split('/order/')[1].split('?')[0]
+            except Exception as e:
+                logger.debug(f"Failed to extract order ID: {e}")
+            
+            # Extract ETA information from known structure
+            try:
+                eta_container = await self.page.query_selector('#eta-timer-content')
+                if eta_container:
+                    # Extract time from span.text-heading1
+                    time_element = await eta_container.query_selector('span.text-heading1')
+                    if time_element:
+                        time_text = await time_element.text_content()
+                        if time_text:
+                            order_details['arriving_in'] = time_text.strip()
+                    
+                    # Extract messages from specific span classes
+                    eta_label = await eta_container.query_selector('span.text-body1')
+                    if eta_label:
+                        order_details['eta_label'] = (await eta_label.text_content()).strip()
+                    
+                    status_msg = await eta_container.query_selector('span.text-heading4')
+                    if status_msg:
+                        order_details['order_status_message'] = (await status_msg.text_content()).strip()
+                    
+                    delay_msg = await eta_container.query_selector('span.text-body4')
+                    if delay_msg:
+                        order_details['delay_message'] = (await delay_msg.text_content()).strip()
+            except Exception as e:
+                logger.debug(f"ETA extraction failed: {e}")
+            
+            # Extract basic order info with simple selectors
+            try:
+                # Order status from h1/h2
+                for selector in ['h1', 'h2']:
+                    element = await self.page.query_selector(selector)
+                    if element:
+                        text = await element.text_content()
+                        if text and any(word in text.lower() for word in ['delivered', 'cancelled', 'on the way', 'placed']):
+                            order_details['status'] = text.strip()
+                            break
+                
+                # Total amount from first price element
+                price_elements = await self.page.query_selector_all('span:has-text("₹")')
+                for element in price_elements:
+                    amount_text = await element.text_content()
+                    if amount_text and '₹' in amount_text:
+                        price_match = self.PRICE_REGEX.search(amount_text)
+                        if price_match:
+                            order_details['total_amount'] = price_match.group(0)
+                            break
+                
+                # Order date from page text
+                page_text = await self.page.evaluate("() => document.body.innerText")
+                import re
+                date_pattern = r'(\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})'
+                date_match = re.search(date_pattern, page_text)
+                if date_match:
+                    order_details['order_date'] = date_match.group(0)
+                
+            except Exception as e:
+                logger.debug(f"Basic info extraction failed: {e}")
+            
+            logger.info(f"Extracted order details: {len(order_details)} fields")
+            return order_details
+            
+        except Exception as e:
+            logger.error(f"Failed to extract order details: {e}")
+            return {}
+
     async def clear_cart(self):
         """Clear all items from cart."""
         logger.info("Clearing cart")
-        
-        # Check login before clearing cart
-        if not await self.ensure_logged_in():
-            logger.error("Not logged in - cannot clear cart")
-            return False
-        
         try:
             # First navigate to cart
             if not await self.goto_cart():
                 logger.error("Failed to navigate to cart")
                 return False
+            is_high_demand = await self.check_high_demand_flag()
+            if is_high_demand:
+                logger.warning("High demand - try again later")
+                return "High demand - try again late"
             
             await self.page.wait_for_timeout(2000)
             
@@ -1035,8 +1279,28 @@ class ZeptoScraper(ZeptoLoginAsync):
         except Exception as e:
             logger.error(f"Failed to get cart info: {e}")
             return None
+    
+    async def check_high_demand_flag(self):
+        """Check if 'High demand right now' notification is displayed.
         
-    async def get_order_details(self, ensure_cart=True):
+        Returns:
+            bool: True if high demand flag is present, False otherwise
+        """
+        try:
+            # Check for high demand text
+            element = await self.page.query_selector("text=High demand right now")
+            if element and await element.is_visible():
+                logger.warning("High demand flag detected")
+                return True
+            
+            logger.info("No high demand flag - service available")
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error checking high demand flag: {e}")
+            return False
+        
+    async def get_order_details(self, ensure_cart=False):
         """Compact order summary extractor.
 
         Returns a small dict with: item_total, handling_fee, delivery_fee, to_pay,
@@ -1162,8 +1426,8 @@ class ZeptoScraper(ZeptoLoginAsync):
         """
         logger.info("Attempting to go to payment")
         
-        # Ensure still logged in before proceeding to payment
-        if not await self.ensure_logged_in():
+        # Check if still logged in before proceeding to payment
+        if not await self.is_logged_in():
             logger.error("Not logged in - cannot proceed to payment")
             return {'status': 'error', 'error': 'Not logged in'}
         
@@ -1443,6 +1707,78 @@ class ZeptoScraper(ZeptoLoginAsync):
 
         logger.info("Cash On Delivery (COD) is available")
         return True
+    
+    async def checkout(self, ensure_cart=True):
+        """Combined checkout function for agent usage.
+        
+        This method:
+        1. Navigates to payment page
+        2. Lists available payment methods
+        3. Checks COD availability
+        4. selects COD if available
+        
+        Args:
+            ensure_cart (bool): If True, navigate to cart first (default True)
+            
+        Returns:
+            dict: {
+                'status': 'success'|'cod_unavailable'|'error',
+                'payment_url': str,
+                'payment_methods': list[str],
+                'cod_available': bool,
+                'error': str (only if status='error')
+            }
+        """
+        logger.info("Starting checkout process")
+        
+        try:
+            # Step 1: Navigate to payment page
+            payment_result = await self.go_to_payment(ensure_cart=ensure_cart)
+            
+            if payment_result.get('status') == 'error':
+                return {
+                    'status': 'error',
+                    'error': payment_result.get('error', 'Failed to navigate to payment'),
+                    'payment_url': None,
+                    'payment_methods': [],
+                    'cod_available': False
+                }
+            
+            payment_url = payment_result.get('url')
+            
+            # Step 2: List payment methods
+            methods = await self.list_payment_methods()
+            
+            # Step 3: Check COD availability
+            cod_available = self.check_cod_availability(methods)
+            if cod_available:
+                logger.info("Proceeding with Cash On Delivery (COD) option")    
+                select_method = await self.select_payment_method("Pay On Delivery")  
+                if select_method:
+                    logger.info("COD method selected successfully")
+                # await self.click_proceed_final()
+            else:
+                logger.info("COD not available — please add more items upto minimum order value 100rs.")
+            result = {
+                'status': 'success' if cod_available else 'cod_unavailable',
+                'payment_url': payment_url,
+                'payment_methods': methods,
+                'cod_available': cod_available
+            }
+            
+            logger.info(f"Checkout completed - COD available: {cod_available}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Checkout failed: {e}")
+            return {
+                'status': 'error',
+                'error': str(e),
+                'payment_url': None,
+                'payment_methods': [],
+                'cod_available': False
+            }
+    
     # UPI/QR helpers removed — operating in COD-only mode to keep the payment flow simple.
 
 
@@ -1453,42 +1789,56 @@ class ZeptoScraper(ZeptoLoginAsync):
       
         await self.setup_browser()
       
-        location_selected = await self.select_current_location()
-        if location_selected:
-            logger.info("Location selected successfully")
-        else:
-            logger.error("Failed to select location")
+        # location_selected = await self.select_current_location()
+        # if location_selected:
+        #     logger.info("Location selected successfully")
+        # else:
+        #     logger.error("Failed to select location")
         
-        address_selected = await self.select_delivery_address()
-        if address_selected:
-            logger.info("Address selected successfully")
-        else:
-            logger.error("Failed to select address")
-     
-        await self.clear_cart()
+        # address_selected = await self.select_delivery_address()
+        # if address_selected:
+        #     logger.info("Address selected successfully")
+        # else:
+        #     logger.error("Failed to select address")
 
-        await self.search_products("toast")
-        products = await self.extract_products()
-        logger.info(f"Product: {products}")
-        await self.add_product_to_cart("toast", quantity=3, product_index=1)
-        await self.goto_cart()
-        cart_info = await self.get_order_details()
-        print(f"Cart Info: {cart_info}")
-        payment_url = await self.go_to_payment()
-        print(f"Payment URL: {payment_url}")
-        methods = await self.list_payment_methods()
-        print(f"Payment Methods: {methods}")
-        check_cod_status= self.check_cod_availability(methods)
+
+        # await self.goto_cart()
+        # is_high_demand = await self.check_high_demand_flag()
+        # if is_high_demand:
+        #     print("High demand - try again later")
+        #     return 0
+        # await self.clear_cart()
+
+        # # Example: Find nearest product match from search results
+        # await self.search_products("toast")
+        # products_list = await self.extract_products(max_products=5)
+        
+      
+        # await self.add_product_to_cart(product_name="brown toast", quantity=2, product_index=0)
+        
+   
+      
+        # cart_info = await self.get_order_details()
+        # print(f"Cart Info: {cart_info}")
+        # payment_url = await self.go_to_payment()
+        # print(f"Payment URL: {payment_url}")
+        # methods = await self.list_payment_methods()
+        # print(f"Payment Methods: {methods}")
+        # check_cod_status= self.check_cod_availability(methods)
   
-        if check_cod_status:
-            logger.info("Proceeding with Cash On Delivery (COD) option")    
-            select_method = await self.select_payment_method("Pay On Delivery")  
-            if select_method:
-                logger.info("COD method selected successfully")
-                # await self.click_proceed_final()
-        else:
-            logger.info("COD not available — please add more items upto minimum order value 100rs.")
-
+        # if check_cod_status:
+        #     logger.info("Proceeding with Cash On Delivery (COD) option")    
+        #     select_method = await self.select_payment_method("Pay On Delivery")  
+        #     if select_method:
+        #         logger.info("COD method selected successfully")
+        #         # await self.click_proceed_final()
+        # else:
+        #     logger.info("COD not available — please add more items upto minimum order value 100rs.")
+        await self.goto_account()
+        result = await self. get_order_history()
+        order_details = await self.goto_order_details(1)
+     
+        print(f"Order History: {order_details}")
         await self.cleanup()
         
 if __name__ == "__main__":
