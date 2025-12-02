@@ -6,13 +6,17 @@ import threading
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050):
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.035, confidence_threshold=0.75):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
         self.audio_processors = audio_processors
         self.recognizer = recognizer
         self.pixel_led = pixel_led
         self.sample_rate = sample_rate
+        
+        # Wake word detection thresholds (lowered for better sensitivity)
+        self.energy_threshold = energy_threshold  # Lower energy threshold (0.035 vs default 0.050)
+        self.confidence_threshold = confidence_threshold  # Lower confidence for better detection
         # Wake word detection parameters
         # Use a 2.0 second analysis window for wake-word detection (sliding window)
         self.window_duration = 2.0  # seconds (matches training duration)
@@ -110,10 +114,14 @@ class WakeWordManager:
 
             # Wake word detection (now always active, even during speech)
             audio_window = np.array(self.audio_buffer)
-            detected, energy, confidence = self.wake_word_detector.detect_wakeword(audio_window, self.sample_rate)
+            detected, energy, confidence = self.wake_word_detector.detect_wakeword(
+                audio_window, self.sample_rate, 
+                energy_threshold=self.energy_threshold, 
+                confidence_threshold=self.confidence_threshold
+            )
             
-            # Show detection attempts with energy > 0.005 for debugging
-            if energy and energy > 0.005 and self.debug_mode:
+            # Show detection attempts with energy > 0.010 for debugging
+            if energy and energy > 0.010 and self.debug_mode:
                 print(f"Wakeword check: Detected={detected}, Energy={energy:.4f}, Confidence={confidence}")
             
             # Handle wake word detection

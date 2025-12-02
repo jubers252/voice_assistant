@@ -41,93 +41,59 @@ print(f"Class distribution: {np.bincount(y)}")
 X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
 X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)
 
-##### 3. Build a More Conservative Model to Prevent Overfitting #####
-from keras.layers import BatchNormalization, GlobalAveragePooling1D
+##### 3. Build an Improved 1D CNN Model with Better Regularization #####
+from keras.layers import BatchNormalization
 from keras.regularizers import l2
 
-# Smaller, more conservative model to prevent overfitting
+# This model learns patterns in the MFCC features over time with better generalization
 model = Sequential([
-    # First Conv Block - Reduced filters
-    Conv1D(16, kernel_size=5, activation='relu', input_shape=(desired_length, feature_dim), 
-           kernel_regularizer=l2(0.05)),  # Stronger L2 regularization
+    # First Conv Block
+    Conv1D(32, kernel_size=3, activation='relu', input_shape=(desired_length, feature_dim), 
+           kernel_regularizer=l2(0.01)),
     BatchNormalization(),
-    MaxPooling1D(3),  # Larger pooling to reduce overfitting
-    Dropout(0.6),  # Higher dropout
+    MaxPooling1D(2),
+    Dropout(0.4),  # Increased dropout
 
-    # Second Conv Block - Smaller
-    Conv1D(32, kernel_size=3, activation='relu', kernel_regularizer=l2(0.05)),
+    # Second Conv Block
+    Conv1D(64, kernel_size=3, activation='relu', kernel_regularizer=l2(0.01)),
     BatchNormalization(),
-    GlobalAveragePooling1D(),  # Instead of MaxPooling + Flatten
-    Dropout(0.7),  # Very high dropout
+    MaxPooling1D(2),
+    Dropout(0.5),  # Increased dropout
 
-    # Smaller Dense layer
-    Dense(32, activation='relu', kernel_regularizer=l2(0.05)),  # Reduced from 64 to 32
-    Dropout(0.6),
+    # Dense layers
+    Flatten(),
+    Dense(64, activation='relu', kernel_regularizer=l2(0.01)),
+    Dropout(0.5),
     Dense(1, activation='sigmoid')  # Binary classification
 ])
 
 print(model.summary())  # Shows model structure
 
-##### 4. Compile with Conservative Settings to Prevent Overfitting #####
+##### 4. Compile the Model with Better Settings #####
 from keras.optimizers import Adam
 
 model.compile(
     loss="binary_crossentropy",  # Binary classification loss
-    optimizer=Adam(learning_rate=0.0005),  # Even lower learning rate
+    optimizer=Adam(learning_rate=0.001),  # Lower learning rate for better convergence
     metrics=['accuracy', 'precision', 'recall']  # Track multiple metrics
 )
 
-# More aggressive callbacks to prevent overfitting
+# Enhanced callbacks for better training control
 from keras.callbacks import ReduceLROnPlateau, ModelCheckpoint
 
-early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)  # Reduced patience
-reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, verbose=1, min_lr=1e-6)  # More aggressive LR reduction
+early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1)
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, verbose=1, min_lr=1e-5)
 checkpoint = ModelCheckpoint(os.path.join("model_training", "saved_model", "best_model.keras"), 
                            monitor='val_loss', save_best_only=True, verbose=1)
 
-##### 5. Train with Strong Overfitting Prevention #####
-print("Training Conservative Model to Prevent Overfitting: \n")
-
-# Add data augmentation to prevent overfitting
-from keras.utils import Sequence
-import random
-
-class AudioAugmentationGenerator(Sequence):
-    def __init__(self, X, y, batch_size=32, augment=True):
-        self.X, self.y = X, y
-        self.batch_size = batch_size
-        self.augment = augment
-        self.indexes = np.arange(len(self.X))
-        
-    def __len__(self):
-        return len(self.X) // self.batch_size
-    
-    def __getitem__(self, index):
-        batch_indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
-        X_batch = self.X[batch_indexes].copy()
-        y_batch = self.y[batch_indexes]
-        
-        if self.augment:
-            # Add noise to prevent overfitting
-            for i in range(len(X_batch)):
-                if random.random() < 0.5:  # 50% chance of augmentation
-                    noise = np.random.normal(0, 0.01, X_batch[i].shape)
-                    X_batch[i] += noise
-        
-        return X_batch, y_batch
-    
-    def on_epoch_end(self):
-        np.random.shuffle(self.indexes)
-
-# Create generators
-train_gen = AudioAugmentationGenerator(X_train, y_train, batch_size=32, augment=True)
-val_gen = AudioAugmentationGenerator(X_val, y_val, batch_size=32, augment=False)
-
+##### 5. Train the Model with Better Validation #####
+print("Training Model with Enhanced Regularization: \n")
 history = model.fit(
-    train_gen,
-    epochs=30,  # Reduced epochs to prevent overfitting
-    validation_data=val_gen,
-    callbacks=[early_stop, reduce_lr, checkpoint],
+    X_train, y_train,
+    epochs=50,  # Reduced epochs
+    batch_size=16,                 # Smaller batch size for better generalization
+    validation_data=(X_val, y_val), # Use separate validation set
+    callbacks=[early_stop, reduce_lr, checkpoint],  # Multiple callbacks
     verbose=1
 )
 
@@ -135,7 +101,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_mems_updated.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_improved_v4.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")
@@ -165,25 +131,12 @@ background_confidences = y_pred[y_true_classes == 0]  # Background predictions
 print(f"Wake word samples - Mean confidence: {np.mean(wake_word_confidences):.3f}, Std: {np.std(wake_word_confidences):.3f}")
 print(f"Background samples - Mean confidence: {np.mean(background_confidences):.3f}, Std: {np.std(background_confidences):.3f}")
 
-# Suggest conservative threshold to reduce false positives
+# Suggest optimal threshold
 from sklearn.metrics import roc_curve, auc
 fpr, tpr, thresholds = roc_curve(y_true_classes, y_pred)
-
-# Find threshold that gives 95% precision (reduces false positives)
-from sklearn.metrics import precision_recall_curve
-precision, recall, pr_thresholds = precision_recall_curve(y_true_classes, y_pred)
-conservative_idx = np.where(precision >= 0.95)[0]
-if len(conservative_idx) > 0:
-    conservative_threshold = pr_thresholds[conservative_idx[0]]
-else:
-    conservative_threshold = 0.8  # Fallback high threshold
-
 optimal_idx = np.argmax(tpr - fpr)
 optimal_threshold = thresholds[optimal_idx]
-
-print(f"Balanced threshold: {optimal_threshold:.3f}")
-print(f"Conservative threshold (95% precision): {conservative_threshold:.3f}")
-print("Recommendation: Use conservative threshold to reduce false positives")
+print(f"Suggested optimal threshold: {optimal_threshold:.3f}")
 
 plot_confusion_matrix(cm, classes=["Background", "Wake Word"])
 

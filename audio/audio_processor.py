@@ -59,6 +59,7 @@ class AudioProcessors:
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
         self.mic_device_id = None   # Will use system default unless configured
         self.mic_gain_factor = 0.8  # Reduce gain for sensitive USB mic
+        self.digital_gain = 2.0     # Digital gain multiplier for MEMS mics (1.0 = no gain, 2.0 = double)
 
         # Audio processing
         self.sample_rate = 22050
@@ -114,6 +115,18 @@ class AudioProcessors:
             
             print("Recording complete.")
             audio_flat = audio.flatten()
+            
+            # Apply digital gain for MEMS microphones
+            if self.digital_gain != 1.0:
+                audio_flat = audio_flat * self.digital_gain
+                # Prevent clipping by normalizing if needed
+                max_val = np.max(np.abs(audio_flat))
+                if max_val > 1.0:
+                    audio_flat = audio_flat / max_val
+                    print(f"Applied digital gain {self.digital_gain}x (normalized to prevent clipping)")
+                else:
+                    print(f"Applied digital gain {self.digital_gain}x")
+            
             if save_path:
                 sf.write(save_path, audio_flat, sample_rate)
                 print(f"Audio saved to {save_path}")
@@ -395,6 +408,15 @@ class AudioProcessors:
         print(f"Pausing listening for {seconds} seconds...")
         time.sleep(seconds)
     
+    def set_digital_gain(self, gain_value):
+        """Set digital gain for MEMS microphone
+        
+        Args:
+            gain_value (float): Gain multiplier (1.0 = no gain, 2.0 = double volume, 0.5 = half volume)
+        """
+        self.digital_gain = max(0.1, min(10.0, gain_value))  # Clamp between 0.1x and 10x
+        print(f"Digital gain set to {self.digital_gain}x")
+    
     def check_microphones(self):
         """Check available microphones and their indices"""
         print("\nAvailable microphones:")
@@ -418,6 +440,7 @@ class AudioProcessors:
                 print(f"Testing microphone {mic_kwargs.get('device_index', 'default')}...")
                 recognizer.adjust_for_ambient_noise(source, duration=1)
                 print(f"Energy threshold: {recognizer.energy_threshold}")
+                print(f"Current digital gain: {self.digital_gain}x")
                 print("Microphone is working!")
         except Exception as e:
             print(f"Error with current microphone: {e}")
@@ -474,6 +497,12 @@ class AudioProcessors:
         except Exception:
             # Fallback if audio is already 1-D
             audio_samples = indata.flatten()
+        
+        # Apply digital gain for MEMS microphones
+        if hasattr(self, 'digital_gain') and self.digital_gain != 1.0:
+            audio_samples = audio_samples * self.digital_gain
+            # Prevent clipping
+            audio_samples = np.clip(audio_samples, -1.0, 1.0)
 
         # Store in the VoiceAssistant's buffer (if available)
         if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):

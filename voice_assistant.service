@@ -1,0 +1,32 @@
+[Unit]
+Description=Voice Assistant Service
+After=network.target sound.target multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=jubers
+WorkingDirectory=/home/jubers/Documents/voice_assistant
+Environment="PATH=/home/jubers/ENV/test/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PULSE_SERVER=/run/user/1000/pulse/native"
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+
+# Wait for audio devices to be ready
+ExecStartPre=/bin/sleep 5
+
+ExecStart=/home/jubers/ENV/test/bin/python /home/jubers/Documents/voice_assistant/voice_assistant.py
+
+# Restart configuration
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=200
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+
+# Ensure audio devices are available
+SupplementaryGroups=audio
+
+[Install]
+WantedBy=multi-user.target

@@ -25,6 +25,9 @@ from gpio_setup import PixelLEDController
 
 load_dotenv()
 
+# Configuration from environment variables
+MIC_GAIN = float(os.getenv('MIC_GAIN', '2.5'))  # Default 2.5x gain for better sensitivity to normal speech
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 model_dir = os.path.join(current_dir, 'model')
 
@@ -40,6 +43,12 @@ class VoiceAssistantRefactored:
         self.pixel_led = PixelLEDController(led_count=6, brightness=1.0, simulate=False)
         self.audio_processors = AudioProcessors()
         self.audio_processors.set_pixel_led(self.pixel_led)  # Connect LED to audio processor
+        
+        # Set digital gain for MEMS INMP441 microphone (adjust as needed)
+        # Recommended values: 1.5-3.0x for MEMS mics, test with test_microphone_gain.py
+        # Higher gain (2.5x) for better sensitivity to normal speech volumes
+        self.audio_processors.set_digital_gain(MIC_GAIN)
+        print(f"🎤 Microphone digital gain set to {MIC_GAIN}x")
         self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
