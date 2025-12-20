@@ -23,7 +23,7 @@ from langchain.agents import AgentExecutor, create_openai_functions_agent
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.tools import Tool
+from langchain.tools import Tool, StructuredTool
 
 # Import your existing connectors
 from connectors.weather_connector import handle_tool_requests
@@ -504,9 +504,9 @@ class LangChainAgentProcessor:
             func=cancel_reminder_function
         )
     
-    def _create_check_reminders_tool(self) -> Tool:
+    def _create_check_reminders_tool(self) -> StructuredTool:
         """Check for due reminders tool"""
-        def check_reminders_function(query: str) -> str:
+        def check_reminders_function() -> str:
             try:
                 action_data = {"action": "check"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
@@ -514,7 +514,7 @@ class LangChainAgentProcessor:
             except Exception as e:
                 return f"Check reminders error: {str(e)}"
         
-        return Tool(
+        return StructuredTool.from_function(
             name="check_reminders",
             description="Check for any due reminders right now. No input required.",
             func=check_reminders_function

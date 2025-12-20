@@ -2,7 +2,6 @@
 import os
 import platform
 import time
-import sys
 from dotenv import load_dotenv
 import sounddevice as sd
 import speech_recognition as sr
@@ -15,7 +14,7 @@ import threading
 import numpy as np
 from collections import deque
 from contextlib import contextmanager
-
+from openai import OpenAI
 # Load environment variables
 load_dotenv()
 
@@ -146,7 +145,7 @@ class AudioProcessors:
             return "hi"
         return "en"
     
-    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang=None):
+    def speak(self, text, prompt=None, lang=None):
         """
         Threaded TTS function with interruption support and improved Hindi handling
         """
@@ -155,9 +154,7 @@ class AudioProcessors:
             self.stop_speech()
             time.sleep(0.1)  # Brief pause to ensure cleanup
         
-        # Clear the wake word audio buffer to prevent TTS from triggering false detections
-        # This allows interruption (since new audio will refill buffer) but prevents 
-        # the assistant's own voice from causing false positives
+     
         if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
             try:
                 with self._external_buffer_lock:
@@ -177,65 +174,104 @@ class AudioProcessors:
         
         # Improve Hindi voice selection and rate
         if lang == "hi":
-            voice = "hi-IN-AartiNeural"  # Better Hindi voice
-            rate = "+0%"  # Slower rate for better Hindi pronunciation
+            prompt = prompt or "Speak clearly with natural Hindi pronunciation."
         
         # Start new speech thread
         self.speech_thread = threading.Thread(
             target=self._speak_threaded, 
-            args=(text, voice, rate, speed_multiplier, lang)
+            args=(text, prompt)
         )
         self.speech_thread.daemon = True
         self.speech_thread.start()
 
-    def _generate_and_play_simple(self, text, voice, rate, speed_multiplier):
-        """Simple TTS generation and playback with Bluetooth speaker support"""
+        
+    def generate_and_play_gpt_tts(self, text, prompt=None, speech_file_path=None, voice="marin", model="gpt-4o-mini-tts"):
+        """Generate speech with OpenAI GPT TTS and save to `speech_file_path`.
+
+        Returns the path to the generated file on success, or None on failure.
+        """
+        client = OpenAI()
+        start_time = time.time()
+        print(f"Generating audio with GPT TTS (model={model}, voice={voice})")
+        try:
+            # Ensure a path was provided
+            if not speech_file_path:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                speech_file_path = tmp.name
+                tmp.close()
+
+            # Generate TTS with streaming and save to file
+            with client.audio.speech.with_streaming_response.create(
+                model=model,
+                voice=voice,
+                input=text,
+                instructions=prompt if prompt else "Speak as a warm, helpful female assistant with a clear, friendly tone. Use natural pacing, slight smile in your voice, and mild enthusiasm for positive statements. Pause briefly at commas and longer at sentence endings. Keep responses concise and conversational",
+            ) as response:
+                response.stream_to_file(speech_file_path)
+
+            generation_time = time.time() - start_time
+            print(f"Audio generation took: {generation_time:.2f} seconds -> {speech_file_path}")
+            return speech_file_path
+        except Exception as e:
+            print(f"GPT TTS generation error: {e}")
+            return None
+
+
+    def _generate_and_play_simple(self, text, prompt=None):
+        """Generate speech (OpenAI GPT TTS preferred; Edge TTS fallback) and play it."""
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp_file_path = tmp_file.name
         tmp_file.close()
-        
+
         try:
-            # Generate TTS
-            communicate = edge_tts.Communicate(text, voice, rate=rate)
-            asyncio.run(communicate.save(tmp_file_path))
-            
-            # Play audio with better concurrent audio support
+            # Prefer OpenAI GPT TTS when `OPENAI_API_KEY` is available; otherwise use Edge TTS
+            use_gpt = bool(os.getenv('OPENAI_API_KEY'))
+
+            if use_gpt:
+                model = os.getenv('GPT_TTS_MODEL', 'gpt-4o-mini-tts')
+                gen_path = self.generate_and_play_gpt_tts(text, prompt=prompt, speech_file_path=tmp_file_path, model=model)
+                if not gen_path:
+                    raise RuntimeError('GPT TTS generation failed')
+            else:
+                # Edge TTS path (async save)
+                try:
+                    voice_to_use = 'en-IN-AartiNeural'
+                    communicate = edge_tts.Communicate(text, voice_to_use)
+                    asyncio.run(communicate.save(tmp_file_path))
+                except Exception as e:
+                    print(f"Edge TTS generation failed: {e}")
+                    raise
+
+            # Play audio with pygame (with fallback)
             if os.path.exists(tmp_file_path):
                 try:
-                    # Initialize pygame mixer with parameters that work better with other audio apps
                     pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
                     pygame.mixer.init()
-                    
-                    # Wake up Bluetooth speaker with brief silence before actual audio
-                    # This prevents first words from being cut off
                     self._play_bluetooth_wakeup()
-                    
                     pygame.mixer.music.load(tmp_file_path)
-                    pygame.mixer.music.set_volume(0.8)  # Slightly lower volume to avoid conflicts
+                    pygame.mixer.music.set_volume(0.8)
                     pygame.mixer.music.play()
-                    
-                    # Wait for playback to finish
+
                     while pygame.mixer.music.get_busy() and not self.speech_interrupted:
                         time.sleep(0.1)
-                    
-                    # Cleanup
+
                     pygame.mixer.music.stop()
                     pygame.mixer.quit()
-                    
                 except Exception as pygame_error:
                     print(f"Pygame audio failed: {pygame_error}")
-                    # Try alternative method if pygame fails
-                    self._try_alternative_audio_playback(tmp_file_path)
-                
+                    try:
+                        self._try_alternative_audio_playback(tmp_file_path)
+                    except Exception as alt_err:
+                        print(f"Alternative playback failed: {alt_err}")
+
         except Exception as e:
             print(f"TTS error: {e}")
         finally:
-            # Delete temp file
             try:
                 if os.path.exists(tmp_file_path):
-                    time.sleep(0.2)  # Brief wait
+                    time.sleep(0.2)
                     os.unlink(tmp_file_path)
-            except:
+            except Exception:
                 pass
     
     def _play_bluetooth_wakeup(self):
@@ -291,7 +327,7 @@ class AudioProcessors:
             if self.debug_mode:
                 print(f"Bluetooth wakeup sound failed (non-critical): {e}")
     
-    def _speak_threaded(self, text, voice, rate, speed_multiplier, lang):
+    def _speak_threaded(self, text, prompt):
         """Threaded speech function with interruption support and improved Hindi processing"""
         self.is_speaking = True
         self.speech_interrupted = False
@@ -305,21 +341,11 @@ class AudioProcessors:
         
         try:
             # Enhanced voice selection based on language
-            if lang == "hi":
-                # Use better Hindi voices and adjust rate
-                available_hindi_voices = [
-                    "hi-IN-AartiNeural"      # Female, fallback
-                ]
-                voice = available_hindi_voices[0]  # Use the best one
-                rate = "+0%"  # Normal rate for better clarity
-                
-                # Clean up text for better Hindi pronunciation
-                text = self._clean_hindi_text(text)
+           
             
-            print(f"Speaking with Edge TTS ({voice}): {text}")
-            
-            # Call the simplified function directly
-            self._generate_and_play_simple(text, voice, rate, speed_multiplier)
+            print(f"Speaking with TTS {text}")
+            # Call the unified generation/play function
+            self._generate_and_play_simple(text, prompt=prompt)
                 
         except Exception as e:
             print(f"Edge TTS failed: {e}")
