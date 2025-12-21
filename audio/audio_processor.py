@@ -2,7 +2,6 @@
 import os
 import platform
 import time
-import sys
 from dotenv import load_dotenv
 import sounddevice as sd
 import speech_recognition as sr
@@ -15,7 +14,8 @@ import threading
 import numpy as np
 from collections import deque
 from contextlib import contextmanager
-
+from google.cloud import texttospeech
+from google.oauth2 import service_account
 # Load environment variables
 load_dotenv()
 
@@ -49,16 +49,13 @@ class AudioProcessors:
         """Initialize the voice assistant components"""
         print("Initializing Voice Assistant...")
 
-        # Initialize speech recognizer. Do NOT open a Microphone here with a
-        # hardcoded device index — that works on Windows but often fails on
-        # Linux where device indices differ and ALSA will complain. The
-        # SpeechRecognizer class will choose a working device.
         self.recognizer = sr.Recognizer()
         self.microphone = None
         self.audio_channels = 1  # Channel configuration for microphone recording
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
         self.mic_device_id = None   # Will use system default unless configured
         self.mic_gain_factor = 0.8  # Reduce gain for sensitive USB mic
+        self.digital_gain = 2.0     # Digital gain multiplier for MEMS mics (1.0 = no gain, 2.0 = double)
 
         # Audio processing
         self.sample_rate = 22050
@@ -69,6 +66,11 @@ class AudioProcessors:
         self.is_speaking = False
         self.speech_interrupted = False
         self.speech_thread = None
+        self.pixel_led = None  # Will be set by voice assistant if available
+    
+    def set_pixel_led(self, pixel_led):
+        """Set pixel LED controller for visual feedback during speech"""
+        self.pixel_led = pixel_led
     
     def set_audio_buffer(self, buffer, buffer_lock):
         """Set external audio buffer for the callback to use
@@ -109,6 +111,18 @@ class AudioProcessors:
             
             print("Recording complete.")
             audio_flat = audio.flatten()
+            
+            # Apply digital gain for MEMS microphones
+            if self.digital_gain != 1.0:
+                audio_flat = audio_flat * self.digital_gain
+                # Prevent clipping by normalizing if needed
+                max_val = np.max(np.abs(audio_flat))
+                if max_val > 1.0:
+                    audio_flat = audio_flat / max_val
+                    print(f"Applied digital gain {self.digital_gain}x (normalized to prevent clipping)")
+                else:
+                    print(f"Applied digital gain {self.digital_gain}x")
+            
             if save_path:
                 sf.write(save_path, audio_flat, sample_rate)
                 print(f"Audio saved to {save_path}")
@@ -128,7 +142,7 @@ class AudioProcessors:
             return "hi"
         return "en"
     
-    def speak(self, text, voice="en-IN-AartiNeural", rate="+10%", speed_multiplier=1.0, lang=None):
+    def speak(self, text, prompt=None, lang=None):
         """
         Threaded TTS function with interruption support and improved Hindi handling
         """
@@ -137,9 +151,7 @@ class AudioProcessors:
             self.stop_speech()
             time.sleep(0.1)  # Brief pause to ensure cleanup
         
-        # Clear the wake word audio buffer to prevent TTS from triggering false detections
-        # This allows interruption (since new audio will refill buffer) but prevents 
-        # the assistant's own voice from causing false positives
+     
         if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
             try:
                 with self._external_buffer_lock:
@@ -159,65 +171,127 @@ class AudioProcessors:
         
         # Improve Hindi voice selection and rate
         if lang == "hi":
-            voice = "hi-IN-AartiNeural"  # Better Hindi voice
-            rate = "+0%"  # Slower rate for better Hindi pronunciation
+            prompt = prompt or "Speak clearly with natural Hindi pronunciation."
         
         # Start new speech thread
         self.speech_thread = threading.Thread(
             target=self._speak_threaded, 
-            args=(text, voice, rate, speed_multiplier, lang)
+            args=(text, prompt, lang)
         )
         self.speech_thread.daemon = True
         self.speech_thread.start()
 
-    def _generate_and_play_simple(self, text, voice, rate, speed_multiplier):
-        """Simple TTS generation and playback with Bluetooth speaker support"""
+        
+    def generate_and_play_google_tts(self, text, speech_file_path=None, lang="en"):
+        """Generate speech with Google Cloud TTS and save to `speech_file_path`.
+
+        Returns the path to the generated file on success, or None on failure.
+        """
+        start_time = time.time()
+        
+        # Select voice based on language
+        if lang == "hi":
+            language_code = "hi-IN"
+            voice_name = "hi-IN-Chirp3-HD-Zephyr"
+            speaking_rate = 0.90
+        else:
+            language_code = "en-IN"
+            voice_name = "en-IN-Chirp3-HD-Zephyr"
+            speaking_rate = 0.90
+        
+        print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
+        try:
+            # Ensure a path was provided
+            if not speech_file_path:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                speech_file_path = tmp.name
+                tmp.close()
+
+            # Load credentials from service account file
+            creds = service_account.Credentials.from_service_account_file(
+                "nimble-gate-366207-d1ca63590ec3.json"
+            )
+            
+            # Create client
+            client = texttospeech.TextToSpeechClient(credentials=creds)
+            
+            # Generate TTS
+            response = client.synthesize_speech(
+                input=texttospeech.SynthesisInput(text=text),
+                voice=texttospeech.VoiceSelectionParams(
+                    language_code=language_code,
+                    name=voice_name,
+                ),
+                audio_config=texttospeech.AudioConfig(
+                    audio_encoding=texttospeech.AudioEncoding.MP3,
+                    speaking_rate=speaking_rate,
+                )
+            )
+            
+            # Save to file
+            with open(speech_file_path, 'wb') as out:
+                out.write(response.audio_content)
+
+            generation_time = time.time() - start_time
+            print(f"Audio generation took: {generation_time:.2f} seconds -> {speech_file_path}")
+            return speech_file_path
+        except Exception as e:
+            print(f"Google TTS generation error: {e}")
+            return None
+
+
+    def _generate_and_play_simple(self, text, prompt=None, lang="en"):
+        """Generate speech (Google Cloud TTS preferred; Edge TTS fallback) and play it."""
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp_file_path = tmp_file.name
         tmp_file.close()
-        
+
         try:
-            # Generate TTS
-            communicate = edge_tts.Communicate(text, voice, rate=rate)
-            asyncio.run(communicate.save(tmp_file_path))
-            
-            # Play audio with better concurrent audio support
+            # Try Google Cloud TTS first
+            try:
+                gen_path = self.generate_and_play_google_tts(text, speech_file_path=tmp_file_path, lang=lang)
+                if not gen_path:
+                    raise RuntimeError('Google TTS generation failed')
+            except Exception as google_error:
+                print(f"Google TTS failed, falling back to Edge TTS: {google_error}")
+                # Edge TTS fallback with language support
+                if lang == "hi":
+                    voice_to_use = 'hi-IN-SwaraNeural'
+                else:
+                    voice_to_use = 'en-IN-AartiNeural'
+                communicate = edge_tts.Communicate(text, voice_to_use)
+                asyncio.run(communicate.save(tmp_file_path))
+
+            # Play audio with pygame (with fallback)
             if os.path.exists(tmp_file_path):
                 try:
-                    # Initialize pygame mixer with parameters that work better with other audio apps
                     pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
                     pygame.mixer.init()
-                    
-                    # Wake up Bluetooth speaker with brief silence before actual audio
-                    # This prevents first words from being cut off
                     self._play_bluetooth_wakeup()
-                    
                     pygame.mixer.music.load(tmp_file_path)
-                    pygame.mixer.music.set_volume(0.8)  # Slightly lower volume to avoid conflicts
+                    pygame.mixer.music.set_volume(0.8)
                     pygame.mixer.music.play()
-                    
-                    # Wait for playback to finish
+
                     while pygame.mixer.music.get_busy() and not self.speech_interrupted:
                         time.sleep(0.1)
-                    
-                    # Cleanup
+
                     pygame.mixer.music.stop()
                     pygame.mixer.quit()
-                    
                 except Exception as pygame_error:
                     print(f"Pygame audio failed: {pygame_error}")
-                    # Try alternative method if pygame fails
-                    self._try_alternative_audio_playback(tmp_file_path)
-                
+                    try:
+                        self._try_alternative_audio_playback(tmp_file_path)
+                    except Exception as alt_err:
+                        print(f"Alternative playback failed: {alt_err}")
+
         except Exception as e:
             print(f"TTS error: {e}")
         finally:
-            # Delete temp file
             try:
                 if os.path.exists(tmp_file_path):
-                    time.sleep(0.2)  # Brief wait
+                    time.sleep(0.2)
                     os.unlink(tmp_file_path)
-            except:
+            except Exception:
                 pass
     
     def _play_bluetooth_wakeup(self):
@@ -273,33 +347,33 @@ class AudioProcessors:
             if self.debug_mode:
                 print(f"Bluetooth wakeup sound failed (non-critical): {e}")
     
-    def _speak_threaded(self, text, voice, rate, speed_multiplier, lang):
+    def _speak_threaded(self, text, prompt, lang="en"):
         """Threaded speech function with interruption support and improved Hindi processing"""
         self.is_speaking = True
         self.speech_interrupted = False
         
+        # Set LED to green when starting to speak
+        if self.pixel_led:
+            print("[DEBUG] Setting LED to GREEN (speaking)")
+            self.pixel_led.set_speaking()
+        else:
+            print("[DEBUG] pixel_led is None - LED not available")
+        
         try:
-            # Enhanced voice selection based on language
-            if lang == "hi":
-                # Use better Hindi voices and adjust rate
-                available_hindi_voices = [
-                    "hi-IN-AartiNeural"      # Female, fallback
-                ]
-                voice = available_hindi_voices[0]  # Use the best one
-                rate = "+0%"  # Normal rate for better clarity
-                
-                # Clean up text for better Hindi pronunciation
-                text = self._clean_hindi_text(text)
-            
-            print(f"Speaking with Edge TTS ({voice}): {text}")
-            
-            # Call the simplified function directly
-            self._generate_and_play_simple(text, voice, rate, speed_multiplier)
+            print(f"Speaking with TTS (lang={lang}): {text}")
+            # Call the unified generation/play function with language
+            self._generate_and_play_simple(text, prompt=prompt, lang=lang)
                 
         except Exception as e:
             print(f"Edge TTS failed: {e}")
         finally:
             self.is_speaking = False
+            # Turn off LED when done speaking
+            if self.pixel_led:
+                print("[DEBUG] Turning LED OFF (finished speaking)")
+                self.pixel_led.off()
+            else:
+                print("[DEBUG] pixel_led is None - LED not available")
     
     def _clean_hindi_text(self, text):
         """Clean and prepare Hindi text for better TTS pronunciation"""
@@ -377,6 +451,15 @@ class AudioProcessors:
         print(f"Pausing listening for {seconds} seconds...")
         time.sleep(seconds)
     
+    def set_digital_gain(self, gain_value):
+        """Set digital gain for MEMS microphone
+        
+        Args:
+            gain_value (float): Gain multiplier (1.0 = no gain, 2.0 = double volume, 0.5 = half volume)
+        """
+        self.digital_gain = max(0.1, min(10.0, gain_value))  # Clamp between 0.1x and 10x
+        print(f"Digital gain set to {self.digital_gain}x")
+    
     def check_microphones(self):
         """Check available microphones and their indices"""
         print("\nAvailable microphones:")
@@ -400,6 +483,7 @@ class AudioProcessors:
                 print(f"Testing microphone {mic_kwargs.get('device_index', 'default')}...")
                 recognizer.adjust_for_ambient_noise(source, duration=1)
                 print(f"Energy threshold: {recognizer.energy_threshold}")
+                print(f"Current digital gain: {self.digital_gain}x")
                 print("Microphone is working!")
         except Exception as e:
             print(f"Error with current microphone: {e}")
@@ -452,10 +536,20 @@ class AudioProcessors:
             return
 
         try:
-            audio_samples = indata[:, 0]
+            # Average both stereo channels for better audio quality
+            if indata.ndim > 1 and indata.shape[1] == 2:
+                audio_samples = np.mean(indata, axis=1)
+            else:
+                audio_samples = indata[:, 0]
         except Exception:
             # Fallback if audio is already 1-D
             audio_samples = indata.flatten()
+        
+        # Apply digital gain for MEMS microphones
+        if hasattr(self, 'digital_gain') and self.digital_gain != 1.0:
+            audio_samples = audio_samples * self.digital_gain
+            # Prevent clipping
+            audio_samples = np.clip(audio_samples, -1.0, 1.0)
 
         # Store in the VoiceAssistant's buffer (if available)
         if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
