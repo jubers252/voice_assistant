@@ -26,14 +26,14 @@ class AIResponseHandler:
             # For tool responses, create a temporary conversation with the tool data
             if is_tool_response:
                 temp_messages = self.conversation_history.copy()
-                temp_messages.append({"role": "user", "content": f"Please summarize this information for the user in a natural, conversational way. Always respond in same language as user query. For Hindi queries, use proper Hindi Devanagari script (not Roman transliteration) for better text-to-speech pronunciation. Do not add any special characters in response, make it plain text with new line if required since response will be used for TTS: {user_message}"})
+                temp_messages.append({"role": "user", "content": f"Please summarize this information for the user in a natural, conversational way. Always respond in same language as user query. For Hindi queries, use proper Hindi Devanagari script (not Roman transliteration) for better text-to-speech pronunciation. Keep numbers in English digits (1, 2, 100) not Hindi words for clear TTS. Do not add any special characters in response, make it plain text with new line if required since response will be used for TTS: {user_message}"})
                 messages_to_send = temp_messages
             else:
                 # For regular conversation, add user message to history
                 self.conversation_history.append({"role": "user", "content": user_message})
                 # Add comprehensive TTS and language formatting instruction with context awareness
                 temp_messages = self.conversation_history.copy()
-                temp_messages.append({"role": "system", "content": "IMPORTANT RESPONSE GUIDELINES: 1) Use the conversation history to understand context and provide relevant answers to follow-up questions. 2) If the user refers to 'this', 'that', 'it', or asks follow-up questions, reference the previous conversation. 3) Respond in the same language as the user's query. 4) For Hindi queries, use proper Hindi Devanagari script (not Roman transliteration) for better text-to-speech pronunciation. 5) Use plain text only - no special characters, markdown, asterisks, or formatting. 6) Use simple punctuation only. 7) Keep responses concise and conversational for voice output. 8) This response will be converted to speech, so ensure it sounds natural when spoken aloud."})
+                temp_messages.append({"role": "system", "content": "IMPORTANT RESPONSE GUIDELINES: 1) Use the conversation history to understand context and provide relevant answers to follow-up questions. 2) If the user refers to 'this', 'that', 'it', or asks follow-up questions, reference the previous conversation. 3) Respond in the same language as the user's query. 4) For Hindi queries, use proper Hindi Devanagari script (not Roman transliteration) for better text-to-speech pronunciation. 5) Keep numbers in English digits (1, 2, 100) not Hindi words for clear TTS. 6) Use plain text only - no special characters, markdown, asterisks, or formatting. 7) Use simple punctuation only. 8) Keep responses concise and conversational for voice output. 9) This response will be converted to speech, so ensure it sounds natural when spoken aloud."})
                 messages_to_send = temp_messages
             
             response = client.chat.completions.create(

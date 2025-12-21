@@ -20,8 +20,13 @@ from connectors.reminder_manager import ReminderManager
 from handlers.wake_word_manager import WakeWordManager
 # from handlers.command_processor import CommandProcessor  # Replaced by LangChain processor
 from handlers.langchain_command_processor import LangChainAgentProcessor
+from gpio_setup import PixelLEDController
+
 
 load_dotenv()
+
+# Configuration from environment variables
+MIC_GAIN = float(os.getenv('MIC_GAIN', '2.5'))  # Default 2.5x gain for better sensitivity to normal speech
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 model_dir = os.path.join(current_dir, 'model')
@@ -35,8 +40,16 @@ class VoiceAssistantRefactored:
         print("Initializing Voice Assistant...")
         
         # Core components
+        self.pixel_led = PixelLEDController(led_count=6, brightness=1.0, simulate=False)
         self.audio_processors = AudioProcessors()
-        self.recognizer = SpeechRecognizer(self.audio_processors)
+        self.audio_processors.set_pixel_led(self.pixel_led)  # Connect LED to audio processor
+        
+        # Set digital gain for MEMS INMP441 microphone (adjust as needed)
+        # Recommended values: 1.5-3.0x for MEMS mics, test with test_microphone_gain.py
+        # Higher gain (2.5x) for better sensitivity to normal speech volumes
+        self.audio_processors.set_digital_gain(MIC_GAIN)
+        print(f"🎤 Microphone digital gain set to {MIC_GAIN}x")
+        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 
@@ -68,7 +81,8 @@ class VoiceAssistantRefactored:
         self.wake_word_manager = WakeWordManager(
             wake_word_detector=self.wake_word_detector,
             audio_processors=self.audio_processors,
-            recognizer=self.recognizer
+            recognizer=self.recognizer,
+            pixel_led=self.pixel_led
         )
         
         # Command processor
@@ -84,7 +98,8 @@ class VoiceAssistantRefactored:
         self.command_processor = LangChainAgentProcessor(
             conversation_history=self.conversation_history,
             audio_processors=self.audio_processors,
-            conversation_manager=self.conversation_manager
+            conversation_manager=self.conversation_manager,
+            pixel_led=self.pixel_led
         )
 
 
@@ -92,6 +107,9 @@ class VoiceAssistantRefactored:
     def run(self):
         """Main loop to run the voice assistant"""
         print("Listening for wake word...")
+        
+        # Set LED to off during idle/listening for wake word
+        self.pixel_led.off()
         
         # Setup audio buffer through wake word manager
         audio_buffer, buffer_lock = self.wake_word_manager.setup_audio_buffer()
@@ -141,12 +159,15 @@ class VoiceAssistantRefactored:
                     
         except KeyboardInterrupt:
             print("\nProgram stopped by user")
+            self.pixel_led.off()
             self.wake_word_manager.stop_detection()
         except Exception as e:
             print(f"Error in main loop: {e}")
+            self.pixel_led.off()
             self.wake_word_manager.stop_detection()
         finally:
             print("Voice assistant shutting down...")
+            self.pixel_led.off()
           
 
 
