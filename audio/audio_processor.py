@@ -67,6 +67,16 @@ class AudioProcessors:
         self.mic_gain_factor = 0.8  # Reduce gain for sensitive USB mic
         self.digital_gain = 2.0     # Digital gain multiplier for MEMS mics (1.0 = no gain, 2.0 = double)
 
+        # Automatic Gain Control (AGC) settings
+        self.agc_enabled = False  # Enable/disable AGC
+        self.agc_target_level = 0.3  # Target RMS level (30% of max)
+        self.agc_min_gain = 1.0  # Minimum gain
+        self.agc_max_gain = 4.0  # Maximum gain
+        self.agc_attack = 0.1  # How fast gain increases (0-1)
+        self.agc_release = 0.05  # How fast gain decreases (0-1)
+        self.agc_sample_count = 0
+        self.agc_rms_history = []
+
         # Audio processing
         self.sample_rate = 22050
         self.duration = 1.5
@@ -82,6 +92,25 @@ class AudioProcessors:
         """Set pixel LED controller for visual feedback during speech"""
         self.pixel_led = pixel_led
     
+    def enable_agc(self, target_level=0.3, min_gain=1.0, max_gain=4.0):
+        """Enable automatic gain control
+        
+        Args:
+            target_level: Target RMS level (0.1-0.5 recommended)
+            min_gain: Minimum gain multiplier
+            max_gain: Maximum gain multiplier
+        """
+        self.agc_enabled = True
+        self.agc_target_level = target_level
+        self.agc_min_gain = min_gain
+        self.agc_max_gain = max_gain
+        print(f"🎚️ AGC enabled: target={target_level}, gain range={min_gain}-{max_gain}x")
+    
+    def disable_agc(self):
+        """Disable automatic gain control"""
+        self.agc_enabled = False
+        print("🎚️ AGC disabled")
+    
     def set_audio_buffer(self, buffer, buffer_lock):
         """Set external audio buffer for the callback to use
         
@@ -92,6 +121,60 @@ class AudioProcessors:
         self._external_buffer = buffer
         self._external_buffer_lock = buffer_lock
         print(f"External audio buffer configured with capacity: {buffer.maxlen}")
+    
+    def _apply_agc(self, audio_data):
+        """Apply automatic gain control to audio data
+        
+        Args:
+            audio_data: Numpy array of audio samples
+            
+        Returns:
+            Gain-adjusted audio data
+        """
+        if not self.agc_enabled:
+            return audio_data
+        
+        # Calculate RMS level of current audio
+        rms = np.sqrt(np.mean(audio_data ** 2))
+        
+        # Store RMS history (keep last 10 samples)
+        self.agc_rms_history.append(rms)
+        if len(self.agc_rms_history) > 10:
+            self.agc_rms_history.pop(0)
+        
+        # Use average RMS for smoother adjustment
+        avg_rms = np.mean(self.agc_rms_history)
+        
+        # Calculate desired gain
+        if avg_rms > 0.001:  # Avoid division by zero
+            desired_gain = self.agc_target_level / avg_rms
+            # Clamp to min/max
+            desired_gain = np.clip(desired_gain, self.agc_min_gain, self.agc_max_gain)
+            
+            # Smooth gain changes (attack/release)
+            if desired_gain > self.digital_gain:
+                # Increasing gain (attack)
+                new_gain = self.digital_gain + (desired_gain - self.digital_gain) * self.agc_attack
+            else:
+                # Decreasing gain (release)
+                new_gain = self.digital_gain + (desired_gain - self.digital_gain) * self.agc_release
+            
+            self.digital_gain = new_gain
+            
+            # Print debug info every 100 samples
+            self.agc_sample_count += 1
+            if self.agc_sample_count % 100 == 0 and self.debug_mode:
+                print(f"🎚️ AGC: RMS={avg_rms:.3f}, Gain={self.digital_gain:.2f}x")
+        
+        # Apply gain
+        adjusted = audio_data * self.digital_gain
+        
+        # Prevent clipping
+        max_val = np.max(np.abs(adjusted))
+        if max_val > 1.0:
+            adjusted = adjusted / max_val
+        
+        return adjusted
     
 
     # Function to record audio (from test_cnn_model.py)
@@ -122,8 +205,11 @@ class AudioProcessors:
             print("Recording complete.")
             audio_flat = audio.flatten()
             
-            # Apply digital gain for MEMS microphones
-            if self.digital_gain != 1.0:
+            # Apply AGC or fixed digital gain
+            if self.agc_enabled:
+                audio_flat = self._apply_agc(audio_flat)
+                print(f"Applied AGC (current gain: {self.digital_gain:.2f}x)")
+            elif self.digital_gain != 1.0:
                 audio_flat = audio_flat * self.digital_gain
                 # Prevent clipping by normalizing if needed
                 max_val = np.max(np.abs(audio_flat))
@@ -210,8 +296,8 @@ class AudioProcessors:
             speaking_rate = 0.90
         else:
             language_code = "en-IN"
-            voice_name = "en-IN-Chirp3-HD-Zephyr"
-            speaking_rate = 0.90
+            voice_name = "en-IN-Chirp3-HD-Achernar"
+            speaking_rate = 0.95
         
         print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
         try:

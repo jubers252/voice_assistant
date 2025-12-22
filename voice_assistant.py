@@ -44,11 +44,23 @@ class VoiceAssistantRefactored:
         self.audio_processors = AudioProcessors()
         self.audio_processors.set_pixel_led(self.pixel_led)  # Connect LED to audio processor
         
-        # Set digital gain for MEMS INMP441 microphone (adjust as needed)
-        # Recommended values: 1.5-3.0x for MEMS mics, test with test_microphone_gain.py
-        # Higher gain (2.5x) for better sensitivity to normal speech volumes
-        self.audio_processors.set_digital_gain(MIC_GAIN)
-        print(f"🎤 Microphone digital gain set to {MIC_GAIN}x")
+        # Choose gain control mode
+        USE_AGC = os.environ.get('USE_AGC', 'false').lower() == 'true'
+        
+        if USE_AGC:
+            # Enable automatic gain control (AGC)
+            # AGC automatically adjusts gain based on audio levels
+            self.audio_processors.enable_agc(
+                target_level=0.3,  # Target 30% audio level
+                min_gain=1.5,      # Minimum gain
+                max_gain=4.0       # Maximum gain
+            )
+        else:
+            # Use fixed digital gain for MEMS INMP441 microphone
+            # Recommended values: 1.5-3.0x for MEMS mics
+            self.audio_processors.set_digital_gain(MIC_GAIN)
+            print(f"🎤 Microphone digital gain set to {MIC_GAIN}x")
+        
         self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history

@@ -47,9 +47,9 @@ class SpeechRecognizer:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
         self.recognizer.dynamic_energy_ratio = 1.5  # Increased for better noise rejection
-        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
+        self.recognizer.pause_threshold = 2.0  # 2 seconds of silence before stopping (was 1.5)
         self.recognizer.phrase_threshold = 0.5  # Minimum 500ms to avoid noise triggers
-        self.recognizer.non_speaking_duration = 1.0  # Max 1 second pause mid-phrase
+        self.recognizer.non_speaking_duration = 1.5  # Max 1.5 second pause mid-phrase (was 1.0)
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -123,7 +123,7 @@ class SpeechRecognizer:
                                 continue
 
                             t_listen_start = timing_module.time()
-                            audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=12)
+                            audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=15)
                             t_listen_end = timing_module.time()
                             print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
 
