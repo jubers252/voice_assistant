@@ -42,14 +42,14 @@ class SpeechRecognizer:
             self.device_index = None
 
     def _setup_recognizer(self):
-        # INMP441 is very sensitive - use lower thresholds
-        self.recognizer.energy_threshold = 150  # Much lower for sensitive INMP441 (was 400)
+        # INMP441 is very sensitive - use balanced thresholds
+        self.recognizer.energy_threshold = 100  # Balanced for sensitive INMP441
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
-        self.recognizer.dynamic_energy_ratio = 1.5
-        self.recognizer.pause_threshold = 1.2  # Wait 1.2 seconds of silence before stopping
-        self.recognizer.phrase_threshold = 0.3  # Lower threshold
-        self.recognizer.non_speaking_duration = 1.0  # Allow 1 second of non-speaking
+        self.recognizer.dynamic_energy_ratio = 1.5  # Increased for better noise rejection
+        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
+        self.recognizer.phrase_threshold = 0.5  # Minimum 500ms to avoid noise triggers
+        self.recognizer.non_speaking_duration = 1.0  # Max 1 second pause mid-phrase
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -79,44 +79,70 @@ class SpeechRecognizer:
                     if self.device_index is not None:
                         mic_kwargs['device_index'] = self.device_index
                     
-                    # Suppress ALSA errors when opening microphone
+                    # Suppress ALSA warnings only during microphone object creation
+                    # ALSA prints warnings at C library level which we can't fully suppress
                     with suppress_alsa_errors():
-                        microphone = sr.Microphone(**mic_kwargs)
+                        try:
+                            microphone = sr.Microphone(**mic_kwargs)
+                        except OSError as e:
+                            # Failed to find/open microphone device
+                            raise Exception(f"Cannot open microphone device: {e}")
                     
-                    with microphone as source:
-                        t_mic_open = timing_module.time()
-                        print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
-                        
-                        # Adjust for ambient noise on first attempt to calibrate INMP441
-                        if retry_count == 0:
-                            print("Calibrating for ambient noise...")
-                            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                            print(f"Energy threshold adjusted to: {self.recognizer.energy_threshold}")
-                        
-                        self._print_attempt(retry_count, is_follow_up)
-                        print("i m listening...")
-                        listen_timeout = timeout if retry_count == 0 else timeout + 3
+                    # Open microphone stream (also with ALSA suppression)
+                    with suppress_alsa_errors():
+                        with microphone as source:
+                            t_mic_open = timing_module.time()
+                            print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
+                            
+                            # Quick ambient noise check (reduced from 0.5s to 0.2s)
+                            # Dynamic threshold handles ongoing adjustment, this is just initial baseline
+                            if retry_count == 0 and not hasattr(self, '_calibrated_once'):
+                                print("Quick ambient calibration...")
+                                t_cal_start = timing_module.time()
+                                # Store original threshold
+                                original_threshold = self.recognizer.energy_threshold
+                                self.recognizer.adjust_for_ambient_noise(source, duration=0.15)
+                                t_cal_end = timing_module.time()
+                                
+                                # Don't let calibration set threshold too high - cap it
+                                if self.recognizer.energy_threshold > original_threshold * 2:
+                                    print(f"Calibration too aggressive ({self.recognizer.energy_threshold:.0f}), capping at {original_threshold * 1.5:.0f}")
+                                    self.recognizer.energy_threshold = original_threshold * 1.5
+                                
+                                print(f"Energy threshold: {self.recognizer.energy_threshold:.0f} (calibration took {(t_cal_end - t_cal_start)*1000:.0f}ms)")
+                                self._calibrated_once = True  # Only calibrate once per session
+                            
+                            self._print_attempt(retry_count, is_follow_up)
+                            print("i m listening...")
+                            listen_timeout = timeout if retry_count == 0 else timeout + 3
 
-                        # Ensure recognizer exists
-                        if not self.recognizer:
-                            print("[ASSISTANT] Speech recognizer not initialized")
-                            retry_count += 1
-                            continue
+                            # Ensure recognizer exists
+                            if not self.recognizer:
+                                print("[ASSISTANT] Speech recognizer not initialized")
+                                retry_count += 1
+                                continue
 
-                        t_listen_start = timing_module.time()
-                        audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=12)
-                        t_listen_end = timing_module.time()
-                        print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
+                            t_listen_start = timing_module.time()
+                            audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=12)
+                            t_listen_end = timing_module.time()
+                            print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
 
                 except Exception as mic_open_error:
-                    self.pixel_led.off()
-                    # Try to recover by choosing a different device index once
-                    print(f"[ASSISTANT] Microphone open failed: {mic_open_error}")
-                    if self._choose_device_index(force_search=True):
-                        print(f"[ASSISTANT] Retrying with device_index={self.device_index}")
+                    if self.pixel_led:
+                        self.pixel_led.off()
+                    
+                    error_msg = str(mic_open_error) if str(mic_open_error) else "Unknown error"
+                    print(f"[ASSISTANT] Microphone open failed: {error_msg}")
+                    
+                    # On first retry, try to find a working device
+                    if retry_count == 0:
+                        print("[ASSISTANT] Searching for working microphone device...")
+                        if self._choose_device_index(force_search=True):
+                            print(f"[ASSISTANT] Found device, retrying with device_index={self.device_index}")
                         retry_count += 1
                         continue
                     else:
+                        print("[ASSISTANT] Microphone still unavailable, skipping retry")
                         retry_count += 1
                         continue
 
@@ -182,10 +208,14 @@ class SpeechRecognizer:
             return []
 
     def _choose_device_index(self, force_search=False):
-        """Choose a working device index.
+        """Choose a working device index with priority for known good devices.
 
-        If self.device_index is already set and valid, keep it. Otherwise try
-        to find a suitable index. Returns True if a device was selected.
+        Priority order:
+        1. Google VoiceHAT (device 1)
+        2. USB microphone (device 2)
+        3. Test all other devices
+        
+        Returns True if a device was selected.
         """
         names = self.list_available_microphones()
         if not names:
@@ -198,22 +228,44 @@ class SpeechRecognizer:
             if 0 <= self.device_index < len(names):
                 return True
 
-        # Prefer default (None) so speech_recognition uses the system default
+        # Prefer default (None) if not forcing a search
         if not force_search:
             self.device_index = None
             return True
 
-        # Force search: try indices 0..len(names)-1 and test opening
+        # Force search: try preferred devices first
+        preferred_devices = [1, 2]  # Google VoiceHAT, then USB mic
+        print(f"[MIC] Available devices: {len(names)}")
+        
+        # Try preferred devices first
+        for idx in preferred_devices:
+            if idx < len(names):
+                try:
+                    print(f"[MIC] Testing device {idx}: {names[idx]}")
+                    with suppress_alsa_errors():
+                        with sr.Microphone(device_index=idx) as _:
+                            self.device_index = idx
+                            print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
+                            return True
+                except Exception as e:
+                    print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}")
+                    continue
+
+        # Try all other devices
         for idx in range(len(names)):
+            if idx in preferred_devices:
+                continue  # Already tested
             try:
-                # Try opening briefly to validate - suppress ALSA errors
+                print(f"[MIC] Testing device {idx}: {names[idx]}")
                 with suppress_alsa_errors():
                     with sr.Microphone(device_index=idx) as _:
                         self.device_index = idx
+                        print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
                         return True
             except Exception:
                 continue
 
-        # Last resort - use None
+        # Last resort - use None (system default)
+        print("[MIC] No working device found, using system default")
         self.device_index = None
         return False

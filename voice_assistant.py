@@ -26,7 +26,7 @@ from gpio_setup import PixelLEDController
 load_dotenv()
 
 # Configuration from environment variables
-MIC_GAIN = float(os.getenv('MIC_GAIN', '2.5'))  # Default 2.5x gain for better sensitivity to normal speech
+MIC_GAIN = float(os.environ.get('MIC_GAIN', '2.5'))  # Default 2.5x gain for better sensitivity to normal speech
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 model_dir = os.path.join(current_dir, 'model')
@@ -58,7 +58,7 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
         # Wake word detector
-        ww_model_path = f"{model_dir}/WWD_improved_best.h5"
+        ww_model_path = f"{model_dir}/WWD_improved_mems_v2.h5"
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         

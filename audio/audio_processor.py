@@ -16,6 +16,16 @@ from collections import deque
 from contextlib import contextmanager
 from google.cloud import texttospeech
 from google.oauth2 import service_account
+from langdetect import detect
+# For Hindi transliteration
+try:
+    from indic_transliteration import sanscript
+    from indic_transliteration.sanscript import transliterate
+    TRANSLITERATION_AVAILABLE = True
+except ImportError:
+    print("Warning: indic-transliteration not installed. Hindi transliteration disabled.")
+    TRANSLITERATION_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -132,15 +142,20 @@ class AudioProcessors:
             return None
         
 
-    def detect_language(self, text):
-        """Detect if text is in Hindi or English"""
-        import re
+    def transliterate_to_devanagari(self, text):
+        """Convert romanized Hindi text to Devanagari script"""
+        if not TRANSLITERATION_AVAILABLE:
+            print("Transliteration unavailable - returning original text")
+            return text
         
-        # Check for Hindi (Devanagari) characters
-        hindi_pattern = r'[\u0900-\u097F]'
-        if re.search(hindi_pattern, text):
-            return "hi"
-        return "en"
+        try:
+            # Transliterate from ITRANS (common romanization) to Devanagari
+            devanagari_text = transliterate(text, sanscript.ITRANS, sanscript.DEVANAGARI)
+            print(f"Transliterated: '{text}' -> '{devanagari_text}'")
+            return devanagari_text
+        except Exception as e:
+            print(f"Transliteration error: {e}, returning original text")
+            return text
     
     def speak(self, text, prompt=None, lang=None):
         """
@@ -165,14 +180,13 @@ class AudioProcessors:
         # Reset interruption flag
         self.speech_interrupted = False
         
-        # Auto-detect language if not specified
-        if lang is None:
-            lang = self.detect_language(text)
-        
-        # Improve Hindi voice selection and rate
-        if lang == "hi":
-            prompt = prompt or "Speak clearly with natural Hindi pronunciation."
-        
+        lang = detect(text)
+        if lang != "hi" :
+            is_hindi = self.detect_hindi_by_keywords(text)
+            if is_hindi:
+                text = self.transliterate_to_devanagari(text)
+                
+        print(f"Final TTS text (lang={lang}): {text}")
         # Start new speech thread
         self.speech_thread = threading.Thread(
             target=self._speak_threaded, 
@@ -192,7 +206,7 @@ class AudioProcessors:
         # Select voice based on language
         if lang == "hi":
             language_code = "hi-IN"
-            voice_name = "hi-IN-Chirp3-HD-Zephyr"
+            voice_name = "hi-IN-Chirp3-HD-Achernar"
             speaking_rate = 0.90
         else:
             language_code = "en-IN"
@@ -279,10 +293,7 @@ class AudioProcessors:
                     pygame.mixer.quit()
                 except Exception as pygame_error:
                     print(f"Pygame audio failed: {pygame_error}")
-                    try:
-                        self._try_alternative_audio_playback(tmp_file_path)
-                    except Exception as alt_err:
-                        print(f"Alternative playback failed: {alt_err}")
+                  
 
         except Exception as e:
             print(f"TTS error: {e}")
@@ -412,26 +423,6 @@ class AudioProcessors:
             time.sleep(0.1)
         return not self.is_speaking  # Returns True if speech completed, False if timeout
     
-    def _try_alternative_audio_playback(self, tmp_file_path):
-        """Alternative audio playback method when pygame fails"""
-        try:
-            # Try using Windows' built-in audio player
-            if platform.system() == "Windows":
-                import subprocess
-                subprocess.run([
-                    'powershell', '-c', 
-                    f'Add-Type -AssemblyName presentationCore; '
-                    f'$mediaPlayer = New-Object system.windows.media.mediaplayer; '
-                    f'$mediaPlayer.open([uri]"{tmp_file_path}"); '
-                    f'$mediaPlayer.Play(); '
-                    f'Start-Sleep -Seconds 3'
-                ], capture_output=True, timeout=10)
-            else:
-                # For other platforms, try system commands
-                subprocess.run(['play', tmp_file_path], capture_output=True, timeout=10)
-        except Exception as alt_error:
-            print(f"Alternative audio playback also failed: {alt_error}")
-            self._system_beep()  # Final fallback
     
     def _system_beep(self):
         """Generate a system beep as fallback"""
@@ -561,3 +552,53 @@ class AudioProcessors:
                     print(f"Error appending to external audio buffer: {e}")
         elif self.debug_mode:
             print("No external buffer configured for audio callback")
+
+        
+    # Comprehensive list of romanized Hindi words
+   
+
+    def detect_hindi_by_keywords(self, text):
+        """Simple and reliable: detect Hindi by counting Hindi words"""
+        self.HINDI_WORDS = {
+        # Pronouns
+        'main', 'mein', 'hum', 'aap', 'tum', 'tu', 'yeh', 'ye', 'woh', 'wo', 
+        'mera', 'meri', 'mere', 'tera', 'teri', 'tere', 'uska', 'uski', 'uske',
+        'hamara', 'hamari', 'hamare', 'tumhara', 'tumhari', 'tumhare',
+        
+        # Verbs
+        'hai', 'hain', 'ho', 'tha', 'thi', 'the', 'hoga', 'hogi', 'honge',
+        'karna', 'karo', 'kar', 'kiya', 'kiye', 'karta', 'karti', 'karte',
+        'jaana', 'jao', 'gaya', 'gayi', 'gaye', 'aana', 'aao', 'aaya', 'aayi',
+        'rahe', 'raha', 'rahi', 'chahiye', 'chaiye', 'sakta', 'sakti', 'sakte',
+        
+        # Question words
+        'kya', 'kaun', 'kab', 'kahan', 'kaise', 'kaisa', 'kaisi', 'kaise',
+        'kyun', 'kyu', 'kitna', 'kitni', 'kitne',
+        
+        # Common words
+        'abhi', 'aaj', 'kal', 'parso', 'subah', 'shaam', 'raat', 'din',
+        'baje', 'minute', 'ghanta', 'samay', 'waqt',
+        'bahut', 'thoda', 'jyada', 'kam', 'sab', 'kuch', 'koi',
+        'achha', 'acha', 'bura', 'theek', 'thik',
+        
+        # Postpositions
+        'ka', 'ki', 'ke', 'ko', 'se', 'mein', 'par', 'tak', 'ke liye',
+        
+        # Common phrases
+        'namaste', 'namaskar', 'dhanyavad', 'shukriya', 'maaf',
+        'haan', 'nahi', 'naa', 'ji', 'bilkul',
+        
+        # Weather/time
+        'mausam', 'garmi', 'sardi', 'baarish', 'dhoop', 'hawa',
+    }
+        words = text.lower().split()
+        
+        # Count Hindi words
+        hindi_count = sum(1 for word in words if word.strip('.,!?') in  self.HINDI_WORDS)
+        total_words = len(words)
+        
+        if hindi_count >= 3:  # At least 3 Hindi words
+            percentage = (hindi_count / total_words) * 100
+            return True
+        else:
+            return False
