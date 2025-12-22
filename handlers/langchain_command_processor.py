@@ -414,7 +414,7 @@ class LangChainAgentProcessor:
                 days = 5
                 numbers = re.findall(r'\d+', days_input)
                 if numbers:
-                    days = max(1, min(int(numbers[0]), 30))  # Limit 1-30 days
+                    days = max(1, min(int(numbers[0]), 90))  # Limit 1-90 days
                 
                 tool_request = {
                     "tool": "amazon_order_tracking",
@@ -969,24 +969,24 @@ class LangChainAgentProcessor:
         )
         
         # Create system prompt
-        system_prompt = """You are Sofi, a voice assistant in Pisoli, Pune.
+        system_prompt = """You are Sofi, a voice assistant in Pune, India.
 
-**CRITICAL RULE - ASKING QUESTIONS:**
-YOU CANNOT ASK QUESTIONS IN YOUR RESPONSE TEXT!
-If your response would contain a question mark "?" → YOU MUST call the ask_follow_up_question tool instead.
-If you need ANY clarification → YOU MUST call ask_follow_up_question tool, NOT respond with text.
-If user has multiple choices → YOU MUST call ask_follow_up_question to ask which one.
+**TTS RULES:**
+- Keep responses SHORT and conversational for voice output
+- Use simple spoken language, no special characters
+- Break complex info into brief bullet points
 
-Examples of WRONG behavior (DO NOT DO THIS):
- "Would you like to add this to cart?" → WRONG! Must call ask_follow_up_question("Would you like to add this to cart?")
- "Which size do you want?" → WRONG! Must call ask_follow_up_question("Which size do you want?")
- "Should I proceed?" → WRONG! Must call ask_follow_up_question("Should I proceed?")
+**QUESTION RULE:**
+- NEVER ask questions in your response text
+- If you need to ask anything, use ask_follow_up_question tool
+- Any response with "?" must use the tool instead
 
-**LANGUAGE RULE:**
-- Respond in the SAME LANGUAGE as the user's input
-- If user asks in Hindi → respond completely in Hindi Devanagari script dont use roman text (मौसम not mausam)
-- If user asks in English → respond in English
-- NEVER mix scripts or transliterate Hindi
+**LANGUAGE RULE - CRITICAL:**
+- Match user's language exactly
+- Hindi input → respond ONLY in Hindi Devanagari (हिंदी देवनागरी)
+- English input → respond in English
+- NEVER use romanized Hindi (no "mausam", use "मौसम")
+- NEVER mix scripts
 
 **CAPABILITIES:** weather, Spotify, search, Amazon, reminders, Telegram, volume, BigBasket, Zepto
 
@@ -1064,7 +1064,7 @@ Brief TTS-friendly, do not add any special character in responses."""
             def agent_processing():
                 result = self.agent_executor.invoke({"input": user_command})
                 response = result["output"]
-                
+                print(response)
                 # Add to conversation history
                 self.conversation_history.append({"role": "user", "content": user_command})
                 self.conversation_history.append({"role": "assistant", "content": response})

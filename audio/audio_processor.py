@@ -16,6 +16,16 @@ from collections import deque
 from contextlib import contextmanager
 from google.cloud import texttospeech
 from google.oauth2 import service_account
+from langdetect import detect
+# For Hindi transliteration
+try:
+    from indic_transliteration import sanscript
+    from indic_transliteration.sanscript import transliterate
+    TRANSLITERATION_AVAILABLE = True
+except ImportError:
+    print("Warning: indic-transliteration not installed. Hindi transliteration disabled.")
+    TRANSLITERATION_AVAILABLE = False
+
 # Load environment variables
 load_dotenv()
 
@@ -57,6 +67,16 @@ class AudioProcessors:
         self.mic_gain_factor = 0.8  # Reduce gain for sensitive USB mic
         self.digital_gain = 2.0     # Digital gain multiplier for MEMS mics (1.0 = no gain, 2.0 = double)
 
+        # Automatic Gain Control (AGC) settings
+        self.agc_enabled = False  # Enable/disable AGC
+        self.agc_target_level = 0.3  # Target RMS level (30% of max)
+        self.agc_min_gain = 1.0  # Minimum gain
+        self.agc_max_gain = 4.0  # Maximum gain
+        self.agc_attack = 0.1  # How fast gain increases (0-1)
+        self.agc_release = 0.05  # How fast gain decreases (0-1)
+        self.agc_sample_count = 0
+        self.agc_rms_history = []
+
         # Audio processing
         self.sample_rate = 22050
         self.duration = 1.5
@@ -72,6 +92,25 @@ class AudioProcessors:
         """Set pixel LED controller for visual feedback during speech"""
         self.pixel_led = pixel_led
     
+    def enable_agc(self, target_level=0.3, min_gain=1.0, max_gain=4.0):
+        """Enable automatic gain control
+        
+        Args:
+            target_level: Target RMS level (0.1-0.5 recommended)
+            min_gain: Minimum gain multiplier
+            max_gain: Maximum gain multiplier
+        """
+        self.agc_enabled = True
+        self.agc_target_level = target_level
+        self.agc_min_gain = min_gain
+        self.agc_max_gain = max_gain
+        print(f"🎚️ AGC enabled: target={target_level}, gain range={min_gain}-{max_gain}x")
+    
+    def disable_agc(self):
+        """Disable automatic gain control"""
+        self.agc_enabled = False
+        print("🎚️ AGC disabled")
+    
     def set_audio_buffer(self, buffer, buffer_lock):
         """Set external audio buffer for the callback to use
         
@@ -82,6 +121,60 @@ class AudioProcessors:
         self._external_buffer = buffer
         self._external_buffer_lock = buffer_lock
         print(f"External audio buffer configured with capacity: {buffer.maxlen}")
+    
+    def _apply_agc(self, audio_data):
+        """Apply automatic gain control to audio data
+        
+        Args:
+            audio_data: Numpy array of audio samples
+            
+        Returns:
+            Gain-adjusted audio data
+        """
+        if not self.agc_enabled:
+            return audio_data
+        
+        # Calculate RMS level of current audio
+        rms = np.sqrt(np.mean(audio_data ** 2))
+        
+        # Store RMS history (keep last 10 samples)
+        self.agc_rms_history.append(rms)
+        if len(self.agc_rms_history) > 10:
+            self.agc_rms_history.pop(0)
+        
+        # Use average RMS for smoother adjustment
+        avg_rms = np.mean(self.agc_rms_history)
+        
+        # Calculate desired gain
+        if avg_rms > 0.001:  # Avoid division by zero
+            desired_gain = self.agc_target_level / avg_rms
+            # Clamp to min/max
+            desired_gain = np.clip(desired_gain, self.agc_min_gain, self.agc_max_gain)
+            
+            # Smooth gain changes (attack/release)
+            if desired_gain > self.digital_gain:
+                # Increasing gain (attack)
+                new_gain = self.digital_gain + (desired_gain - self.digital_gain) * self.agc_attack
+            else:
+                # Decreasing gain (release)
+                new_gain = self.digital_gain + (desired_gain - self.digital_gain) * self.agc_release
+            
+            self.digital_gain = new_gain
+            
+            # Print debug info every 100 samples
+            self.agc_sample_count += 1
+            if self.agc_sample_count % 100 == 0 and self.debug_mode:
+                print(f"🎚️ AGC: RMS={avg_rms:.3f}, Gain={self.digital_gain:.2f}x")
+        
+        # Apply gain
+        adjusted = audio_data * self.digital_gain
+        
+        # Prevent clipping
+        max_val = np.max(np.abs(adjusted))
+        if max_val > 1.0:
+            adjusted = adjusted / max_val
+        
+        return adjusted
     
 
     # Function to record audio (from test_cnn_model.py)
@@ -112,8 +205,11 @@ class AudioProcessors:
             print("Recording complete.")
             audio_flat = audio.flatten()
             
-            # Apply digital gain for MEMS microphones
-            if self.digital_gain != 1.0:
+            # Apply AGC or fixed digital gain
+            if self.agc_enabled:
+                audio_flat = self._apply_agc(audio_flat)
+                print(f"Applied AGC (current gain: {self.digital_gain:.2f}x)")
+            elif self.digital_gain != 1.0:
                 audio_flat = audio_flat * self.digital_gain
                 # Prevent clipping by normalizing if needed
                 max_val = np.max(np.abs(audio_flat))
@@ -132,15 +228,20 @@ class AudioProcessors:
             return None
         
 
-    def detect_language(self, text):
-        """Detect if text is in Hindi or English"""
-        import re
+    def transliterate_to_devanagari(self, text):
+        """Convert romanized Hindi text to Devanagari script"""
+        if not TRANSLITERATION_AVAILABLE:
+            print("Transliteration unavailable - returning original text")
+            return text
         
-        # Check for Hindi (Devanagari) characters
-        hindi_pattern = r'[\u0900-\u097F]'
-        if re.search(hindi_pattern, text):
-            return "hi"
-        return "en"
+        try:
+            # Transliterate from ITRANS (common romanization) to Devanagari
+            devanagari_text = transliterate(text, sanscript.ITRANS, sanscript.DEVANAGARI)
+            print(f"Transliterated: '{text}' -> '{devanagari_text}'")
+            return devanagari_text
+        except Exception as e:
+            print(f"Transliteration error: {e}, returning original text")
+            return text
     
     def speak(self, text, prompt=None, lang=None):
         """
@@ -165,14 +266,13 @@ class AudioProcessors:
         # Reset interruption flag
         self.speech_interrupted = False
         
-        # Auto-detect language if not specified
-        if lang is None:
-            lang = self.detect_language(text)
-        
-        # Improve Hindi voice selection and rate
-        if lang == "hi":
-            prompt = prompt or "Speak clearly with natural Hindi pronunciation."
-        
+        lang = detect(text)
+        # if lang != "hi" :
+        #     is_hindi = self.detect_hindi_by_keywords(text)
+        #     if is_hindi:
+        #         text = self.transliterate_to_devanagari(text)
+                
+        print(f"Final TTS text (lang={lang}): {text}")
         # Start new speech thread
         self.speech_thread = threading.Thread(
             target=self._speak_threaded, 
@@ -192,12 +292,12 @@ class AudioProcessors:
         # Select voice based on language
         if lang == "hi":
             language_code = "hi-IN"
-            voice_name = "hi-IN-Chirp3-HD-Zephyr"
+            voice_name = "hi-IN-Chirp3-HD-Achernar"
             speaking_rate = 0.90
         else:
             language_code = "en-IN"
-            voice_name = "en-IN-Chirp3-HD-Zephyr"
-            speaking_rate = 0.90
+            voice_name = "en-IN-Chirp3-HD-Achernar"
+            speaking_rate = 0.95
         
         print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
         try:
@@ -279,10 +379,7 @@ class AudioProcessors:
                     pygame.mixer.quit()
                 except Exception as pygame_error:
                     print(f"Pygame audio failed: {pygame_error}")
-                    try:
-                        self._try_alternative_audio_playback(tmp_file_path)
-                    except Exception as alt_err:
-                        print(f"Alternative playback failed: {alt_err}")
+                  
 
         except Exception as e:
             print(f"TTS error: {e}")
@@ -412,26 +509,6 @@ class AudioProcessors:
             time.sleep(0.1)
         return not self.is_speaking  # Returns True if speech completed, False if timeout
     
-    def _try_alternative_audio_playback(self, tmp_file_path):
-        """Alternative audio playback method when pygame fails"""
-        try:
-            # Try using Windows' built-in audio player
-            if platform.system() == "Windows":
-                import subprocess
-                subprocess.run([
-                    'powershell', '-c', 
-                    f'Add-Type -AssemblyName presentationCore; '
-                    f'$mediaPlayer = New-Object system.windows.media.mediaplayer; '
-                    f'$mediaPlayer.open([uri]"{tmp_file_path}"); '
-                    f'$mediaPlayer.Play(); '
-                    f'Start-Sleep -Seconds 3'
-                ], capture_output=True, timeout=10)
-            else:
-                # For other platforms, try system commands
-                subprocess.run(['play', tmp_file_path], capture_output=True, timeout=10)
-        except Exception as alt_error:
-            print(f"Alternative audio playback also failed: {alt_error}")
-            self._system_beep()  # Final fallback
     
     def _system_beep(self):
         """Generate a system beep as fallback"""
@@ -561,3 +638,53 @@ class AudioProcessors:
                     print(f"Error appending to external audio buffer: {e}")
         elif self.debug_mode:
             print("No external buffer configured for audio callback")
+
+        
+    # Comprehensive list of romanized Hindi words
+   
+
+    def detect_hindi_by_keywords(self, text):
+        """Simple and reliable: detect Hindi by counting Hindi words"""
+        self.HINDI_WORDS = {
+        # Pronouns
+        'main', 'mein', 'hum', 'aap', 'tum', 'tu', 'yeh', 'ye', 'woh', 'wo', 
+        'mera', 'meri', 'mere', 'tera', 'teri', 'tere', 'uska', 'uski', 'uske',
+        'hamara', 'hamari', 'hamare', 'tumhara', 'tumhari', 'tumhare',
+        
+        # Verbs
+        'hai', 'hain', 'ho', 'tha', 'thi', 'the', 'hoga', 'hogi', 'honge',
+        'karna', 'karo', 'kar', 'kiya', 'kiye', 'karta', 'karti', 'karte',
+        'jaana', 'jao', 'gaya', 'gayi', 'gaye', 'aana', 'aao', 'aaya', 'aayi',
+        'rahe', 'raha', 'rahi', 'chahiye', 'chaiye', 'sakta', 'sakti', 'sakte',
+        
+        # Question words
+        'kya', 'kaun', 'kab', 'kahan', 'kaise', 'kaisa', 'kaisi', 'kaise',
+        'kyun', 'kyu', 'kitna', 'kitni', 'kitne',
+        
+        # Common words
+        'abhi', 'aaj', 'kal', 'parso', 'subah', 'shaam', 'raat', 'din',
+        'baje', 'minute', 'ghanta', 'samay', 'waqt',
+        'bahut', 'thoda', 'jyada', 'kam', 'sab', 'kuch', 'koi',
+        'achha', 'acha', 'bura', 'theek', 'thik',
+        
+        # Postpositions
+        'ka', 'ki', 'ke', 'ko', 'se', 'mein', 'par', 'tak', 'ke liye',
+        
+        # Common phrases
+        'namaste', 'namaskar', 'dhanyavad', 'shukriya', 'maaf',
+        'haan', 'nahi', 'naa', 'ji', 'bilkul',
+        
+        # Weather/time
+        'mausam', 'garmi', 'sardi', 'baarish', 'dhoop', 'hawa',
+    }
+        words = text.lower().split()
+        
+        # Count Hindi words
+        hindi_count = sum(1 for word in words if word.strip('.,!?') in  self.HINDI_WORDS)
+        total_words = len(words)
+        
+        if hindi_count >= 3:  # At least 3 Hindi words
+            percentage = (hindi_count / total_words) * 100
+            return True
+        else:
+            return False
