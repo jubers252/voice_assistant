@@ -983,7 +983,7 @@ class LangChainAgentProcessor:
 
 **LANGUAGE RULE - CRITICAL:**
 - Match user's language exactly
-- Hindi input → always respond ONLY in Hindi Devanagari (हिंदी देवनागरी)
+- Hindi input → always respond ONLY in Hindi Devanagari (हिंदी देवनागरी) never romanized form
 - English input → respond in English
 - NEVER use romanized Hindi (no "mausam", use "मौसम")
 - NEVER mix scripts
