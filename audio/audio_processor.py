@@ -63,7 +63,7 @@ class AudioProcessors:
         self.microphone = None
         self.audio_channels = 1  # Channel configuration for microphone recording
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
-        self.mic_device_id = None   # Will use system default unless configured
+        self.mic_device_id = 0   # Hardcoded to USB2.0 Device: Audio (hw:0,0)
         self.mic_gain_factor = 0.8  # Reduce gain for sensitive USB mic
         self.digital_gain = 2.0     # Digital gain multiplier for MEMS mics (1.0 = no gain, 2.0 = double)
 
@@ -307,6 +307,25 @@ class AudioProcessors:
                 speech_file_path = tmp.name
                 tmp.close()
 
+            # Split long text into sentences to avoid Google TTS length limit
+            import re
+            # Split by sentence endings, keeping the punctuation
+            sentences = re.split(r'([।|॥|.!?]+)', text)
+            # Rejoin punctuation with sentences
+            chunks = []
+            for i in range(0, len(sentences) - 1, 2):
+                if i + 1 < len(sentences):
+                    chunks.append(sentences[i] + sentences[i + 1])
+                else:
+                    chunks.append(sentences[i])
+            
+            # If no splits, treat entire text as one chunk
+            if not chunks:
+                chunks = [text]
+            
+            # Filter out empty chunks
+            chunks = [c.strip() for c in chunks if c.strip()]
+
             # Load credentials from service account file
             creds = service_account.Credentials.from_service_account_file(
                 "nimble-gate-366207-d1ca63590ec3.json"
@@ -315,22 +334,31 @@ class AudioProcessors:
             # Create client
             client = texttospeech.TextToSpeechClient(credentials=creds)
             
-            # Generate TTS
-            response = client.synthesize_speech(
-                input=texttospeech.SynthesisInput(text=text),
-                voice=texttospeech.VoiceSelectionParams(
-                    language_code=language_code,
-                    name=voice_name,
-                ),
-                audio_config=texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3,
-                    speaking_rate=speaking_rate,
+            # Generate TTS for each chunk and combine
+            audio_segments = []
+            for chunk in chunks:
+                if not chunk.strip():
+                    continue
+                    
+                response = client.synthesize_speech(
+                    input=texttospeech.SynthesisInput(text=chunk),
+                    voice=texttospeech.VoiceSelectionParams(
+                        language_code=language_code,
+                        name=voice_name,
+                    ),
+                    audio_config=texttospeech.AudioConfig(
+                        audio_encoding=texttospeech.AudioEncoding.MP3,
+                        speaking_rate=speaking_rate,
+                    )
                 )
-            )
+                audio_segments.append(response.audio_content)
+            
+            # Combine all audio segments
+            combined_audio = b''.join(audio_segments)
             
             # Save to file
             with open(speech_file_path, 'wb') as out:
-                out.write(response.audio_content)
+                out.write(combined_audio)
 
             generation_time = time.time() - start_time
             print(f"Audio generation took: {generation_time:.2f} seconds -> {speech_file_path}")

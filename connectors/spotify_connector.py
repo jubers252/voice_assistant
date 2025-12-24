@@ -389,27 +389,31 @@ class SpotifyConnector:
             # Execute the Spotify action using the main method
             result = self.main(tool_response)
             print(f"result: {result}")
+            
             if result:          
+                # Update conversation history with the actual result
+                conversation_history.append({"role": "assistant", "content": result})
+                
                 # Additional context for certain actions
                 action = tool_response.get("action", "")
                 if action == "play":
-                    return("Music started. Ready for next command.")
+                    return result  # Return the actual result (e.g., "Playing 'Song Name' by Artist")
                 elif action == "stop":
-                    return("Music stopped. Ready for next command.")
+                    return result  # Return the actual result (e.g., "Playback stopped")
                 elif action == "resume":
-                    return("Music resumed. Ready for next command.")
+                    return result  # Return the actual result (e.g., "Playback resumed")
                 elif action == "next":
-                    return("Skipped to next track. Ready for next command.")
+                    return result  # Return the actual result (e.g., "Playing next song")
+                else:
+                    return result
             else:
-                return("No result from Spotify action.")
-            conversation_history.append({"role": "assistant", "content": result})
+                return "No result from Spotify action."
         except Exception as e:
             error_message = str(e)
             print(f"Spotify error: {error_message}")
             
             # Provide more specific error messages
-         
-            return False
+            return f"Error: {error_message}"
         
 if __name__ == "__main__":
     pass

@@ -43,11 +43,11 @@ class SpeechRecognizer:
 
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds
-        self.recognizer.energy_threshold = 100  # Balanced for sensitive INMP441
+        self.recognizer.energy_threshold = 120  # Balanced for sensitive INMP441
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
         self.recognizer.dynamic_energy_ratio = 1.5  # Increased for better noise rejection
-        self.recognizer.pause_threshold = 2.0  # 2 seconds of silence before stopping (was 1.5)
+        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping (was 1.5)
         self.recognizer.phrase_threshold = 0.5  # Minimum 500ms to avoid noise triggers
         self.recognizer.non_speaking_duration = 1.5  # Max 1.5 second pause mid-phrase (was 1.0)
 
