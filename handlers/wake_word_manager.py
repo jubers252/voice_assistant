@@ -74,7 +74,7 @@ class WakeWordManager:
             
             # High energy threshold indicates music playing
             # Normal voice: ~0.058, Music+voice: ~0.11-0.12
-            music_threshold = 0.12
+            music_threshold = 0.16
             is_playing = rms_energy > music_threshold
             
             if self.debug_mode and rms_energy > 0.005:
@@ -180,7 +180,7 @@ class WakeWordManager:
                 
                 try:
 
-                    template_threshold = 0.15 if music_playing else 0.50
+                    template_threshold = 0.15 if music_playing else 0.85
                     
                     is_match, similarity_score, best_label, all_scores = self.template_matcher.match_audio_window(
                         audio_window, self.sample_rate, match_threshold=template_threshold, debug=self.debug_mode

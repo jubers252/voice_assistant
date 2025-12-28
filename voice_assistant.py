@@ -26,7 +26,7 @@ from gpio_setup import PixelLEDController
 load_dotenv()
 
 # Configuration from environment variables
-MIC_GAIN = float(os.environ.get('MIC_GAIN', '2.5'))  # Default 2.5x gain for better sensitivity to normal speech
+MIC_GAIN = float(os.environ.get('MIC_GAIN', '2.5')) 
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 model_dir = os.path.join(current_dir, 'model')
@@ -68,14 +68,6 @@ class VoiceAssistantRefactored:
             self.wake_word_detector = None
         
         
-        # Note: These handlers are no longer needed with LangChain implementation  
-        # self.tool_action_handler = ToolActionHandler(self.conversation_history)
-        # self.ai_response_handler = AIResponseHandler(
-        #     conversation_manager=self.conversation_manager,
-        #     audio_processors=self.audio_processors,
-        #     recognizer=self.recognizer
-        # )
-        
         # Wake word manager
         self.wake_word_manager = WakeWordManager(
             wake_word_detector=self.wake_word_detector,
@@ -93,17 +85,7 @@ class VoiceAssistantRefactored:
         except Exception as e:
             print(f"Warning: Could not initialize Spotify connector: {e}")
             self.spotify_connector = None
-        
-        # Command processor
-        # self.command_processor = CommandProcessor(
-        #     tool_action_handler=self.tool_action_handler,
-        #     ai_response_handler=self.ai_response_handler,
-        #     feedback_handler=self.feedback_handler,
-        #     conversation_manager=self.conversation_manager,
-        #     conversation_history=self.conversation_history,
-        #     audio_processors=self.audio_processors,
-        #     reminder_manager=self.reminder_manager
-        # )
+      
         self.command_processor = LangChainAgentProcessor(
             conversation_history=self.conversation_history,
             audio_processors=self.audio_processors,

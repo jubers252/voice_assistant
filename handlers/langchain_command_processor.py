@@ -27,6 +27,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.tools import Tool
 
 # Import your existing connectors
+from connectors.volume_control import VolumeController 
 from connectors.weather_connector import handle_tool_requests
 from connectors.amzon_connector import get_amazon_result
 from connectors.amazon_order_tracker import get_order
@@ -65,7 +66,7 @@ class LangChainAgentProcessor:
         self.reminder_manager = ReminderManager()
         # Optional ConversationManager instance to persist history
         self.conversation_manager = conversation_manager
-
+        self.volume_controller = VolumeController()
         # Initialize connectors (same as original)
         self.spotify_connector = SpotifyConnector(None)
         self.search_connector = GeminiSearch()
@@ -146,7 +147,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="get_current_weather",
-            description="Get current weather conditions for a specific location. Input should be a city name or location.",
+            description="Get current weather. Use when: 'what is the weather', 'is it raining', 'temperature'. Input: city name",
             func=current_weather_function
         )
     
@@ -166,7 +167,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="get_weather_forecast",
-            description="Get weather forecast (3-day) for a specific location. Input should be a city name or location.",
+            description="Get 3-day weather forecast. Use when: 'forecast', 'will it rain tomorrow'. Input: city name",
             func=forecast_function
         )
     
@@ -186,7 +187,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="get_timezone",
-            description="Get timezone and current local time for a specific location. Input should be a city name or location.",  
+            description="Get timezone and current time. Use when: 'what time is it in', 'timezone of'. Input: city name",  
             func=timezone_function
         )
     
@@ -215,7 +216,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="play_spotify_track",
-            description="Play a specific song/track on Spotify. Input should be the track name.",
+            description="Play a song on Spotify. Use when: 'play [song]', 'put on [track]'. Input: song name",
             func=play_track_function
         )
     
@@ -244,7 +245,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="play_spotify_album",
-            description="Play a specific album on Spotify. Input should be the album name.",
+            description="Play an album on Spotify. Use when: 'play album [name]'. Input: album name",
             func=play_album_function
         )
     
@@ -273,7 +274,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="play_spotify_artist",
-            description="Play music by a specific artist on Spotify. Input should be the artist name.",
+            description="Play music by an artist on Spotify. Use when: 'play [artist]', 'put on [artist] music'. Input: artist name",
             func=play_artist_function
         )
     
@@ -311,7 +312,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="control_spotify_playback",
-            description="Control Spotify playback. Use 'pause', 'resume', or 'next'.",
+            description="Control Spotify. Use when: 'pause', 'resume', 'next', 'skip'. Input: pause|resume|next|skip",
             func=control_function
         )
     
@@ -328,7 +329,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="search_web",
-            description="Search the internet for information. Input should be a search query or question.",
+            description="Search the internet for LATEST/CURRENT information. MANDATORY for: latest news, current prices, today's info, recent updates, live status. Use when: 'what's latest', 'current', 'today', 'right now', 'latest news about', 'trending'. Input: search query (e.g., 'latest Bitcoin price', 'current weather today', 'trending news')",
             func=search_function
         )
     
@@ -627,77 +628,48 @@ class LangChainAgentProcessor:
         )
     
     def _create_volume_control_tool(self) -> Tool:
-        """Control system volume - cross-platform version"""
+        """Control system volume using main_control from volume_control module"""
         def volume_control_function(command: str) -> str:
             try:
-                import subprocess
+                from connectors.volume_control import main_control
                 
-                command_lower = command.lower()
-                current_os = platform.system()
+                # Parse the command format: "action|step|level"
+                parts = command.split("|")
+                action = parts[0].lower().strip()
+                step = 5
+                level = None
                 
-                if current_os == "Windows":
-                    # Windows implementation
-                    if 'mute' in command_lower:
-                        try:
-                            subprocess.run(['nircmd.exe', 'mutesysvolume', '1'], shell=True)
-                            return "Volume muted"
-                        except:
-                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_MUTE}")'])
-                            return "Volume muted"
-                    
-                    elif 'unmute' in command_lower:
-                        try:
-                            subprocess.run(['nircmd.exe', 'mutesysvolume', '0'], shell=True)
-                            return "Volume unmuted"
-                        except:
-                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_MUTE}")'])
-                            return "Volume unmuted"
-                    
-                    elif 'up' in command_lower or 'increase' in command_lower:
-                        try:
-                            subprocess.run(['nircmd.exe', 'changesysvolume', '2000'], shell=True)
-                            return "Volume increased"
-                        except:
-                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_UP}")'])
-                            return "Volume increased"
-                    
-                    elif 'down' in command_lower or 'decrease' in command_lower:
-                        try:
-                            subprocess.run(['nircmd.exe', 'changesysvolume', '-2000'], shell=True)
-                            return "Volume decreased"
-                        except:
-                            subprocess.run(['powershell', '-c', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("{VOLUME_DOWN}")'])
-                            return "Volume decreased"
-                            
-                elif current_os == "Linux":
-                    # Linux implementation using amixer
-                    if 'mute' in command_lower:
-                        subprocess.run(['amixer', 'set', 'Master', 'mute'], check=True)
-                        return "Volume muted"
-                    
-                    elif 'unmute' in command_lower:
-                        subprocess.run(['amixer', 'set', 'Master', 'unmute'], check=True)
-                        return "Volume unmuted"
-                    
-                    elif 'up' in command_lower or 'increase' in command_lower:
-                        subprocess.run(['amixer', 'set', 'Master', '5%+'], check=True)
-                        return "Volume increased"
-                    
-                    elif 'down' in command_lower or 'decrease' in command_lower:
-                        subprocess.run(['amixer', 'set', 'Master', '5%-'], check=True)
-                        return "Volume decreased"
+                # Parse step parameter
+                if len(parts) > 1 and parts[1].strip():
+                    step = int(parts[1].strip())
                 
+                # Parse level parameter
+                if len(parts) > 2 and parts[2].strip():
+                    level = int(parts[2].strip())
+                
+                # Call main_control with parsed arguments
+                result = main_control(action, step=step, level=level)
+                
+                # Format response for TTS
+                if action == "status":
+                    return f"Volume is at {result['volume']}%. Muted: {result['muted']}"
+                elif action == "increase":
+                    return f"Volume increased to {result}%"
+                elif action == "decrease":
+                    return f"Volume decreased to {result}%"
+                elif action == "set":
+                    return f"Volume set to {result}%"
+                elif action in ["mute", "unmute"]:
+                    return f"Volume {action}d successfully"
                 else:
-                    return f"Volume control not supported on {current_os}. Only Windows and Linux are supported."
-                    
-                return "Say: volume up, volume down, mute, or unmute"
+                    return "Volume command executed"
                     
             except Exception as e:
                 return f"Volume control error: {str(e)}"
         
         return Tool(
             name="control_system_volume",
-            description="Control system volume. Say 'volume up', 'volume down', 'mute', or 'unmute'.",
+            description="Control system volume. Commands: 'increase', 'decrease', 'mute', 'unmute', 'set', or 'status'. Format: action|step|level (e.g., 'increase|10' or 'decrease|10' or 'set||50')",
             func=volume_control_function
         )
     
@@ -804,7 +776,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="ask_follow_up_question",
-            description="MANDATORY tool when you need to ask ANY question or need clarification from user. If your response would have a question mark '?', you MUST use this tool instead of responding with text. This tool speaks your question and waits for user's voice response. Input: your question text. NEVER ask questions in your text response - ALWAYS use this tool for questions.",
+            description="MANDATORY - Ask clarifying questions when user input is ambiguous. Use when: volume request without direction ('increase'/'decrease'/'mute'), incomplete shopping action, ambiguous product search, unclear confirmation. Format: your question as natural text. CRITICAL RULE: Any response containing '?' MUST use this tool instead of text response. Examples: 'Would you like to increase or decrease the volume?', 'Which product would you like to add?', 'What quantity do you need?'",
             func=ask_follow_up_function
         )
     
@@ -970,7 +942,7 @@ class LangChainAgentProcessor:
         )
         
         # Create system prompt
-        system_prompt = """You are Sofi, a female voice assistant in Pune, India.
+        system_prompt = """You are Sofi, a female voice assistant in Pune, India year - 2025.
 
 **TTS RULES:**
 - Keep responses SHORT and conversational for voice output
@@ -991,6 +963,20 @@ class LangChainAgentProcessor:
 - NEVER mix scripts
 
 **CAPABILITIES:** weather, Spotify, search, Amazon, reminders, Telegram, volume, BigBasket, Zepto
+
+**VOLUME CONTROL (MANDATORY - ALWAYS USE TOOL):**
+- ANY volume request MUST call control_system_volume tool
+- NEVER respond about volume without calling the tool
+- Parse user intent: "increase/up/louder" → increase, "decrease/down/quiet" → decrease, "set/put to X" → set with level, "mute/quiet" → mute, "unmute/loud" → unmute
+- Format tool input: action|step|level (examples: "increase|10", "decrease|5", "set||50")
+- Step defaults to 5 if not specified, use larger steps only if user specifies
+
+**WEB SEARCH FOR LATEST UPDATES (MANDATORY):**
+- ALWAYS use search_web tool when user asks for: latest news, current prices, today's information, recent updates, live info, what's trending, current status
+- Use when: "what's the latest", "current", "today", "right now", "latest news about", "what's new", "latest updates", "current price of"
+- NEVER answer from knowledge cutoff - always search for current information
+- Format: Just the search query (e.g., "latest Bitcoin price", "current weather in Mumbai", "trending news today")
+- Examples: "latest iPhone price", "today's stock market updates", "current COVID cases in India"
 
 **BigBasket ORDERING (IMPORTANT):**
  For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).

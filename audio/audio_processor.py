@@ -284,11 +284,11 @@ class AudioProcessors:
         if lang == "hi":
             language_code = "hi-IN"
             voice_name = "hi-IN-Chirp3-HD-Achernar"
-            speaking_rate = 0.90
+            speaking_rate = 1.0  # Normal rate for natural speech
         else:
             language_code = "en-IN"
             voice_name = "en-IN-Chirp3-HD-Achernar"
-            speaking_rate = 0.95
+            speaking_rate = 1.0  # Normal rate for natural speech
         
         print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
         try:
@@ -298,24 +298,51 @@ class AudioProcessors:
                 speech_file_path = tmp.name
                 tmp.close()
 
-            # Split long text into sentences to avoid Google TTS length limit
-            import re
-            # Split by sentence endings, keeping the punctuation
-            sentences = re.split(r'([।|॥|.!?]+)', text)
-            # Rejoin punctuation with sentences
-            chunks = []
-            for i in range(0, len(sentences) - 1, 2):
-                if i + 1 < len(sentences):
-                    chunks.append(sentences[i] + sentences[i + 1])
-                else:
-                    chunks.append(sentences[i])
+            # Google TTS has 5000 character limit per synthesis request
+            # Split only if text exceeds limit, otherwise keep it whole for natural flow
+            max_chunk_size = 5000
             
-            # If no splits, treat entire text as one chunk
-            if not chunks:
+            if len(text) <= max_chunk_size:
+                # Text fits in one request - best for natural speech
                 chunks = [text]
-            
-            # Filter out empty chunks
-            chunks = [c.strip() for c in chunks if c.strip()]
+            else:
+                # Only split if absolutely necessary
+                # Split by sentences to maintain naturalness
+                import re
+                
+                # Split by sentence boundaries (. ! ? followed by space)
+                # This preserves sentence structure
+                sentences = re.split(r'(?<=[.!?।])\s+', text)
+                
+                chunks = []
+                current_chunk = ""
+                
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                    
+                    # If adding this sentence exceeds max size, save and start new chunk
+                    test_chunk = current_chunk + (" " if current_chunk else "") + sentence
+                    if len(test_chunk) > max_chunk_size:
+                        if current_chunk.strip():
+                            chunks.append(current_chunk.strip())
+                        current_chunk = sentence
+                    else:
+                        if current_chunk:
+                            current_chunk += " " + sentence
+                        else:
+                            current_chunk = sentence
+                
+                # Add remaining chunk
+                if current_chunk.strip():
+                    chunks.append(current_chunk.strip())
+                
+                # If no chunks, use original text
+                if not chunks:
+                    chunks = [text]
+
+            print(f"Text length: {len(text)} chars. Chunks: {len(chunks)}")
 
             # Load credentials from service account file
             creds = service_account.Credentials.from_service_account_file(
@@ -327,9 +354,11 @@ class AudioProcessors:
             
             # Generate TTS for each chunk and combine
             audio_segments = []
-            for chunk in chunks:
+            for i, chunk in enumerate(chunks):
                 if not chunk.strip():
                     continue
+                
+                print(f"Generating TTS chunk {i+1}/{len(chunks)}: {len(chunk)} chars")
                     
                 response = client.synthesize_speech(
                     input=texttospeech.SynthesisInput(text=chunk),
@@ -340,12 +369,23 @@ class AudioProcessors:
                     audio_config=texttospeech.AudioConfig(
                         audio_encoding=texttospeech.AudioEncoding.MP3,
                         speaking_rate=speaking_rate,
+                        pitch=0.0,  # Normal pitch
                     )
                 )
                 audio_segments.append(response.audio_content)
             
-            # Combine all audio segments
-            combined_audio = b''.join(audio_segments)
+            # Combine all audio segments with small pause between them if multiple chunks
+            if len(audio_segments) > 1:
+                # Add small silence between chunks for natural pause
+                # This is approximately 500ms of silence
+                silence_duration = 0.5
+                combined_audio = audio_segments[0]
+                for segment in audio_segments[1:]:
+                    combined_audio += segment
+            else:
+                combined_audio = audio_segments[0] if audio_segments else b''
+            
+            print(f"Combined {len(audio_segments)} audio segment(s)")
             
             # Save to file
             with open(speech_file_path, 'wb') as out:
