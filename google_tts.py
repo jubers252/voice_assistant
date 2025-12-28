@@ -8,7 +8,7 @@ creds = service_account.Credentials.from_service_account_file(
 
 client = texttospeech.TextToSpeechClient(credentials=creds)
 response = client.synthesize_speech(
-    input=texttospeech.SynthesisInput(text="Hello! This is a test of OpenAI's GPT TTS. It generates natural sounding speech."),
+    input=texttospeech.SynthesisInput(text="Hello! This is a test of raspberry pi 5 usb speaker module."),
     voice=texttospeech.VoiceSelectionParams(
         language_code="en-IN",
         name="en-IN-Chirp3-HD-Zephyr",

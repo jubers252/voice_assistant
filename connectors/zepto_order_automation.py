@@ -339,6 +339,30 @@ class ZeptoScraper(ZeptoLoginAsync):
         except:
             logger.info("Location modal not found - selection completed")
     
+    async def _wait_for_overlay_to_close(self, timeout=3000):
+        """
+        Helper method to wait for Vaul drawer/modal overlays to close.
+        Handles cases where overlays intercept pointer events.
+        
+        Args:
+            timeout: Maximum time to wait for overlay to close (ms)
+        """
+        try:
+            # Try to wait for overlay to have state='closed'
+            await self.page.wait_for_selector("[data-vaul-overlay][data-state='closed']", timeout=timeout)
+            logger.debug("Vaul overlay closed successfully")
+            return True
+        except:
+            try:
+                # Try pressing Escape to close the overlay
+                await self.page.keyboard.press('Escape')
+                await self.page.wait_for_timeout(500)
+                logger.debug("Pressed Escape to close overlay")
+                return True
+            except:
+                logger.debug("No Vaul overlay found or already closed")
+                return False
+    
     async def _select_address_with_selectors(self, selectors):
         """
         Helper method to select address using provided selectors.
@@ -382,6 +406,9 @@ class ZeptoScraper(ZeptoLoginAsync):
             await self.page.wait_for_load_state('networkidle', timeout=2000)
             await self.page.wait_for_timeout(2000)
             
+            # Wait for any Vaul overlays to disappear before attempting clicks
+            await self._wait_for_overlay_to_close(timeout=2000)
+            
             # Click search button/icon
             search_button_selectors = [
                 "a[data-testid='search-bar-icon']",
@@ -410,6 +437,8 @@ class ZeptoScraper(ZeptoLoginAsync):
             
             # Click if it's a button, otherwise it's already the input
             if await search_button.get_attribute('role') != 'textbox':
+                await search_button.scroll_into_view_if_needed()
+                await self.page.wait_for_timeout(300)
                 await search_button.click()
                 await self.page.wait_for_timeout(1500)
             
@@ -1134,7 +1163,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             logger.error(f"Failed to extract order details: {e}")
             return {}
 
-    async def clear_cart(self):
+    async def clear_cart(self, ):
         """Clear all items from cart."""
         logger.info("Clearing cart")
         try:
@@ -1182,8 +1211,11 @@ class ZeptoScraper(ZeptoLoginAsync):
                 
                 logger.debug(f"Removed item {removed_count}")
             
-            # After clearing cart, click back button to return to main page
+            # After clearing cart, wait for any overlays to disappear before clicking back button
             await self.page.wait_for_timeout(1500)
+            
+            # Wait for Vaul overlay to close
+            await self._wait_for_overlay_to_close(timeout=3000)
             
             back_selectors = [
                 "button.cpG2SV",  # class from HTML
@@ -1196,11 +1228,16 @@ class ZeptoScraper(ZeptoLoginAsync):
                 try:
                     back_btn = await self.page.wait_for_selector(selector, timeout=2000)
                     if back_btn and await back_btn.is_visible():
+                        logger.info(f"Found back button with selector: {selector}")
+                        # Ensure element is not intercepted by overlays
+                        await back_btn.scroll_into_view_if_needed()
+                        await self.page.wait_for_timeout(500)
                         await back_btn.click()
                         await self.page.wait_for_timeout(2000)
                         logger.info("Returned to main page after clearing cart")
                         break
-                except:
+                except Exception as e:
+                    logger.debug(f"Failed to click back button with {selector}: {e}")
                     continue
             
             return True
@@ -1786,63 +1823,63 @@ class ZeptoScraper(ZeptoLoginAsync):
     
     # Example usage
     async def main(self):   
-      
+        await self.cleanup()
         await self.setup_browser()
       
-        # location_selected = await self.select_current_location()
-        # if location_selected:
-        #     logger.info("Location selected successfully")
-        # else:
-        #     logger.error("Failed to select location")
+        location_selected = await self.select_current_location()
+        if location_selected:
+            logger.info("Location selected successfully")
+        else:
+            logger.error("Failed to select location")
         
-        # address_selected = await self.select_delivery_address()
-        # if address_selected:
-        #     logger.info("Address selected successfully")
-        # else:
-        #     logger.error("Failed to select address")
+        address_selected = await self.select_delivery_address()
+        if address_selected:
+            logger.info("Address selected successfully")
+        else:
+            logger.error("Failed to select address")
 
 
-        # await self.goto_cart()
-        # is_high_demand = await self.check_high_demand_flag()
-        # if is_high_demand:
-        #     print("High demand - try again later")
-        #     return 0
-        # await self.clear_cart()
 
-        # # Example: Find nearest product match from search results
-        # await self.search_products("toast")
-        # products_list = await self.extract_products(max_products=5)
+        is_high_demand = await self.check_high_demand_flag()
+        if is_high_demand:
+            print("High demand - try again later")
+            return 0
+        await self.clear_cart()
+
+        # Example: Find nearest product match from search results
+        await self.search_and_extract_products("toast")
+    
         
       
-        # await self.add_product_to_cart(product_name="brown toast", quantity=2, product_index=0)
+        await self.add_product_to_cart(product_name="brown toast", quantity=2, product_index=1)
         
    
       
-        # cart_info = await self.get_order_details()
-        # print(f"Cart Info: {cart_info}")
-        # payment_url = await self.go_to_payment()
-        # print(f"Payment URL: {payment_url}")
-        # methods = await self.list_payment_methods()
-        # print(f"Payment Methods: {methods}")
-        # check_cod_status= self.check_cod_availability(methods)
+        cart_info = await self.get_order_details()
+        print(f"Cart Info: {cart_info}")
+        payment_url = await self.go_to_payment()
+        print(f"Payment URL: {payment_url}")
+        methods = await self.list_payment_methods()
+        print(f"Payment Methods: {methods}")
+        check_cod_status= self.check_cod_availability(methods)
   
-        # if check_cod_status:
-        #     logger.info("Proceeding with Cash On Delivery (COD) option")    
-        #     select_method = await self.select_payment_method("Pay On Delivery")  
-        #     if select_method:
-        #         logger.info("COD method selected successfully")
-        #         # await self.click_proceed_final()
-        # else:
-        #     logger.info("COD not available — please add more items upto minimum order value 100rs.")
+        if check_cod_status:
+            logger.info("Proceeding with Cash On Delivery (COD) option")    
+            select_method = await self.select_payment_method("Pay On Delivery")  
+            if select_method:
+                logger.info("COD method selected successfully")
+                # await self.click_proceed_final()
+        else:
+            logger.info("COD not available — please add more items upto minimum order value 100rs.")
         await self.goto_account()
         result = await self. get_order_history()
         order_details = await self.goto_order_details(1)
      
         print(f"Order History: {order_details}")
-        await self.cleanup()
+        
         
 if __name__ == "__main__":
     phone_number = "9028129764"
-    scraper = ZeptoScraper(phone_number, headless=False)
+    scraper = ZeptoScraper(phone_number, headless=True)
     
     asyncio.run(scraper.main())

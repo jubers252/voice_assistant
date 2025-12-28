@@ -44,22 +44,9 @@ class VoiceAssistantRefactored:
         self.audio_processors = AudioProcessors()
         self.audio_processors.set_pixel_led(self.pixel_led)  # Connect LED to audio processor
         
-        # Choose gain control mode
-        USE_AGC = os.environ.get('USE_AGC', 'false').lower() == 'true'
-        
-        if USE_AGC:
-            # Enable automatic gain control (AGC)
-            # AGC automatically adjusts gain based on audio levels
-            self.audio_processors.enable_agc(
-                target_level=0.3,  # Target 30% audio level
-                min_gain=1.5,      # Minimum gain
-                max_gain=4.0       # Maximum gain
-            )
-        else:
-            # Use fixed digital gain for MEMS INMP441 microphone
-            # Recommended values: 1.5-3.0x for MEMS mics
-            self.audio_processors.set_digital_gain(MIC_GAIN)
-            print(f"🎤 Microphone digital gain set to {MIC_GAIN}x")
+    
+        self.audio_processors.set_digital_gain(MIC_GAIN)
+        print(f"Microphone digital gain set to {MIC_GAIN}x")
         
         self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led)
         self.conversation_manager = ConversationManager()
@@ -96,6 +83,16 @@ class VoiceAssistantRefactored:
             recognizer=self.recognizer,
             pixel_led=self.pixel_led
         )
+        
+        # Try to initialize Spotify connector for music detection
+        try:
+            from connectors.spotify_connector import SpotifyConnector
+            self.spotify_connector = SpotifyConnector()
+            self.wake_word_manager.set_spotify_connector(self.spotify_connector)
+            print("Spotify connector initialized for music detection")
+        except Exception as e:
+            print(f"Warning: Could not initialize Spotify connector: {e}")
+            self.spotify_connector = None
         
         # Command processor
         # self.command_processor = CommandProcessor(
@@ -155,6 +152,9 @@ class VoiceAssistantRefactored:
                     dtype='float32',
                     callback=self.audio_processors.audio_callback
                 )
+            
+            # Pass the stream reference to wake word manager so it can stop/start it
+            self.wake_word_manager.set_audio_stream(stream)
             
             with stream:
                 # Start wake word detection in separate thread

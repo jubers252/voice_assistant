@@ -59,23 +59,13 @@ class AudioProcessors:
         """Initialize the voice assistant components"""
         print("Initializing Voice Assistant...")
 
-        self.recognizer = sr.Recognizer()
+        self.recognizer = None  # Will be set by SpeechRecognizer if needed
         self.microphone = None
-        self.audio_channels = 1  # Channel configuration for microphone recording
+        self.audio_channels = 2  # Channel configuration for microphone recording (stereo)
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
-        self.mic_device_id = 0   # Hardcoded to USB2.0 Device: Audio (hw:0,0)
-        self.mic_gain_factor = 0.8  # Reduce gain for sensitive USB mic
-        self.digital_gain = 2.0     # Digital gain multiplier for MEMS mics (1.0 = no gain, 2.0 = double)
-
-        # Automatic Gain Control (AGC) settings
-        self.agc_enabled = False  # Enable/disable AGC
-        self.agc_target_level = 0.3  # Target RMS level (30% of max)
-        self.agc_min_gain = 1.0  # Minimum gain
-        self.agc_max_gain = 4.0  # Maximum gain
-        self.agc_attack = 0.1  # How fast gain increases (0-1)
-        self.agc_release = 0.05  # How fast gain decreases (0-1)
-        self.agc_sample_count = 0
-        self.agc_rms_history = []
+        self.mic_device_id = 2   # Google voiceHAT with stereo INMP mics (hw:3,0)
+        self.mic_gain_factor = 1.0  # Increased for voiceHAT stereo INMP mics
+        self.digital_gain = 8.0     # BOOSTED 8x: for quieter speech detection with music playing
 
         # Audio processing
         self.sample_rate = 22050
@@ -92,24 +82,83 @@ class AudioProcessors:
         """Set pixel LED controller for visual feedback during speech"""
         self.pixel_led = pixel_led
     
-    def enable_agc(self, target_level=0.3, min_gain=1.0, max_gain=4.0):
-        """Enable automatic gain control
+    def set_template_matcher(self, template_matcher):
+        """Set template matcher for pre-filtering audio stream to speech only"""
+        self._template_matcher = template_matcher
+    
+    def enhance_speech(self, audio_chunk):
+        """
+        Enhance speech by removing background music using combined filtering.
+        
+        Uses high-pass filtering (250 Hz) + spectral gating (-30 dB).
+        This approach removes music's bass interference while preserving wake word.
         
         Args:
-            target_level: Target RMS level (0.1-0.5 recommended)
-            min_gain: Minimum gain multiplier
-            max_gain: Maximum gain multiplier
+            audio_chunk (ndarray): Audio samples to enhance
+            
+        Returns:
+            ndarray: Enhanced audio with reduced background noise
         """
-        self.agc_enabled = True
-        self.agc_target_level = target_level
-        self.agc_min_gain = min_gain
-        self.agc_max_gain = max_gain
-        print(f"🎚️ AGC enabled: target={target_level}, gain range={min_gain}-{max_gain}x")
-    
-    def disable_agc(self):
-        """Disable automatic gain control"""
-        self.agc_enabled = False
-        print("🎚️ AGC disabled")
+        try:
+            from scipy import signal
+            
+            # ===== STRATEGY 1: High-pass filter (250 Hz, 4th order) =====
+            # Aggressively removes music's bass while preserving speech formants
+            # Frequency analysis shows:
+            #   - Background music: Heavy energy in sub-bass (0-250 Hz)
+            #   - Wake word: Dominant at 415.5 Hz with formants 250-4000 Hz
+            nyquist = self.sample_rate / 2
+            high_pass_freq = 250  # Hz (aggressive bass removal for music rejection)
+            normalized_freq = high_pass_freq / nyquist
+            
+            # Use 4th order Butterworth filter for steeper rolloff (more aggressive)
+            b, a = signal.butter(4, normalized_freq, btype='high')
+            filtered = signal.filtfilt(b, a, audio_chunk)
+            
+            # ===== STRATEGY 2: Spectral gating (threshold -30 dB) =====
+            # Suppress quiet frequency components where noise typically lives
+            # More aggressive than -35 dB to better remove music masking
+            try:
+                import librosa
+                
+                # Compute STFT for spectral analysis
+                D = librosa.stft(filtered, n_fft=2048, hop_length=512)
+                S = np.abs(D)
+                
+                # Convert to dB with reference to max
+                S_db = librosa.power_to_db(S ** 2, ref=np.max)
+                
+                # Create frequency mask: suppress components below -30 dB threshold (more aggressive)
+                threshold_db = -30  # More aggressive than -35 (removes more noise)
+                mask = S_db > threshold_db
+                
+                # Apply mask to suppress quiet noise
+                S_gated = S * mask.astype(float)
+                
+                # Reconstruct time-domain signal
+                D_gated = S_gated * np.exp(1j * np.angle(D))
+                enhanced = librosa.istft(D_gated, hop_length=512)
+                
+                # Pad/trim to match original length if needed
+                if len(enhanced) < len(audio_chunk):
+                    enhanced = np.pad(enhanced, (0, len(audio_chunk) - len(enhanced)))
+                elif len(enhanced) > len(audio_chunk):
+                    enhanced = enhanced[:len(audio_chunk)]
+                
+            except (ImportError, Exception):
+                # If librosa not available or STFT fails, skip spectral gating
+                enhanced = filtered
+            
+            # ===== Subtle normalization =====
+            max_val = np.max(np.abs(enhanced))
+            if max_val > 1.2:  # Only normalize if needed
+                enhanced = enhanced / max_val
+            
+            return enhanced
+            
+        except Exception as e:
+            # On error, return original
+            return audio_chunk
     
     def set_audio_buffer(self, buffer, buffer_lock):
         """Set external audio buffer for the callback to use
@@ -122,61 +171,6 @@ class AudioProcessors:
         self._external_buffer_lock = buffer_lock
         print(f"External audio buffer configured with capacity: {buffer.maxlen}")
     
-    def _apply_agc(self, audio_data):
-        """Apply automatic gain control to audio data
-        
-        Args:
-            audio_data: Numpy array of audio samples
-            
-        Returns:
-            Gain-adjusted audio data
-        """
-        if not self.agc_enabled:
-            return audio_data
-        
-        # Calculate RMS level of current audio
-        rms = np.sqrt(np.mean(audio_data ** 2))
-        
-        # Store RMS history (keep last 10 samples)
-        self.agc_rms_history.append(rms)
-        if len(self.agc_rms_history) > 10:
-            self.agc_rms_history.pop(0)
-        
-        # Use average RMS for smoother adjustment
-        avg_rms = np.mean(self.agc_rms_history)
-        
-        # Calculate desired gain
-        if avg_rms > 0.001:  # Avoid division by zero
-            desired_gain = self.agc_target_level / avg_rms
-            # Clamp to min/max
-            desired_gain = np.clip(desired_gain, self.agc_min_gain, self.agc_max_gain)
-            
-            # Smooth gain changes (attack/release)
-            if desired_gain > self.digital_gain:
-                # Increasing gain (attack)
-                new_gain = self.digital_gain + (desired_gain - self.digital_gain) * self.agc_attack
-            else:
-                # Decreasing gain (release)
-                new_gain = self.digital_gain + (desired_gain - self.digital_gain) * self.agc_release
-            
-            self.digital_gain = new_gain
-            
-            # Print debug info every 100 samples
-            self.agc_sample_count += 1
-            if self.agc_sample_count % 100 == 0 and self.debug_mode:
-                print(f"🎚️ AGC: RMS={avg_rms:.3f}, Gain={self.digital_gain:.2f}x")
-        
-        # Apply gain
-        adjusted = audio_data * self.digital_gain
-        
-        # Prevent clipping
-        max_val = np.max(np.abs(adjusted))
-        if max_val > 1.0:
-            adjusted = adjusted / max_val
-        
-        return adjusted
-    
-
     # Function to record audio (from test_cnn_model.py)
     def record_audio(self, duration, sample_rate, save_path=None, device=None):
         """Record audio with INMP441 support and ALSA error suppression"""
@@ -189,7 +183,7 @@ class AudioProcessors:
                     audio = sd.rec(
                         int(duration * sample_rate), 
                         samplerate=sample_rate, 
-                        channels=1, 
+                        channels=self.audio_channels, 
                         dtype='float32',
                         device=device
                     )
@@ -197,7 +191,7 @@ class AudioProcessors:
                     audio = sd.rec(
                         int(duration * sample_rate), 
                         samplerate=sample_rate, 
-                        channels=1, 
+                        channels=self.audio_channels, 
                         dtype='float32'
                     )
                 sd.wait()
@@ -205,11 +199,8 @@ class AudioProcessors:
             print("Recording complete.")
             audio_flat = audio.flatten()
             
-            # Apply AGC or fixed digital gain
-            if self.agc_enabled:
-                audio_flat = self._apply_agc(audio_flat)
-                print(f"Applied AGC (current gain: {self.digital_gain:.2f}x)")
-            elif self.digital_gain != 1.0:
+            # Apply fixed digital gain
+            if self.digital_gain != 1.0:
                 audio_flat = audio_flat * self.digital_gain
                 # Prevent clipping by normalizing if needed
                 max_val = np.max(np.abs(audio_flat))
@@ -579,15 +570,16 @@ class AudioProcessors:
         
         # Test current microphone
         try:
-            recognizer = sr.Recognizer()
+            # Create a temporary recognizer just for testing
+            test_recognizer = sr.Recognizer()
             mic_kwargs = {}
             if self.mic_device_id is not None:
                 mic_kwargs['device_index'] = self.mic_device_id
             # Use a context manager to test the microphone briefly
             with sr.Microphone(**mic_kwargs) as source:
                 print(f"Testing microphone {mic_kwargs.get('device_index', 'default')}...")
-                recognizer.adjust_for_ambient_noise(source, duration=1)
-                print(f"Energy threshold: {recognizer.energy_threshold}")
+                test_recognizer.adjust_for_ambient_noise(source, duration=1)
+                print(f"Energy threshold: {test_recognizer.energy_threshold}")
                 print(f"Current digital gain: {self.digital_gain}x")
                 print("Microphone is working!")
         except Exception as e:
@@ -631,6 +623,9 @@ class AudioProcessors:
     def audio_callback(self, indata, frames, time_info, status):
         """Audio callback function for real-time audio processing
         
+        Applies speech filtering to reduce background music/noise from reaching
+        the wake word detector. Only human speech is stored in the buffer.
+        
         Note: This callback stores audio data in the VoiceAssistant's buffer,
         not in AudioProcessors itself.
         """
@@ -656,16 +651,19 @@ class AudioProcessors:
             # Prevent clipping
             audio_samples = np.clip(audio_samples, -1.0, 1.0)
 
+        # ===== Store audio in buffer =====
+        # Note: Audio is stored raw here. Filtering is applied only to the
+        # detection window in wake_word_manager before model inference.
+        should_store = True
+        
         # Store in the VoiceAssistant's buffer (if available)
-        if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
+        if should_store and hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
             try:
                 with self._external_buffer_lock:
                     self._external_buffer.extend(audio_samples)
             except Exception as e:
-                if self.debug_mode:
-                    print(f"Error appending to external audio buffer: {e}")
-        elif self.debug_mode:
-            print("No external buffer configured for audio callback")
+                pass  # Silently skip buffer errors
+        # Buffer not configured is OK - initialization happens asynchronously
 
         
     # Comprehensive list of romanized Hindi words

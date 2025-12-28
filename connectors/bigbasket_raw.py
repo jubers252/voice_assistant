@@ -375,11 +375,14 @@ class BigBasketAutomation:
         
         search_selectors = [
             "//input[@placeholder='Search for Products...']",
+            "//input[@placeholder='Search for products, brands and more']",
             "//div[contains(@class,'QuickSearch')]//input",
             "//input[contains(@class,'flex-1')]",
+            "//input[contains(@class,'_3qnLc-')]",  # Latest BigBasket search input
             "//input[@type='text'][contains(@placeholder,'Search')]",
             "//input[contains(@placeholder,'Search')]",
-            "//input[@type='search']"
+            "//input[@type='search']",
+            "//input[@data-testid='searchInputBox']"
         ]
         
         search_input = None
@@ -389,7 +392,7 @@ class BigBasketAutomation:
                 for element in elements:
                     if element.is_displayed():
                         search_input = element
-                        print(f"Found search input with selector: {selector}")
+                        print(f"✓ Found search input with selector: {selector}")
                         break
                 if search_input:
                     break
@@ -397,7 +400,7 @@ class BigBasketAutomation:
                 continue
         
         if not search_input:
-            print("Search input not found")
+            print("✗ Search input not found")
             return False
         
         try:
@@ -405,20 +408,23 @@ class BigBasketAutomation:
             search_input.send_keys(product_name)
             time.sleep(2)
             search_input.send_keys(Keys.RETURN)
-            print(f"Searched for: {product_name}")
+            print(f"✓ Searched for: {product_name}")
             time.sleep(6)  # Wait longer for search results
             
             # Verify we're on a search results page
             current_url = self.driver.current_url
             print(f"After search URL: {current_url}")
             
-            # Check if we have search results
+            # Check if we have search results with improved detection
             result_indicators = [
+                "//div[contains(@class,'_3IXj4F')]",  # Latest product container
+                "//div[@data-testid='productCardContainer']",
                 "//div[contains(@class,'product')]",
                 "//div[contains(@class,'item')]",
                 "//div[contains(@class,'search')]",
                 "//h1[contains(text(),'Search')]",
-                "//span[contains(text(),'results')]"
+                "//span[contains(text(),'results')]",
+                "//span[contains(text(),'result')]"
             ]
             
             has_results = False
@@ -426,18 +432,24 @@ class BigBasketAutomation:
                 try:
                     elements = self.driver.find_elements(By.XPATH, indicator)
                     if elements:
-                        print(f"Found search results: {len(elements)} items")
+                        print(f"✓ Found search results: {len(elements)} items with indicator: {indicator}")
                         has_results = True
                         break
                 except:
                     continue
             
             if not has_results:
-                print("No search results found, but continuing...")
+                print("⚠ No search results found, but continuing...")
+                # Try to capture what's on the page for debugging
+                try:
+                    page_title = self.driver.find_element(By.TAG_NAME, 'h1').text
+                    print(f"Page title: {page_title}")
+                except:
+                    pass
             
             return True
         except Exception as e:
-            print(f"Error searching: {e}")
+            print(f"✗ Error searching: {e}")
             return False
     
     def _find_element_with_selectors(self, container, selectors, element_type):
@@ -658,56 +670,137 @@ class BigBasketAutomation:
         try:
             alternative_products = []
             
-            # Multiple selectors to find product elements
-            product_selectors = [
-                # BigBasket product containers
-                "//div[contains(@class,'Product___StyledDiv')]",
-                "//div[contains(@class,'ProductTile')]",
-                "//div[contains(@class,'product-tile')]",
-                "//div[contains(@class,'SKUDeck___StyledDiv')]",
-                
-                # Generic product containers
-                "//div[contains(@class,'product')]",
-                "//div[contains(@class,'item')]",
-                "//article[contains(@class,'product')]",
-                
-                # Link-based products
-                "//a[contains(@href,'/pd/')]",
-                "//a[contains(@class,'product')]"
-            ]
+            # Wait for dynamic content to load
+            time.sleep(2)
             
-            # Try each selector to find products
-            for selector in product_selectors:
-                try:
-                    elements = self.driver.find_elements(By.XPATH, selector)
-                    if elements:
-                        print(f"Found {len(elements)} potential products with selector: {selector}")
+            # Use the selector that's actually finding results on the search page
+            product_items = self.driver.find_elements(By.XPATH, "//div[contains(@class,'item')]")
+            print(f"✓ Found {len(product_items)} product items with 'item' class")
+            
+            if not product_items:
+                print("✗ No products found, trying alternative patterns...")
+                # Try other common product container patterns
+                for selector in ["//div[contains(@class,'product')]", "//article", "//li"]:
+                    product_items = self.driver.find_elements(By.XPATH, selector)
+                    if product_items:
+                        print(f"  Found {len(product_items)} items with selector: {selector}")
+                        break
+            
+            if product_items:
+                # Extract first 5 products
+                for i, item in enumerate(product_items[:5]):
+                    try:
+                        product_info = {
+                            'name': '',
+                            'price': '',
+                            'link': '',
+                            'brand': ''
+                        }
                         
-                        # Get first 5 products
-                        for i, element in enumerate(elements[:5]):
+                        # Try multiple selectors for product name
+                        name_selectors = [
+                            ".//h2",
+                            ".//h3",
+                            ".//a[@href]",
+                            ".//span[contains(@class,'name')]",
+                            ".//div[contains(text(),'')]",  # Any div with text
+                        ]
+                        
+                        for name_sel in name_selectors:
                             try:
-                                product_info = self._extract_product_info(element, i)
-                                if product_info:
-                                    alternative_products.append(product_info)
-                            except Exception as e:
-                                print(f"Error extracting info for product {i}: {e}")
+                                name_elem = item.find_element(By.XPATH, name_sel)
+                                if name_elem and name_elem.text.strip():
+                                    product_info['name'] = name_elem.text.strip()
+                                    break
+                            except:
                                 continue
                         
-                        if alternative_products:
-                            break
-                except Exception as e:
-                    print(f"Error with selector {selector}: {e}")
-                    continue
+                        # Try multiple selectors for price
+                        price_selectors = [
+                            ".//span[contains(@class,'price')]",
+                            ".//div[contains(@class,'price')]",
+                            ".//span[contains(text(),'₹')]",
+                            ".//span[contains(text(),'Rs')]",
+                        ]
+                        
+                        for price_sel in price_selectors:
+                            try:
+                                price_elem = item.find_element(By.XPATH, price_sel)
+                                if price_elem and price_elem.text.strip():
+                                    price_text = price_elem.text.strip()
+                                    if '₹' in price_text or 'Rs' in price_text or price_text[0].isdigit():
+                                        product_info['price'] = price_text
+                                        break
+                            except:
+                                continue
+                        
+                        # Try to find product link
+                        link_selectors = [
+                            ".//a[@href]",
+                            ".//@href",
+                        ]
+                        
+                        for link_sel in link_selectors:
+                            try:
+                                if link_sel == ".//@href":
+                                    href = item.get_attribute('href')
+                                    if href:
+                                        product_info['link'] = href
+                                        break
+                                else:
+                                    link_elem = item.find_element(By.XPATH, link_sel)
+                                    href = link_elem.get_attribute('href')
+                                    if href:
+                                        product_info['link'] = href
+                                        break
+                            except:
+                                continue
+                        
+                        # Try to find brand
+                        brand_selectors = [
+                            ".//span[contains(@class,'brand')]",
+                            ".//div[contains(@class,'brand')]",
+                            ".//a[1]",  # Sometimes brand is first link
+                        ]
+                        
+                        for brand_sel in brand_selectors:
+                            try:
+                                brand_elem = item.find_element(By.XPATH, brand_sel)
+                                if brand_elem and brand_elem.text.strip():
+                                    product_info['brand'] = brand_elem.text.strip()
+                                    break
+                            except:
+                                continue
+                        
+                        # Validate product info
+                        if product_info['name'] and product_info['name'].lower() not in ['home', 'copyright', 'back', 'close', 'filter']:
+                            alternative_products.append(product_info)
+                            print(f"  ✓ Product {len(alternative_products)}: {product_info['name'][:60]}")
+                            if product_info['price']:
+                                print(f"    Price: {product_info['price']}")
+                        
+                    except Exception as e:
+                        print(f"[DEBUG] Error extracting product {i}: {e}")
+                        continue
             
             if alternative_products:
-                print(f"Found {len(alternative_products)} alternative products")
+                print(f"✓ Found {len(alternative_products)} valid alternative products")
                 return alternative_products
             else:
-                print("No alternative products found")
+                print("✗ No alternative products found after trying all selectors")
+                # Debug output
+                try:
+                    print(f"[DEBUG] Total items found: {len(product_items)}")
+                    if product_items:
+                        print(f"[DEBUG] First item HTML: {product_items[0].get_attribute('outerHTML')[:500]}")
+                except:
+                    pass
                 return []
                 
         except Exception as e:
             print(f"Error getting alternative products: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _extract_product_info(self, product_element, index):
@@ -720,35 +813,59 @@ class BigBasketAutomation:
                 'index': index
             }
             
-            # Extract product name
+            # DEBUG: Print element classes to understand structure
+            element_classes = product_element.get_attribute('class')
+            element_html_snippet = product_element.get_attribute('outerHTML')[:500]
+            print(f"\n[DEBUG Product {index}] Classes: {element_classes}")
+            print(f"[DEBUG Product {index}] HTML: {element_html_snippet}...")
+            
+            # Extract product name - updated selectors for 2024+ BigBasket
             name_selectors = [
+                ".//h2",  # Latest BigBasket uses h2 for product names
+                ".//span[contains(@class,'_3qnLc-')]",  # Product name class
                 ".//h3",
                 ".//h4",
                 ".//div[contains(@class,'name')]",
                 ".//div[contains(@class,'title')]",
                 ".//span[contains(@class,'name')]",
                 ".//a[contains(@class,'title')]",
-                ".//div[contains(@class,'Product___StyledProductName')]"
+                ".//div[contains(@class,'Product___StyledProductName')]",
+                ".//a[@data-testid='productTitle']",
+                ".//div[@data-testid='productTitle']",
+                ".//a",  # Fallback: first link often has product name
+                ".//p",  # Fallback: paragraph
+                ".//span[not(contains(@class,'price'))]"  # Non-price span
             ]
             
             for selector in name_selectors:
                 try:
-                    name_element = product_element.find_element(By.XPATH, selector)
-                    if name_element and name_element.is_displayed():
-                        name_text = name_element.text.strip()
-                        if name_text and len(name_text) > 3:
-                            product_info['name'] = name_text
-                            break
+                    name_elements = product_element.find_elements(By.XPATH, selector)
+                    for name_element in name_elements:
+                        if name_element and name_element.is_displayed():
+                            name_text = name_element.text.strip()
+                            if name_text and len(name_text) > 3 and len(name_text) < 200:
+                                # Skip if it looks like a button or price
+                                if 'add to cart' not in name_text.lower() and '₹' not in name_text:
+                                    product_info['name'] = name_text
+                                    print(f"[DEBUG] Found name with selector {selector}: {name_text}")
+                                    break
+                    if product_info['name']:
+                        break
                 except:
                     continue
             
-            # Extract price
+            # Extract price - updated selectors for 2024+ BigBasket
             price_selectors = [
+                ".//div[contains(@class,'_1sPsX')]",  # Price wrapper class
+                ".//span[contains(@class,'_1l7iYw')]",  # Price amount class
                 ".//span[contains(text(),'₹')]",
                 ".//div[contains(text(),'₹')]",
                 ".//span[contains(@class,'price')]",
                 ".//div[contains(@class,'price')]",
-                ".//span[contains(@class,'amount')]"
+                ".//span[contains(@class,'amount')]",
+                ".//div[contains(@class,'amount')]",
+                ".//span[contains(@class,'bold')]",  # Sometimes price is in bold
+                ".//span"  # Any span might have price
             ]
             
             for selector in price_selectors:
@@ -757,8 +874,9 @@ class BigBasketAutomation:
                     for price_elem in price_elements:
                         if price_elem and price_elem.is_displayed():
                             price_text = price_elem.text.strip()
-                            if '₹' in price_text:
+                            if '₹' in price_text or (price_text and any(c.isdigit() for c in price_text)):
                                 product_info['price'] = price_text
+                                print(f"[DEBUG] Found price with selector {selector}: {price_text}")
                                 break
                     if product_info['price']:
                         break
@@ -767,6 +885,7 @@ class BigBasketAutomation:
             
             # Extract brand (if available)
             brand_selectors = [
+                ".//span[contains(@class,'_2DzOKT')]",  # Brand class
                 ".//span[contains(@class,'brand')]",
                 ".//div[contains(@class,'brand')]",
                 ".//span[contains(@class,'manufacturer')]"
@@ -779,18 +898,23 @@ class BigBasketAutomation:
                         brand_text = brand_element.text.strip()
                         if brand_text:
                             product_info['brand'] = brand_text
+                            print(f"[DEBUG] Found brand: {brand_text}")
                             break
                 except:
                     continue
             
             # Only return if we have at least a name
             if product_info['name']:
+                print(f"✓ Product {index}: {product_info}")
                 return product_info
             else:
+                print(f"✗ Product {index}: NO NAME FOUND")
                 return None
                 
         except Exception as e:
-            print(f"Error extracting product info for index {index}: {e}")
+            print(f"✗ Error extracting product info for index {index}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def go_to_cart(self):

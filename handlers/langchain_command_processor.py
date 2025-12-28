@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 import re
 import warnings
 import urllib3
+import gc
 
 # Suppress urllib3 warnings from Selenium WebDriver connections
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -72,7 +73,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
         
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -969,21 +970,22 @@ class LangChainAgentProcessor:
         )
         
         # Create system prompt
-        system_prompt = """You are Sofi, a voice assistant in Pune, India.
+        system_prompt = """You are Sofi, a female voice assistant in Pune, India.
 
 **TTS RULES:**
 - Keep responses SHORT and conversational for voice output
-- Use simple spoken language, no special characters
+- Use simple spoken language, no special characters dont add "•", "-", "→", etc.
 - Break complex info into brief bullet points
+- generate tts friendly responses as assistant speaking.
 
 **QUESTION RULE:**
 - NEVER ask questions in your response text
-- If you need to ask anything, use ask_follow_up_question tool
+- If you need to ask anything, always use ask_follow_up_question tool for clarification
 - Any response with "?" must use the tool instead
 
 **LANGUAGE RULE - CRITICAL:**
 - Match user's language exactly
-- Hindi input → always respond ONLY in Hindi Devanagari (हिंदी देवनागरी) never romanized form
+- Hindi input → always respond ONLY in Hindi Devanagari (हिंदी देवनागरी) never use romanized form
 - English input → respond in English
 - NEVER use romanized Hindi (no "mausam", use "मौसम")
 - NEVER mix scripts
@@ -1084,6 +1086,9 @@ Brief TTS-friendly, do not add any special character in responses."""
             # Process directly without delayed feedback
             response = agent_processing()
             
+            # Explicitly clean up memory after agent processing
+            gc.collect()
+            
             # No need to check for follow-up questions - the LLM will use the ask_follow_up_question tool when needed
             
             print("Agent processing completed. Ready for next command.")
@@ -1094,6 +1099,8 @@ Brief TTS-friendly, do not add any special character in responses."""
             print(f"Agent error: {e}")
             # Speak error message (LED controlled in audio_processor)
             self.audio_processors.speak(error_msg)
+            # Clean up memory after error
+            gc.collect()
             return False
     
     def get_agent_info(self) -> Dict[str, Any]:

@@ -1,0 +1,688 @@
+"""
+Template matching module for secondary wake word verification.
+Uses MFCC feature correlation to verify wake word detections.
+"""
+
+import numpy as np
+from scipy import signal
+from scipy.spatial import distance
+import librosa
+import sounddevice as sd
+import os
+
+
+class TemplateMatcher:
+    """
+    Template-based wake word verification using MFCC features.
+    Helps reduce false positives by confirming detections with template matching.
+    """
+    
+    def __init__(self, sample_rate=22050, n_mfcc=40, n_fft=2048, hop_length=512):
+        """
+        Initialize template matcher.
+        
+        Args:
+            sample_rate: Audio sample rate
+            n_mfcc: Number of MFCC coefficients
+            n_fft: FFT window size
+            hop_length: Hop length for STFT
+        """
+        self.sample_rate = sample_rate
+        self.n_mfcc = n_mfcc
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+        self.templates = []
+        self.template_labels = []
+        
+    def extract_mfcc(self, audio, sample_rate):
+        """
+        Extract MFCC features from audio.
+        
+        Args:
+            audio: Audio signal
+            sample_rate: Sample rate of audio
+            
+        Returns:
+            MFCC feature matrix (n_mfcc, time_steps)
+        """
+        try:
+            mfcc = librosa.feature.mfcc(
+                y=audio, 
+                sr=sample_rate, 
+                n_mfcc=self.n_mfcc,
+                n_fft=self.n_fft,
+                hop_length=self.hop_length
+            )
+            return mfcc
+        except Exception as e:
+            print(f"Error extracting MFCC: {e}")
+            return None
+    
+    def add_template(self, audio, label="wake_word", sample_rate=None):
+        """
+        Add a template for matching.
+        
+        Args:
+            audio: Reference audio signal
+            label: Label for this template
+            sample_rate: Sample rate (uses default if not provided)
+        """
+        if sample_rate is None:
+            sample_rate = self.sample_rate
+            
+        mfcc = self.extract_mfcc(audio, sample_rate)
+        if mfcc is not None:
+            self.templates.append(mfcc)
+            self.template_labels.append(label)
+            print(f"Template added: {label} (shape: {mfcc.shape})")
+    
+    def chi_squared_distance(self, hist1, hist2):
+        """
+        Calculate chi-squared distance between two feature histograms.
+        More discriminative than DTW for MFCC features.
+        
+        Args:
+            hist1, hist2: Feature matrices (feature_dim, time_steps)
+            
+        Returns:
+            Distance score (0 = identical, higher = different)
+        """
+        # Average the features over time to get feature distribution
+        avg1 = np.mean(hist1, axis=1)  # (feature_dim,)
+        avg2 = np.mean(hist2, axis=1)
+        
+        # Add small epsilon to avoid division by zero
+        avg1 = np.clip(avg1, 1e-10, None)
+        avg2 = np.clip(avg2, 1e-10, None)
+        
+        # Chi-squared distance: sum((a-b)^2 / (a+b))
+        distance = np.sum((avg1 - avg2) ** 2 / (avg1 + avg2 + 1e-10))
+        
+        return distance
+    
+    def feature_similarity(self, features1, features2, method="chi_squared", debug=False):
+        """
+        Calculate similarity between two MFCC feature sets.
+        Uses chi-squared distance for robust discrimination between different speech.
+        
+        Args:
+            features1, features2: MFCC matrices (feature_dim, time_steps)
+            method: "chi_squared" (recommended for MFCC), "cosine", "correlation"
+            debug: Print debug info
+            
+        Returns:
+            Similarity score (0-1, where 1 = identical)
+        """
+        if method == "chi_squared":
+            # Chi-squared distance - designed for probability distributions (like MFCC)
+            # Observed ranges: same word ~30-40, different words ~100-160
+            distance = self.chi_squared_distance(features1, features2)
+            
+            if debug:
+                print(f"  [chi_squared] raw_distance={distance:.2f}")
+            
+            # Calibration for observed distance ranges:
+            # distance 30-35 = identical/very similar (similarity 0.92-1.0)
+            # distance 40-50 = good match (similarity 0.80-0.88)
+            # distance 60-80 = moderate match (similarity 0.60-0.70)
+            # distance 100+ = poor match (similarity < 0.40)
+            
+            # Use logarithmic scaling to map large distances to 0-1 range
+            # Formula: similarity = 1.0 / (1.0 + (distance - 30) / 15)
+            # At distance=30: similarity = 1.0 / 1.0 = 1.0
+            # At distance=45: similarity = 1.0 / 2.0 = 0.5
+            # At distance=60: similarity = 1.0 / 3.0 = 0.33
+            
+            min_distance = 30.0  # Approximate minimum (same word)
+            scale_factor = 20.0  # Controls rate of decay
+            
+            similarity = 1.0 / (1.0 + max(0, (distance - min_distance) / scale_factor))
+            
+            if debug:
+                print(f"  [chi_squared] similarity={similarity:.4f}")
+            
+            return np.clip(similarity, 0.0, 1.0)
+        
+        elif method == "cosine":
+            # Direct cosine similarity - simple and robust
+            mean1 = np.mean(features1, axis=1)
+            mean2 = np.mean(features2, axis=1)
+            
+            norm1 = np.linalg.norm(mean1)
+            norm2 = np.linalg.norm(mean2)
+            
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            
+            similarity = np.dot(mean1, mean2) / (norm1 * norm2)
+            
+            if debug:
+                print(f"  [cosine] similarity={similarity:.4f}")
+            
+            return np.clip(similarity, 0.0, 1.0)
+        
+        else:  # correlation
+            # Correlation - too lenient, keeping for reference
+            mean1 = np.mean(features1, axis=1)
+            mean2 = np.mean(features2, axis=1)
+            
+            mean1_std = (mean1 - np.mean(mean1)) / (np.std(mean1) + 1e-10)
+            mean2_std = (mean2 - np.mean(mean2)) / (np.std(mean2) + 1e-10)
+            
+            correlation = np.dot(mean1_std, mean2_std) / (len(mean1_std) + 1e-10)
+            similarity = (correlation + 1.0) / 2.0
+            
+            if debug:
+                print(f"  [correlation] similarity={similarity:.4f}")
+            
+            return np.clip(similarity, 0.0, 1.0)
+    
+    def cosine_similarity(self, vec1, vec2):
+        """
+        Calculate cosine similarity between two vectors.
+        
+        Args:
+            vec1, vec2: 1D vectors
+            
+        Returns:
+            Cosine similarity score (0-1)
+        """
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        
+        return np.dot(vec1, vec2) / (norm1 * norm2)
+    
+    def dtw_distance(self, x, y, return_raw=False):
+        """
+        Dynamic Time Warping distance - best for matching variable-speed sequences.
+        
+        Args:
+            x, y: Feature sequences (feature_dim, time_steps)
+            return_raw: If True, return both normalized and raw distance
+            
+        Returns:
+            Similarity score (0-1) or (raw_distance, normalized_distance, similarity)
+        """
+        n, m = x.shape[1], y.shape[1]
+        
+        # Compute pairwise distances between frames using cosine distance
+        dist_matrix = np.zeros((n, m))
+        for i in range(n):
+            for j in range(m):
+                # Use cosine distance for MFCC frames
+                a = x[:, i]
+                b = y[:, j]
+                norm_a = np.linalg.norm(a)
+                norm_b = np.linalg.norm(b)
+                
+                if norm_a > 0 and norm_b > 0:
+                    # Cosine distance = 1 - cosine_similarity
+                    cos_sim = np.dot(a, b) / (norm_a * norm_b)
+                    # Clamp to valid range
+                    cos_sim = np.clip(cos_sim, -1.0, 1.0)
+                    dist_matrix[i, j] = 1.0 - cos_sim
+                else:
+                    dist_matrix[i, j] = 1.0
+        
+        # DTW algorithm with optimal warping path
+        dtw_matrix = np.full((n + 1, m + 1), np.inf)
+        dtw_matrix[0, 0] = 0
+        
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                cost = dist_matrix[i - 1, j - 1]
+                dtw_matrix[i, j] = cost + min(
+                    dtw_matrix[i - 1, j],      # insertion
+                    dtw_matrix[i, j - 1],      # deletion
+                    dtw_matrix[i - 1, j - 1]   # match
+                )
+        
+        # Get raw DTW distance
+        raw_distance = dtw_matrix[n, m]
+        
+        # Normalize by path length (Manhattan distance)
+        path_length = n + m
+        normalized_distance = raw_distance / path_length
+        
+        # VERY STRICT formula with hard threshold
+        # Key insight: DTW distances < 0.15 = similar, > 0.20 = different
+        # Don't use exponential/linear - use hard cutoff approach
+        
+        if normalized_distance > 0.25:
+            # Very different - no match possible
+            similarity = 0.0
+        elif normalized_distance > 0.20:
+            # Different enough - low match
+            similarity = (normalized_distance - 0.20) / 0.05  # 0 at 0.20, 1 at 0.25
+            similarity = max(0, 1 - similarity)  # Invert
+        elif normalized_distance > 0.15:
+            # Somewhat different
+            similarity = (normalized_distance - 0.15) / 0.05  # 0 at 0.15, 1 at 0.20
+            similarity = 0.5 * (1 - similarity)  # 0.5 to 0
+        else:
+            # Similar - linear scale from 0 at 0.15 to 1 at 0
+            similarity = max(0, 1 - (normalized_distance / 0.15))
+        
+        if return_raw:
+            return raw_distance, normalized_distance, similarity
+        
+        return similarity
+    
+    def euclidean_distance(self, vec1, vec2):
+        """
+        Calculate normalized euclidean distance between two vectors.
+        Lower values = more similar.
+        
+        Args:
+            vec1, vec2: 1D vectors
+            
+        Returns:
+            Distance score (0-1, where 0 = identical, 1 = very different)
+        """
+        if len(vec1) == 0 or len(vec2) == 0:
+            return 1.0
+        
+        # Normalize vectors
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        
+        if norm1 == 0 or norm2 == 0:
+            return 1.0
+        
+        vec1_norm = vec1 / norm1
+        vec2_norm = vec2 / norm2
+        
+        # Calculate euclidean distance
+        dist = np.sqrt(np.sum((vec1_norm - vec2_norm) ** 2))
+        # Convert to similarity (0-1, where 1 = identical)
+        return 1.0 - (dist / np.sqrt(2))  # Max distance in normalized space is sqrt(2)
+    
+    def frame_wise_correlation(self, features, template):
+        """
+        DEPRECATED - Use DTW instead for better accuracy.
+        """
+        return 0.0
+    
+    def match_features(self, features, match_threshold=0.65, method="dtw"):
+        """
+        Match features against all templates using DTW.
+        DTW is the gold standard for speech recognition matching.
+        
+        Args:
+            features: Input features to match (40, time_steps)
+            match_threshold: Minimum similarity score for match (0.65 = default strict)
+            method: Matching method (currently only "dtw" is recommended)
+            
+        Returns:
+            Tuple (matched, best_score, best_label)
+        """
+        if not self.templates:
+            return False, 0.0, "no_templates"
+        
+        best_score = 0.0
+        best_label = None
+        matched = False
+        
+        for template, label in zip(self.templates, self.template_labels):
+            # Use DTW for sequence matching (best for variable-speed speech)
+            score = self.dtw_distance(features, template)
+            
+            if score > best_score:
+                best_score = score
+                best_label = label
+            
+            if score >= match_threshold:
+                matched = True
+        
+        return matched, best_score, best_label
+    
+    def match_direct(self, audio, match_threshold=0.75, sample_rate=22050, method="chi_squared", debug=False):
+        """
+        Direct feature comparison - uses chi-squared distance for accurate discrimination.
+        Extracts MFCC from audio and compares directly to templates.
+        
+        Args:
+            audio: Audio signal to match
+            match_threshold: Minimum similarity (0-1, default 0.75 = high confidence match)
+            sample_rate: Sample rate
+            method: "chi_squared" (recommended) or "cosine"/"correlation"
+            debug: Print debug info
+            
+        Returns:
+            Tuple (matched, best_score, best_label)
+        """
+        if not self.templates:
+            return False, 0.0, "no_templates"
+        
+        # Extract features from input audio
+        mfcc = self.extract_mfcc(audio, sample_rate)
+        if mfcc is None:
+            return False, 0.0, "feature_extraction_failed"
+        
+        best_score = 0.0
+        best_label = None
+        matched = False
+        
+        # Compare against all templates
+        for template, label in zip(self.templates, self.template_labels):
+            score = self.feature_similarity(mfcc, template, method=method, debug=debug)
+            
+            if score > best_score:
+                best_score = score
+                best_label = label
+            
+            if score >= match_threshold:
+                matched = True
+        
+        return matched, best_score, best_label
+    
+    def match_with_sliding_window(self, audio, match_threshold=0.50, window_duration=2.0, 
+                                   step_duration=0.2, sample_rate=22050):
+        """
+        Match audio file against templates using sliding window.
+        This finds the best matching portion of the audio (e.g., just the wake word part).
+        
+        Useful when audio contains the wake word mixed with other words/noise.
+        
+        Args:
+            audio: Audio signal to match
+            match_threshold: Minimum similarity score
+            window_duration: Length of window to analyze (seconds)
+            step_duration: How much to move window each step (seconds)
+            sample_rate: Sample rate of audio
+            
+        Returns:
+            Dict with:
+            {
+                'matched': bool,
+                'best_score': float,
+                'best_label': str,
+                'best_position': float (seconds),
+                'all_scores': list of (position, score) tuples
+            }
+        """
+        if not self.templates:
+            return {'matched': False, 'best_score': 0.0, 'best_label': 'no_templates', 
+                    'best_position': 0.0, 'all_scores': []}
+        
+        window_samples = int(window_duration * sample_rate)
+        step_samples = int(step_duration * sample_rate)
+        
+        best_score = 0.0
+        best_label = None
+        best_position = 0.0
+        all_scores = []
+        
+        # Slide window across audio
+        for start in range(0, len(audio) - window_samples + 1, step_samples):
+            end = start + window_samples
+            window_audio = audio[start:end]
+            
+            # Extract features from this window
+            mfcc = self.extract_mfcc(window_audio, sample_rate)
+            if mfcc is None:
+                continue
+            
+            # Match against all templates
+            for template, label in zip(self.templates, self.template_labels):
+                score = self.dtw_distance(mfcc, template)
+                position = start / sample_rate
+                
+                if score > best_score:
+                    best_score = score
+                    best_label = label
+                    best_position = position
+                
+                all_scores.append((position, label, score))
+        
+        matched = best_score >= match_threshold
+        
+        return {
+            'matched': matched,
+            'best_score': best_score,
+            'best_label': best_label,
+            'best_position': best_position,
+            'all_scores': all_scores
+        }
+    
+    def verify_detection(self, audio, confidence_from_model, 
+                        model_threshold=0.95, template_threshold=0.65,
+                        method="dtw"):
+        """
+        Two-step verification of wake word detection.
+        Requires both model confidence AND template matching to confirm.
+        
+        Args:
+            audio: Audio signal to verify
+            confidence_from_model: Confidence score from neural network (0-1)
+            model_threshold: Minimum model confidence required
+            template_threshold: Minimum template match score (0.65 = strict)
+            method: Template matching method (use "dtw")
+            
+        Returns:
+            Tuple (is_valid, model_conf, template_match_score, match_label)
+        """
+        # Step 1: Check model confidence
+        if confidence_from_model < model_threshold:
+            return False, confidence_from_model, 0.0, None
+        
+        # Step 2: Extract and match features
+        mfcc = self.extract_mfcc(audio, self.sample_rate)
+        if mfcc is None:
+            return False, confidence_from_model, 0.0, None
+        
+        matched, score, label = self.match_features(
+            mfcc, 
+            match_threshold=template_threshold,
+            method=method
+        )
+        
+        # Return True only if BOTH conditions are met
+        is_valid = confidence_from_model >= model_threshold and score >= template_threshold
+        
+        return is_valid, confidence_from_model, score, label
+    
+    def record_audio(self, duration=2.0, sample_rate=22050, device=None):
+        """
+        Record audio for specified duration.
+        
+        Args:
+            duration: Recording duration in seconds (default 2.0)
+            sample_rate: Sample rate for recording (default 22050)
+            device: Audio device index (None = default)
+            
+        Returns:
+            Audio array or None if recording failed
+        """
+        try:
+            print(f"Recording {duration} seconds of audio...")
+            audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, 
+                          channels=1, device=device)
+            sd.wait()  # Wait for recording to finish
+            audio = audio.flatten()  # Convert to 1D array
+            print("Recording complete!")
+            return audio
+        except Exception as e:
+            print(f"Error recording audio: {e}")
+            return None
+    
+    def load_template_from_file(self, audio_file_path, label=None):
+        """
+        Load audio file and add as template.
+        
+        Args:
+            audio_file_path: Path to audio file (wav, mp3, etc.)
+            label: Label for this template (default: filename)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not os.path.exists(audio_file_path):
+                print(f"File not found: {audio_file_path}")
+                return False
+            
+            # Load audio file using librosa
+            audio, sr = librosa.load(audio_file_path, sr=self.sample_rate)
+            
+            if label is None:
+                label = os.path.basename(audio_file_path)
+            
+            self.add_template(audio, label, sample_rate=sr)
+            return True
+        except Exception as e:
+            print(f"Error loading template from {audio_file_path}: {e}")
+            return False
+    
+    def load_templates_from_directory(self, directory_path):
+        """
+        Load all audio files from directory as templates.
+        
+        Args:
+            directory_path: Path to directory with audio files
+            
+        Returns:
+            Number of templates loaded
+        """
+        if not os.path.isdir(directory_path):
+            print(f"Directory not found: {directory_path}")
+            return 0
+        
+        loaded = 0
+        for filename in os.listdir(directory_path):
+            if filename.endswith(('.wav', '.mp3', '.ogg', '.flac')):
+                file_path = os.path.join(directory_path, filename)
+                if self.load_template_from_file(file_path):
+                    loaded += 1
+        
+        print(f"Loaded {loaded} templates from {directory_path}")
+        return loaded
+    
+    def record_and_match(self, duration=2.0, sample_rate=22050, 
+                        template_threshold=0.65, print_details=True):
+        """
+        Simple function: Record 2 seconds and match against templates.
+        Uses DTW (Dynamic Time Warping) for accurate sequence matching.
+        
+        Args:
+            duration: Recording duration in seconds
+            sample_rate: Sample rate for recording
+            template_threshold: Minimum match score (0.65 = strict, 0.75 = very strict)
+            print_details: Print matching details
+            
+        Returns:
+            Dict with results:
+            {
+                'matched': bool,
+                'score': float,
+                'label': str,
+                'audio': numpy array
+            }
+        """
+        # Step 1: Record audio
+        audio = self.record_audio(duration=duration, sample_rate=sample_rate)
+        if audio is None:
+            return {'matched': False, 'score': 0.0, 'label': 'recording_failed', 'audio': None}
+        
+        # Step 2: Extract features
+        mfcc = self.extract_mfcc(audio, sample_rate)
+        if mfcc is None:
+            return {'matched': False, 'score': 0.0, 'label': 'feature_extraction_failed', 'audio': audio}
+        
+        # Step 3: Match against templates using DTW
+        matched, score, label = self.match_features(
+            mfcc,
+            match_threshold=template_threshold,
+            method="dtw"
+        )
+        
+        result = {
+            'matched': matched,
+            'score': score,
+            'label': label,
+            'audio': audio
+        }
+        
+        # Print results
+        if print_details:
+            print("\n" + "="*50)
+            print("MATCHING RESULTS (STRICT DTW)")
+            print("="*50)
+            if label == "no_templates":
+                print("❌ No templates loaded!")
+            else:
+                match_symbol = "✓ YES" if matched else "✗ NO"
+                print(f"Match: {match_symbol}")
+                print(f"Score: {score:.4f} (threshold: {template_threshold:.4f})")
+                print(f"Label: {label}")
+                if not matched:
+                    gap = template_threshold - score
+                    print(f"Gap: {gap:.4f} (need {gap:.4f} more)")
+            print("="*50 + "\n")
+        
+        return result
+    
+    def analyze_templates(self):
+        """
+        Analyze loaded templates to check for similarity.
+        Helpful for debugging if all scores are too high.
+        """
+        if len(self.templates) < 2:
+            print("Need at least 2 templates to analyze")
+            return
+        
+        print("\n" + "="*70)
+        print("TEMPLATE ANALYSIS - Checking for Data Quality Issues")
+        print("="*70)
+        
+        # Compute distances between all templates
+        distances = []
+        print(f"\nDTW distances between templates:")
+        print("-" * 70)
+        print(f"{'Template 1':<25} {'Template 2':<25} {'Distance':<15}")
+        print("-" * 70)
+        
+        for i, (t1, l1) in enumerate(zip(self.templates, self.template_labels)):
+            for j, (t2, l2) in enumerate(zip(self.templates, self.template_labels)):
+                if i < j:
+                    raw, norm, sim = self.dtw_distance(t1, t2, return_raw=True)
+                    distances.append((norm, sim))
+                    print(f"{l1[:24]:<25} {l2[:24]:<25} {norm:>6.4f} (sim: {sim:.4f})")
+        
+        if distances:
+            norms = [d[0] for d in distances]
+            sims = [d[1] for d in distances]
+            
+            print("-" * 70)
+            print(f"\n📊 Statistics:")
+            print(f"   Min distance: {min(norms):.4f}")
+            print(f"   Max distance: {max(norms):.4f}")
+            print(f"   Avg distance: {np.mean(norms):.4f}")
+            print(f"   Std deviation: {np.std(norms):.4f}")
+            
+            print(f"\n   Min similarity: {min(sims):.4f}")
+            print(f"   Max similarity: {max(sims):.4f}")
+            print(f"   Avg similarity: {np.mean(sims):.4f}")
+            
+            # Check for problematic data
+            if min(norms) < 0.1:
+                print("\n⚠️  WARNING: Templates are VERY similar to each other!")
+                print("   This suggests your training data may:")
+                print("   - Be duplicates or near-duplicates")
+                print("   - All be from the same speaker/environment")
+                print("   - Have very similar MFCC features")
+                print("\n   📋 Solution: Use diverse training data:")
+                print("      - Different speakers")
+                print("      - Different microphones")
+                print("      - Different background noise levels")
+                print("      - Different speaking speeds/styles")
+            elif min(norms) < 0.3:
+                print("\n⚠️  INFO: Templates are fairly similar")
+                print("   Consider using more diverse training examples")
+            else:
+                print("\n✅ Good: Templates show reasonable diversity")
+        
+        print("\n" + "="*70)

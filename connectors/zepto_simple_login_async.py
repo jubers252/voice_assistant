@@ -26,7 +26,7 @@ class ZeptoLoginAsync:
         self.context = None
         self.page = None
         self.playwright = None
-        self.user_data_dir = "./zepto_browser_data"
+        self.user_data_dir = "connectors/zepto_browser_data"
         self.session_metadata_file = "zepto_session_metadata.json"
         
         # Create browser data directory

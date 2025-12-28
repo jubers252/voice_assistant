@@ -672,10 +672,10 @@ def demo_langchain_tools():
         print(f"Search Product Info Result: {result2}")
         result3 = tools.clear_cart()
         print(f"Clear Cart Result: {result3}")
-        print("\n2. Agent Tool: Search Product Info (browser stays open)")
-        'add_multiple|milk:2,bread:1,eggs:6'
-        result2 = tools.add_multiple_products("Amul gold full cream milk:2")
-        print(f"Clear Cart Result: {result2}")
+        # print("\n2. Agent Tool: Search Product Info (browser stays open)")
+        # 'add_multiple|milk:2,bread:1,eggs:6'
+        # result2 = tools.add_multiple_products("Amul gold full cream milk:2")
+        # print(f"Clear Cart Result: {result2}")
         
         # print("\n3. Agent Tool: Add Product (browser stays open)")
         # result3 = tools.add_product_to_cart("milk")

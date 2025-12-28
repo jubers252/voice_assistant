@@ -40,16 +40,33 @@ class SpeechRecognizer:
             # Non-fatal: leave device_index as-is (None will let speech_recognition
             # use the system default device)
             self.device_index = None
+        
+        # Warm up microphone to avoid 100ms+ latency on first use
+        self._warmup_microphone()
+    
+    def _warmup_microphone(self):
+        """Pre-open and close microphone to prime the device driver"""
+        try:
+            mic_kwargs = {}
+            if self.device_index is not None:
+                mic_kwargs['device_index'] = self.device_index
+            with suppress_alsa_errors():
+                microphone = sr.Microphone(**mic_kwargs)
+                with microphone as source:
+                    pass  # Just open and close to warm up
+            print("[RECOGNIZER] Microphone warmed up")
+        except Exception as e:
+            print(f"[RECOGNIZER] Microphone warm-up failed (non-critical): {e}")
 
     def _setup_recognizer(self):
-        # INMP441 is very sensitive - use balanced thresholds
-        self.recognizer.energy_threshold = 120  # Balanced for sensitive INMP441
+        # INMP441 is very sensitive - use balanced thresholds for natural speech
+        self.recognizer.energy_threshold = 30  # Slightly higher to reduce false positives while still catching normal speech
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
-        self.recognizer.dynamic_energy_ratio = 1.5  # Increased for better noise rejection
-        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping (was 1.5)
-        self.recognizer.phrase_threshold = 0.5  # Minimum 500ms to avoid noise triggers
-        self.recognizer.non_speaking_duration = 1.5  # Max 1.5 second pause mid-phrase (was 1.0)
+        self.recognizer.dynamic_energy_ratio = 1.5  # Reduced from 2.0 for better natural speech detection
+        self.recognizer.pause_threshold = 1.0  # 1.0 second of silence before stopping (for natural pauses)
+        self.recognizer.phrase_threshold = 0.2  # Minimum 100ms to catch speech start quickly (reduced from 300ms)
+        self.recognizer.non_speaking_duration = 0.5  # Max 0.5 second pause mid-phrase for natural speaking
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -62,6 +79,7 @@ class SpeechRecognizer:
         Listen for user command with follow-up functionality and retry logic.
         """
         import time as timing_module
+        import gc
         
         if is_follow_up:
             print("[ASSISTANT] Listening for follow-up response...")
@@ -71,80 +89,64 @@ class SpeechRecognizer:
 
         retry_count = 0
         while retry_count <= max_retries:
+            microphone = None
+            audio = None
             try:
                 # Try opening the microphone with ALSA error suppression
-                try:
-                    t_mic_start = timing_module.time()
-                    mic_kwargs = {}
-                    if self.device_index is not None:
-                        mic_kwargs['device_index'] = self.device_index
-                    
-                    # Suppress ALSA warnings only during microphone object creation
-                    # ALSA prints warnings at C library level which we can't fully suppress
-                    with suppress_alsa_errors():
+                mic_kwargs = {}
+                if self.device_index is not None:
+                    mic_kwargs['device_index'] = self.device_index
+                
+                # Suppress ALSA warnings only during microphone object creation
+                t_mic_start = timing_module.time()
+                with suppress_alsa_errors():
+                    try:
+                        microphone = sr.Microphone(**mic_kwargs)
+                    except (OSError, AttributeError) as e:
+                        # Failed to find/open microphone device
+                        raise Exception(f"Cannot open microphone device: {type(e).__name__}: {e}")
+                
+                # Open microphone stream (also with ALSA suppression)
+                with suppress_alsa_errors():
+                    with microphone as source:
+                        t_mic_open = timing_module.time()
+                        print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
+                        
+                        # Skip ambient noise calibration - it's too aggressive
+                        # Dynamic threshold will handle adjustment during listening
+                        print(f"Energy threshold: {self.recognizer.energy_threshold:.0f}")
+                        print(f"Phrase threshold: {self.recognizer.phrase_threshold:.2f}s")
+                        print(f"Pause threshold: {self.recognizer.pause_threshold:.2f}s")
+                        print(f"Non-speaking duration: {self.recognizer.non_speaking_duration:.2f}s")
+                        
+                        self._print_attempt(retry_count, is_follow_up)
+                        print("i m listening...")
+                        listen_timeout = timeout if retry_count == 0 else timeout + 3
+
+                        # Ensure recognizer exists
+                        if not self.recognizer:
+                            print("[ASSISTANT] Speech recognizer not initialized")
+                            raise Exception("Recognizer not initialized")
+
+                        t_listen_start = timing_module.time()
                         try:
-                            microphone = sr.Microphone(**mic_kwargs)
-                        except OSError as e:
-                            # Failed to find/open microphone device
-                            raise Exception(f"Cannot open microphone device: {e}")
-                    
-                    # Open microphone stream (also with ALSA suppression)
-                    with suppress_alsa_errors():
-                        with microphone as source:
-                            t_mic_open = timing_module.time()
-                            print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
-                            
-                            # Quick ambient noise check (reduced from 0.5s to 0.2s)
-                            # Dynamic threshold handles ongoing adjustment, this is just initial baseline
-                            if retry_count == 0 and not hasattr(self, '_calibrated_once'):
-                                print("Quick ambient calibration...")
-                                t_cal_start = timing_module.time()
-                                # Store original threshold
-                                original_threshold = self.recognizer.energy_threshold
-                                self.recognizer.adjust_for_ambient_noise(source, duration=0.15)
-                                t_cal_end = timing_module.time()
-                                
-                                # Don't let calibration set threshold too high - cap it
-                                if self.recognizer.energy_threshold > original_threshold * 2:
-                                    print(f"Calibration too aggressive ({self.recognizer.energy_threshold:.0f}), capping at {original_threshold * 1.5:.0f}")
-                                    self.recognizer.energy_threshold = original_threshold * 1.5
-                                
-                                print(f"Energy threshold: {self.recognizer.energy_threshold:.0f} (calibration took {(t_cal_end - t_cal_start)*1000:.0f}ms)")
-                                self._calibrated_once = True  # Only calibrate once per session
-                            
-                            self._print_attempt(retry_count, is_follow_up)
-                            print("i m listening...")
-                            listen_timeout = timeout if retry_count == 0 else timeout + 3
-
-                            # Ensure recognizer exists
-                            if not self.recognizer:
-                                print("[ASSISTANT] Speech recognizer not initialized")
-                                retry_count += 1
-                                continue
-
-                            t_listen_start = timing_module.time()
                             audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=15)
-                            t_listen_end = timing_module.time()
-                            print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
-
-                except Exception as mic_open_error:
-                    if self.pixel_led:
-                        self.pixel_led.off()
-                    
-                    error_msg = str(mic_open_error) if str(mic_open_error) else "Unknown error"
-                    print(f"[ASSISTANT] Microphone open failed: {error_msg}")
-                    
-                    # On first retry, try to find a working device
-                    if retry_count == 0:
-                        print("[ASSISTANT] Searching for working microphone device...")
-                        if self._choose_device_index(force_search=True):
-                            print(f"[ASSISTANT] Found device, retrying with device_index={self.device_index}")
-                        retry_count += 1
-                        continue
-                    else:
-                        print("[ASSISTANT] Microphone still unavailable, skipping retry")
-                        retry_count += 1
-                        continue
+                        except sr.WaitTimeoutError as wte:
+                            # This is expected - no speech detected
+                            print(f"[ASSISTANT] No speech detected (timeout after {listen_timeout}s). Trying again... ({retry_count + 1}/{max_retries + 1})")
+                            if self.pixel_led:
+                                self.pixel_led.off()
+                            retry_count += 1
+                            continue
+                        except Exception as listen_error:
+                            print(f"[ASSISTANT] Listen error: {type(listen_error).__name__}: {listen_error}")
+                            if self.pixel_led:
+                                self.pixel_led.off()
+                            retry_count += 1
+                            continue
+                        
+                        t_listen_end = timing_module.time()
+                        print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
 
                 # Basic validation of audio object
                 if audio is None or not hasattr(audio, 'frame_data') or not hasattr(audio, 'sample_rate'):
@@ -167,15 +169,45 @@ class SpeechRecognizer:
                     retry_count += 1
                     continue
 
-            except sr.WaitTimeoutError:
-                self.pixel_led.off()
-                print(f"[ASSISTANT] No speech detected. Trying again... ({retry_count + 1}/{max_retries + 1})")
-                retry_count += 1
-                continue
             except Exception as e:
-                print(f"[ASSISTANT] Recognition failed: {e}. Trying again... ({retry_count + 1}/{max_retries + 1})")
-                retry_count += 1
-                continue
+                if self.pixel_led:
+                    self.pixel_led.off()
+                
+                error_msg = str(e) if str(e) else "Unknown error"
+                print(f"[ASSISTANT] Microphone/listen error: {error_msg}")
+                
+                # On first retry, try to find a working device
+                if retry_count == 0:
+                    print("[ASSISTANT] Searching for working microphone device...")
+                    if self._choose_device_index(force_search=True):
+                        print(f"[ASSISTANT] Found device, retrying with device_index={self.device_index}")
+                    retry_count += 1
+                    continue
+                else:
+                    print("[ASSISTANT] Microphone still unavailable, skipping retry")
+                    retry_count += 1
+                    continue
+            finally:
+                # Explicitly clean up audio and microphone objects
+                if audio is not None:
+                    try:
+                        # Delete audio frame data explicitly
+                        if hasattr(audio, 'frame_data'):
+                            del audio.frame_data
+                        del audio
+                    except:
+                        pass
+                
+                if microphone is not None:
+                    try:
+                        microphone.close()
+                        del microphone
+                    except:
+                        pass
+                
+                # Force garbage collection to free C resources
+                gc.collect()
+                    
         print("[ASSISTANT] No valid command detected after multiple attempts.")
         # Speak feedback only after all retries are exhausted
         self.audio_processor.speak("I didn't hear anything. Please call if you need me.")
@@ -198,6 +230,13 @@ class SpeechRecognizer:
         except Exception as e:
             print(f"[ASSISTANT] Unexpected recognition error: {e}")
             return None
+        finally:
+            # Clean up audio data after recognition
+            try:
+                import gc
+                gc.collect()
+            except:
+                pass
 
     def list_available_microphones(self):
         """Return a list of available microphone names."""
@@ -243,12 +282,19 @@ class SpeechRecognizer:
                 try:
                     print(f"[MIC] Testing device {idx}: {names[idx]}")
                     with suppress_alsa_errors():
-                        with sr.Microphone(device_index=idx) as _:
-                            self.device_index = idx
-                            print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
-                            return True
+                        mic = sr.Microphone(device_index=idx)
+                        with mic as source:
+                            # Try to actually listen to verify the device works
+                            try:
+                                self.recognizer.listen(source, timeout=1.0, phrase_time_limit=1.0)
+                            except sr.WaitTimeoutError:
+                                # Timeout is ok - device is working, just no audio
+                                pass
+                        self.device_index = idx
+                        print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
+                        return True
                 except Exception as e:
-                    print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}")
+                    print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}: {e}")
                     continue
 
         # Try all other devices
@@ -258,11 +304,17 @@ class SpeechRecognizer:
             try:
                 print(f"[MIC] Testing device {idx}: {names[idx]}")
                 with suppress_alsa_errors():
-                    with sr.Microphone(device_index=idx) as _:
-                        self.device_index = idx
-                        print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
-                        return True
-            except Exception:
+                    mic = sr.Microphone(device_index=idx)
+                    with mic as source:
+                        try:
+                            self.recognizer.listen(source, timeout=1.0, phrase_time_limit=1.0)
+                        except sr.WaitTimeoutError:
+                            pass
+                    self.device_index = idx
+                    print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
+                    return True
+            except Exception as e:
+                print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}")
                 continue
 
         # Last resort - use None (system default)
