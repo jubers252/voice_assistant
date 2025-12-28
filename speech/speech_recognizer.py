@@ -60,13 +60,13 @@ class SpeechRecognizer:
 
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 30  # Slightly higher to reduce false positives while still catching normal speech
+        self.recognizer.energy_threshold = 20  # Lower threshold to catch quieter speech
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
         self.recognizer.dynamic_energy_ratio = 1.5  # Reduced from 2.0 for better natural speech detection
-        self.recognizer.pause_threshold = 1.0  # 1.0 second of silence before stopping (for natural pauses)
-        self.recognizer.phrase_threshold = 0.2  # Minimum 100ms to catch speech start quickly (reduced from 300ms)
-        self.recognizer.non_speaking_duration = 0.5  # Max 0.5 second pause mid-phrase for natural speaking
+        self.recognizer.pause_threshold = 3.0  # 3.0 seconds of silence before stopping (allow long natural pauses)
+        self.recognizer.phrase_threshold = 0.1  # Minimum 100ms to catch speech start quickly
+        self.recognizer.non_speaking_duration = 2.0  # Max 2.0 seconds pause mid-phrase for natural speaking (breathing, hesitation)
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -112,6 +112,12 @@ class SpeechRecognizer:
                         t_mic_open = timing_module.time()
                         print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
                         
+                        # RE-APPLY aggressive thresholds just before listening
+                        # (in case they got reset somewhere)
+                        self.recognizer.pause_threshold = 3.0  # 3 seconds of silence
+                        self.recognizer.non_speaking_duration = 1.5  # 2.5 seconds pause mid-phrase
+                        self.recognizer.phrase_threshold = 0.1  # Start capturing after 100ms
+                        
                         # Skip ambient noise calibration - it's too aggressive
                         # Dynamic threshold will handle adjustment during listening
                         print(f"Energy threshold: {self.recognizer.energy_threshold:.0f}")
@@ -130,7 +136,7 @@ class SpeechRecognizer:
 
                         t_listen_start = timing_module.time()
                         try:
-                            audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=15)
+                            audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=20)
                         except sr.WaitTimeoutError as wte:
                             # This is expected - no speech detected
                             print(f"[ASSISTANT] No speech detected (timeout after {listen_timeout}s). Trying again... ({retry_count + 1}/{max_retries + 1})")
