@@ -203,6 +203,71 @@ class SpotifyConnector:
             raise Exception("No active Spotify device found. Please open Spotify and start playing something.")
         self.spotify.pause_playback(device_id=device_id)
     
+    def is_music_playing(self):
+        """
+        Check if music is currently playing on the Raspberry Pi (librespot) device.
+        Gets current playback and verifies it's playing on the configured device.
+        
+        Returns:
+            bool: True if music is playing on the Raspberry Pi device, False otherwise
+        """
+        try:
+            # Get current playback across all devices
+            playback = self.spotify.current_playback()
+            
+            if playback is None:
+                return False
+            
+            # Check if music is playing
+            if not playback.get('is_playing', False):
+                return False
+            
+            # If device_id is set, verify music is playing on THIS device
+            if self.device_id:
+                device = playback.get('device', {})
+                if device.get('id') != self.device_id:
+                    print(f"[SPOTIFY] Music playing on different device: {device.get('name')}")
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"[SPOTIFY] Error checking playback: {e}")
+            return False
+    
+    def get_current_track(self):
+        """
+        Get currently playing track on the Raspberry Pi (librespot) device.
+        
+        Returns:
+            dict: Track info (name, artist, album, device) or None if nothing playing
+        """
+        try:
+            # Get current playback
+            playback = self.spotify.current_playback()
+            
+            if playback is None or not playback.get('is_playing'):
+                return None
+            
+            # If device_id is set, verify it's playing on THIS device
+            if self.device_id:
+                device = playback.get('device', {})
+                if device.get('id') != self.device_id:
+                    return None
+            
+            track = playback.get('item', {})
+            return {
+                'name': track.get('name', 'Unknown'),
+                'artist': ', '.join([a['name'] for a in track.get('artists', [])]),
+                'album': track.get('album', {}).get('name', 'Unknown'),
+                'duration_ms': track.get('duration_ms', 0),
+                'progress_ms': playback.get('progress_ms', 0),
+                'device': playback.get('device', {}).get('name', 'Unknown Device')
+            }
+        except Exception as e:
+            print(f"[SPOTIFY] Error getting current track: {e}")
+            return None
+    
     def resume_playback(self, device_id=None):
         """Resume playback of the currently paused song."""
         if device_id is None:
@@ -327,6 +392,12 @@ class SpotifyConnector:
             elif tool_info.get("action") == "next":
                 self.play_next(device_id=device_id)
                 return "Playing next song"
+            elif tool_info.get("action") == "current_track":
+                track = self.get_current_track()
+                if track:
+                    return f"Currently playing '{track['name']}' by {track['artist']} from the album '{track['album']}' on device '{track['device']}'"
+                else:
+                    return "No music is currently playing."
             else:
                 return "Unsupported Spotify action."
         except Exception as e:
@@ -416,9 +487,10 @@ class SpotifyConnector:
             return f"Error: {error_message}"
         
 if __name__ == "__main__":
-    pass
-    # Create a temporary connector just to open Spotify in Edge
-    tool_data = {"tool": "spotify", "action": "stop", "target": "track", "name": "lal pari"}
-    spotify_connector = SpotifyConnector(None)
-    conversation_history = {}
-    print(spotify_connector.handle_spotify_action_with_feedback(tool_data, conversation_history))
+    # Test: Check if music is playing
+    # Use the existing main() method which handles setup.txt and OAuth
+    test_data = {"action": "current_track", "target": "track", "name": "shape of you"}
+    # Uncomment to test:
+    result = SpotifyConnector(None).main(test_data)  # Won't work without proper spotify object
+    # print("To test, use voice_assistant.py which properly initializes SpotifyConnector")
+    print(result)

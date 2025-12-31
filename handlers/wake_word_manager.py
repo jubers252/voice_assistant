@@ -2,7 +2,7 @@ import time
 import numpy as np
 import threading
 from audio.template_matcher import TemplateMatcher
-
+from connectors.spotify_connector import SpotifyConnector
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
@@ -14,7 +14,7 @@ class WakeWordManager:
         self.pixel_led = pixel_led
         self.sample_rate = sample_rate
         self.template_matcher = TemplateMatcher(sample_rate=sample_rate, n_mfcc=40) 
-        self.spotify_connector = None  # Will be set by voice_assistant.py if available
+        self.spotify_connector = SpotifyConnector(None)
    
         self.energy_threshold = energy_threshold 
         self.confidence_threshold = confidence_threshold 
@@ -55,39 +55,28 @@ class WakeWordManager:
     def set_audio_stream(self, stream):
         """Set the audio stream reference so we can stop it during speech recognition"""
         self.audio_stream = stream
+
     
-    def set_spotify_connector(self, spotify_connector):
-        """Set Spotify connector to check if music is currently playing"""
-        self.spotify_connector = spotify_connector
-    
-    def is_music_playing(self, audio_window=None):
+    def is_spotify_playing(self):
         """
-        Check if music is currently playing by analyzing audio energy.
-        When music plays, overall audio energy is significantly higher than voice alone.
+        Check if Spotify is currently playing music.
+        
+        Returns:
+            bool: True if Spotify is actively playing, False otherwise
         """
+   
         try:
-            if audio_window is None or len(audio_window) == 0:
-                return False
-            
-            # Calculate RMS energy of the audio window
-            rms_energy = np.sqrt(np.mean(audio_window ** 2))
-            
-            # High energy threshold indicates music playing
-            # Normal voice: ~0.058, Music+voice: ~0.11-0.12
-            music_threshold = 0.16
-            is_playing = rms_energy > music_threshold
-            
-            if self.debug_mode and rms_energy > 0.005:
-                status = "MUSIC" if is_playing else "QUIET"
-                print(f"[AUDIO] Energy={rms_energy:.4f} → {status} (threshold={music_threshold})")
-            
-            return is_playing
-            
+            result = self.spotify_connector.main({"action": "current_track"})
+            if result and "Currently playing" in str(result):
+                return True
+            return False
         except Exception as e:
             if self.debug_mode:
-                print(f"[AUDIO] Error checking energy: {e}")
+                print(f"[SPOTIFY] Error checking playback: {e}")
             return False
     
+    
+
     def handle_wake_word_detection(self, process_command_callback):
         """Handle actions when wake word is detected"""
         import time as timing_module
@@ -176,11 +165,15 @@ class WakeWordManager:
                     time.sleep(self.step_duration)
                     continue
 
-                music_playing = self.is_music_playing(audio_window)
+
+                music_playing = self.is_spotify_playing()
                 
                 try:
 
-                    template_threshold = 0.15 if music_playing else 0.85
+                    # Thresholds calibrated with exponential similarity function
+                    # Real wake words: best match ~0.50-0.55, high variance (0.10+)
+                    # Silence/noise: all matches uniform, caught by variance check
+                    template_threshold = 0.25 if music_playing else 0.75
                     
                     is_match, similarity_score, best_label, all_scores = self.template_matcher.match_audio_window(
                         audio_window, self.sample_rate, match_threshold=template_threshold, debug=self.debug_mode

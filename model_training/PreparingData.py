@@ -5,7 +5,7 @@ import os
 
 
 SAMPLE_RATE = 16000
-RECORD_SECONDS = 1
+RECORD_SECONDS = 2
 SAVE_DIR = os.path.join(os.path.dirname(__file__), "audio_data")  # Always save in model_training/audio
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -26,13 +26,10 @@ def record_audio_and_save(save_path, n_times=50):
 
     input("To start recording Wake Word press Enter: ")
     for i in range(350, n_times):
-        fs = 22050  # Original recording sample rate
-        seconds = 2
-
-        myrecording = sd.rec(int(seconds * fs), samplerate=fs, channels=1)
+        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
         filename = f"wakeword_{i}.wav"
-        write(os.path.join(save_path, filename), fs, myrecording)
+        write(os.path.join(save_path, filename), SAMPLE_RATE, myrecording)
         input(f"Press to record next or two stop press ctrl + C ({i + 1}/{n_times}): ")
 
 def record_background_sound(save_path, n_times=1000):
@@ -53,12 +50,9 @@ def record_background_sound(save_path, n_times=1000):
 
     input("To start recording your background sounds press Enter: ")
     for i in range(900, n_times):
-        fs = 22050  # Original recording sample rate
-        seconds = 2 
-
-        myrecording = sd.rec(int(seconds * fs), samplerate=fs, channels=1)
+        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
-        write(os.path.join(save_path, str(i) + ".wav"), fs, myrecording)
+        write(os.path.join(save_path, str(i) + ".wav"), SAMPLE_RATE, myrecording)
         print(f"Currently on {i+1}/{n_times}")
 
 # Step 1: Record yourself saying the Wake Word

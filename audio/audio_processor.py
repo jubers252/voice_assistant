@@ -284,11 +284,11 @@ class AudioProcessors:
         if lang == "hi":
             language_code = "hi-IN"
             voice_name = "hi-IN-Chirp3-HD-Achernar"
-            speaking_rate = 1.0  # Normal rate for natural speech
+            speaking_rate = 0.95  # Normal rate for natural speech
         else:
             language_code = "en-IN"
             voice_name = "en-IN-Chirp3-HD-Achernar"
-            speaking_rate = 1.0  # Normal rate for natural speech
+            speaking_rate = 0.95  # Normal rate for natural speech
         
         print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
         try:

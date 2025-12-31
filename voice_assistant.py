@@ -8,14 +8,12 @@ import time
 import threading
 import sounddevice as sd
 from dotenv import load_dotenv
-
-
 # Component imports
 from audio.audio_processor import AudioProcessors
 from audio.wake_word_detector import WakeWordDetector
 from speech.speech_recognizer import SpeechRecognizer
 from conversation.conversation_manager import ConversationManager
-
+from connectors.spotify_connector import SpotifyConnector
 from connectors.reminder_manager import ReminderManager
 from handlers.wake_word_manager import WakeWordManager
 # from handlers.command_processor import CommandProcessor  # Replaced by LangChain processor
@@ -77,14 +75,11 @@ class VoiceAssistantRefactored:
         )
         
         # Try to initialize Spotify connector for music detection
-        try:
-            from connectors.spotify_connector import SpotifyConnector
-            self.spotify_connector = SpotifyConnector()
-            self.wake_word_manager.set_spotify_connector(self.spotify_connector)
-            print("Spotify connector initialized for music detection")
-        except Exception as e:
-            print(f"Warning: Could not initialize Spotify connector: {e}")
-            self.spotify_connector = None
+
+        
+        self.spotify_connector = SpotifyConnector(None)
+           
+    
       
         self.command_processor = LangChainAgentProcessor(
             conversation_history=self.conversation_history,
@@ -149,7 +144,7 @@ class VoiceAssistantRefactored:
                 
                 # Main loop - just keep running while detection is active
                 while self.wake_word_manager.detection_running:
-                    time.sleep(1.0)  # Reduced frequency since reminders run in background
+                    time.sleep(1.0) 
                     
         except KeyboardInterrupt:
             print("\nProgram stopped by user")

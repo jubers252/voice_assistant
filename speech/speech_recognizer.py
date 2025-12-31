@@ -114,8 +114,8 @@ class SpeechRecognizer:
                         
                         # RE-APPLY aggressive thresholds just before listening
                         # (in case they got reset somewhere)
-                        self.recognizer.pause_threshold = 2.0  # 3 seconds of silence
-                        self.recognizer.non_speaking_duration = 1.5  # 2.5 seconds pause mid-phrase
+                        self.recognizer.pause_threshold = 2.0  # 2 seconds of silence
+                        self.recognizer.non_speaking_duration = 1.5  # 1.5 seconds pause mid-phrase
                         self.recognizer.phrase_threshold = 0.1  # Start capturing after 100ms
                         
                         # Skip ambient noise calibration - it's too aggressive

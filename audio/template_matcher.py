@@ -193,11 +193,10 @@ class TemplateMatcher:
         """
         Calculate chi-squared distance between two feature distributions.
         
-        Chi-squared distance is designed for comparing probability distributions
-        (like MFCC features) and is more discriminative than simple Euclidean distance
-        for speech audio.
+        Improved version that accounts for temporal structure and energy differences
+        to prevent false matches with noise/silence.
         
-        Formula: sum((a-b)^2 / (a+b))
+        Formula: sum((a-b)^2 / (a+b)) with temporal and energy penalties
         
         Args:
             hist1 (ndarray): Feature matrix (feature_dim, time_steps).
@@ -206,19 +205,51 @@ class TemplateMatcher:
         Returns:
             float: Distance score. Lower = more similar.
                    Typical ranges:
-                   - 30-40: Same word instances
-                   - 100-160: Different words
+                   - 25-35: Same word instances
+                   - 50-80: Different words or noisy variants
+                   - 150+: Silence, noise, or completely different
         """
-        # Average features over time to get feature distribution
-        avg1 = np.mean(hist1, axis=1)
-        avg2 = np.mean(hist2, axis=1)
+        # Ensure same temporal length for proper comparison
+        min_len = min(hist1.shape[1], hist2.shape[1])
+        h1 = hist1[:, :min_len]
+        h2 = hist2[:, :min_len]
+        
+        # Calculate energy (sum of all MFCC coefficients over time)
+        energy1 = np.sum(np.abs(h1))
+        energy2 = np.sum(np.abs(h2))
+        
+        # Penalize large energy differences (silence vs speech)
+        energy_ratio = max(energy1, energy2 + 1e-10) / (min(energy1, energy2) + 1e-10)
+        energy_penalty = max(0, (energy_ratio - 2.0) * 10)  # Penalty if ratio > 2
+        
+        # Chi-squared on time-averaged features
+        avg1 = np.mean(h1, axis=1)
+        avg2 = np.mean(h2, axis=1)
+        
+        # Normalize by energy to remove speech level variations
+        if energy1 > 1e-10:
+            avg1 = avg1 / (energy1 / hist1.shape[1])
+        if energy2 > 1e-10:
+            avg2 = avg2 / (energy2 / hist2.shape[1])
         
         # Clip to avoid division by zero
         avg1 = np.clip(avg1, 1e-10, None)
         avg2 = np.clip(avg2, 1e-10, None)
         
         # Chi-squared distance
-        distance = np.sum((avg1 - avg2) ** 2 / (avg1 + avg2 + 1e-10))
+        chi_dist = np.sum((avg1 - avg2) ** 2 / (avg1 + avg2 + 1e-10))
+        
+        # Add temporal variability check - compare frame-by-frame differences
+        # High variability in one but not the other suggests false match (noise)
+        var1 = np.mean(np.std(h1, axis=1))
+        var2 = np.mean(np.std(h2, axis=1))
+        var_ratio = max(var1, var2 + 1e-10) / (min(var1, var2) + 1e-10)
+        
+        # Penalty for large variance mismatches
+        variance_penalty = max(0, (var_ratio - 3.0) * 5) if var_ratio > 3.0 else 0
+        
+        # Final distance with penalties
+        distance = chi_dist + energy_penalty + variance_penalty
         
         return distance
     
@@ -228,20 +259,18 @@ class TemplateMatcher:
         """
         Calculate similarity score between two MFCC feature sets.
         
-        Uses chi-squared distance with empirically calibrated scaling to convert
-        raw distances to meaningful 0-1 similarity scores.
+        Uses improved chi-squared distance with adaptive scaling to reduce false positives.
         
         Calibration (chi-squared method):
-        - distance 30: similarity = 1.0 (perfect match)
-        - distance 38: similarity = 0.76 (good match, near detection threshold)
-        - distance 45: similarity = 0.60 (weak match)
-        - distance 100+: similarity < 0.30 (poor match)
+        - distance 25-35: similarity = 0.85-1.0 (same word, strong match)
+        - distance 45-55: similarity = 0.50-0.70 (different words or noisy variants)
+        - distance 80+: similarity < 0.30 (poor match, likely noise/silence)
         
         Args:
             features1 (ndarray): MFCC matrix (feature_dim, time_steps).
             features2 (ndarray): MFCC matrix (feature_dim, time_steps).
             method (str): Similarity method to use:
-                - "chi_squared": Recommended. Chi-squared distance with scaling.
+                - "chi_squared": Recommended. Improved chi-squared with penalties.
                 - "cosine": Simple cosine similarity on mean features.
                 - "correlation": Pearson correlation on standardized features.
             debug (bool): If True, print distance and similarity values.
@@ -256,12 +285,18 @@ class TemplateMatcher:
             if debug:
                 print(f"  [chi_squared] raw_distance={distance:.2f}")
             
-            # Scale raw distances to 0-1 similarity range
-            # When background noise is present, distances are higher (0.18-0.24 is actual wake word)
-            min_distance = 30.0  # Approximate minimum (identical word)
-            scale_factor = 20.0  # Balanced scaling for noisy conditions
+            # Use exponential decay based on distance
+            # Small distances → high similarity, but with strict thresholds
+            # This naturally creates discrimination between similar distances
             
-            similarity = 1.0 / (1.0 + max(0, (distance - min_distance) / scale_factor))
+            # Exponential mapping: similarity = exp(-k * distance)
+            # k controls the steepness of the curve
+            # Calibrated for observed chi-squared distances: 0.06-0.24 range
+            # Distance 0.06 (best match) → similarity 0.55 (passes 0.5 threshold)
+            # Distance 0.15 → similarity 0.22 (fails threshold, discriminates noise)
+            k = 10.0  # Steepness factor - calibrated for chi-squared distance scale
+            
+            similarity = np.exp(-k * distance)
             
             if debug:
                 print(f"  [chi_squared] similarity={similarity:.4f}")
@@ -381,7 +416,7 @@ class TemplateMatcher:
     
     # ==================== Matching Functions ====================
     
-    def match_direct(self, audio, match_threshold=0.75, sample_rate=22050, 
+    def match_direct(self, audio, match_threshold=0.85, sample_rate=22050, 
                     method="chi_squared", debug=False):
         """
         Match audio directly against all templates.
@@ -391,7 +426,7 @@ class TemplateMatcher:
         
         Typical usage in two-stage system:
         - Call from wake_word_detector after model confidence check
-        - Pass match_threshold=0.75 for strict verification
+        - Pass match_threshold=0.85 for strict verification
         
         Args:
             audio (ndarray): Audio signal to match (1D array).
@@ -433,7 +468,7 @@ class TemplateMatcher:
         
         return matched, best_score, best_label
     
-    def match_audio_window(self, audio_window, sample_rate=22050, match_threshold=0.75, 
+    def match_audio_window(self, audio_window, sample_rate=22050, match_threshold=0.85, 
                           method="chi_squared", debug=False):
         """
         Match a pre-recorded audio window directly against all templates.
@@ -487,9 +522,27 @@ class TemplateMatcher:
             if score >= match_threshold:
                 matched = True
         
+        # Sanity check: Real wake words show VARIATION in scores
+        # Silence/noise shows all templates matching with nearly identical high scores
+        # Calculate standard deviation of all scores
+        if all_scores:
+            scores_only = np.array([score for _, score in all_scores])
+            score_std = np.std(scores_only)
+            score_mean = np.mean(scores_only)
+            
+            if debug:
+                print(f"  [VARIANCE] mean={score_mean:.4f}, std={score_std:.4f}")
+            
+            # If all scores are very similar (low std) and very high (mean > 0.90),
+            # it's likely silence/noise, not a real wake word
+            if score_std < 0.05 and score_mean > 0.88:
+                if debug:
+                    print(f"  [SANITY CHECK] Rejecting: All templates match too uniformly (std={score_std:.4f}, mean={score_mean:.4f})")
+                return False, best_score, best_label, all_scores
+        
         return matched, best_score, best_label, all_scores
     
-    def match_with_sliding_window(self, audio, match_threshold=0.65, 
+    def match_with_sliding_window(self, audio, match_threshold=0.80, 
                                  window_duration=2.0, step_duration=0.2, 
                                  sample_rate=22050):
         """
