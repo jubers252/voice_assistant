@@ -173,7 +173,7 @@ class WakeWordManager:
                     # Thresholds calibrated with exponential similarity function
                     # Real wake words: best match ~0.50-0.55, high variance (0.10+)
                     # Silence/noise: all matches uniform, caught by variance check
-                    template_threshold = 0.25 if music_playing else 0.75
+                    template_threshold = 0.25 if music_playing else 0.55
                     
                     is_match, similarity_score, best_label, all_scores = self.template_matcher.match_audio_window(
                         audio_window, self.sample_rate, match_threshold=template_threshold, debug=self.debug_mode

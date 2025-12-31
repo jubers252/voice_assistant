@@ -64,9 +64,9 @@ class SpeechRecognizer:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
         self.recognizer.dynamic_energy_ratio = 1.5  # Reduced from 2.0 for better natural speech detection
-        self.recognizer.pause_threshold = 2.0  # 3.0 seconds of silence before stopping (allow long natural pauses)
+        self.recognizer.pause_threshold = 1.5  # 3.0 seconds of silence before stopping (allow long natural pauses)
         self.recognizer.phrase_threshold = 0.1  # Minimum 100ms to catch speech start quickly
-        self.recognizer.non_speaking_duration = 1.5  # Max 2.0 seconds pause mid-phrase for natural speaking (breathing, hesitation)
+        self.recognizer.non_speaking_duration = 1.0  # Max 2.0 seconds pause mid-phrase for natural speaking (breathing, hesitation)
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
