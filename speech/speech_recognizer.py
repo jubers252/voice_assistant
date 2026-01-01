@@ -3,6 +3,12 @@ from dotenv import load_dotenv
 import speech_recognition as sr
 import os
 from contextlib import contextmanager
+import numpy as np
+import threading
+import time
+import whisper
+import io
+import wave
 
 # Load environment variables
 load_dotenv()
@@ -58,6 +64,60 @@ class SpeechRecognizer:
         except Exception as e:
             print(f"[RECOGNIZER] Microphone warm-up failed (non-critical): {e}")
 
+    def _check_voice_activity(self, audio_data, sample_rate, silence_duration=1.5):
+        """
+        Check if there's voice activity in audio using energy detection.
+        Returns True if voice is detected, False if only silence.
+        
+        Args:
+            audio_data: audio samples as numpy array
+            sample_rate: sample rate of audio
+            silence_duration: seconds of silence threshold
+        """
+        try:
+            # Convert bytes to numpy array if needed
+            if isinstance(audio_data, bytes):
+                audio_data = np.frombuffer(audio_data, dtype=np.int16).astype(float) / 32768.0
+            
+            # Energy threshold
+            energy = np.sqrt(np.mean(audio_data ** 2))
+            
+            # If energy is low, likely silence
+            if energy < 0.02:  # Very low energy = silence
+                return False
+            
+            return True
+        except Exception as e:
+            return True  # Default to True if detection fails
+    
+    def _vad_monitor_thread(self, stop_event, audio_queue, silence_threshold=1.5):
+        """
+        Monitor audio in background and detect silence.
+        Signals to stop listening if silence detected for threshold seconds.
+        """
+        consecutive_silence = 0.0
+        silent_frame_duration = 0.1  # Each frame is ~100ms
+        
+        while not stop_event.is_set():
+            try:
+                # Get audio frames from queue (non-blocking)
+                if not audio_queue.empty():
+                    frame = audio_queue.get(timeout=0.1)
+                    is_speaking = self._check_voice_activity(frame, self.recognizer.sample_rate)
+                    
+                    if not is_speaking:
+                        consecutive_silence += silent_frame_duration
+                        if consecutive_silence >= silence_threshold:
+                            print(f"[VAD] Silence detected for {silence_threshold}s, stopping...")
+                            stop_event.set()
+                            break
+                    else:
+                        consecutive_silence = 0.0  # Reset on voice detection
+                else:
+                    time.sleep(0.05)
+            except Exception as e:
+                time.sleep(0.05)
+    
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
         self.recognizer.energy_threshold = 20  # Lower threshold to catch quieter speech
@@ -114,8 +174,8 @@ class SpeechRecognizer:
                         
                         # RE-APPLY aggressive thresholds just before listening
                         # (in case they got reset somewhere)
-                        self.recognizer.pause_threshold = 2.0  # 2 seconds of silence
-                        self.recognizer.non_speaking_duration = 1.5  # 1.5 seconds pause mid-phrase
+                        self.recognizer.pause_threshold = 1.0  # 1 second of silence (reduced from 2.0)
+                        self.recognizer.non_speaking_duration = 0.8  # 0.8 seconds pause mid-phrase (reduced from 1.5)
                         self.recognizer.phrase_threshold = 0.1  # Start capturing after 100ms
                         
                         # Skip ambient noise calibration - it's too aggressive
@@ -127,7 +187,8 @@ class SpeechRecognizer:
                         
                         self._print_attempt(retry_count, is_follow_up)
                         print("i m listening...")
-                        listen_timeout = timeout if retry_count == 0 else timeout + 3
+                        # Use shorter timeout since VAD will detect silence
+                        listen_timeout = 15 if retry_count == 0 else 12  # VAD handles early stopping
 
                         # Ensure recognizer exists
                         if not self.recognizer:
@@ -238,6 +299,44 @@ class SpeechRecognizer:
             return None
         finally:
             # Clean up audio data after recognition
+            try:
+                import gc
+                gc.collect()
+            except:
+                pass
+
+    def _recognize_audio_whisper(self, audio):
+        """Recognize audio using OpenAI Whisper model"""
+        try:
+            # Convert AudioData to WAV bytes
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(audio.sample_width)
+                wav_file.setframerate(audio.sample_rate)
+                wav_file.writeframes(audio.frame_data)
+            wav_buffer.seek(0)
+            
+            # Load Whisper model and transcribe
+            print("[WHISPER] Transcribing...")
+            model = whisper.load_model("base", device="cpu")
+            result = model.transcribe(wav_buffer, language="en", verbose=False)
+            
+            command = result.get("text", "").strip()
+            if command:
+                print(f"[WHISPER] You said: {command}")
+                cleaned_command = command.lower().strip()
+                if len(cleaned_command) < 2:
+                    print("[WHISPER] Command too short, trying again...")
+                    return None
+                return cleaned_command
+            else:
+                print("[WHISPER] Empty transcription")
+                return None
+        except Exception as e:
+            print(f"[WHISPER] Recognition error: {e}")
+            return None
+        finally:
             try:
                 import gc
                 gc.collect()

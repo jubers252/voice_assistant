@@ -6,7 +6,7 @@ from connectors.spotify_connector import SpotifyConnector
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.001, confidence_threshold=0.90):
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.95):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
         self.audio_processors = audio_processors
@@ -19,7 +19,7 @@ class WakeWordManager:
         self.energy_threshold = energy_threshold 
         self.confidence_threshold = confidence_threshold 
      
-        self.window_duration = 2.0  
+        self.window_duration = 1.5
         self.step_duration = 0.15 
         self.window_samples = int(self.window_duration * self.sample_rate)
 
@@ -103,14 +103,19 @@ class WakeWordManager:
 
         print(f"Speech recognition result: {user_command}")
         
-        if user_command:
+        # Check if command is not empty AND has meaningful length (>3 characters)
+        if user_command and len(user_command.strip()) > 3:
             print(f"Processing command: {user_command}")
             should_exit = process_command_callback(user_command)
             print(f"Command processing result - should_exit: {should_exit}")
             if should_exit:
                 return True  # Signal to break from main loop
         else:
-            print("No command detected, waiting for next input...")
+            # Empty or too short - likely false wake word, skip processing
+            if user_command:
+                print(f"Command too short ({len(user_command)} chars), skipping: '{user_command}'")
+            else:
+                print("No command detected, waiting for next input...")
         
         # Set LED back to off after processing
         if self.pixel_led:
@@ -156,6 +161,7 @@ class WakeWordManager:
             # Handle wake word detection
             if detected:
                 # ===== VERIFICATION STAGE 1: Voice Activity Detection =====
+                # Check if audio contains actual speech (not just music/noise)
                 is_speech = self.template_matcher.is_speech(audio_window, self.sample_rate, debug=self.debug_mode)
                 
                 if not is_speech:
@@ -164,36 +170,30 @@ class WakeWordManager:
                         print("Filtered: Detected false positive from music/background (VAD check)")
                     time.sleep(self.step_duration)
                     continue
-
-
-                music_playing = self.is_spotify_playing()
                 
-                try:
-
-                    # Thresholds calibrated with exponential similarity function
-                    # Real wake words: best match ~0.50-0.55, high variance (0.10+)
-                    # Silence/noise: all matches uniform, caught by variance check
-                    template_threshold = 0.25 if music_playing else 0.55
+                # ===== VERIFICATION STAGE 2: Template Matching (quick secondary filter) =====
+                # Only check templates for confidence < 0.98 (high confidence doesn't need template check)
+                if confidence < 0.98:
+                    music_playing = self.is_spotify_playing()
+                    template_threshold = 0.30 if music_playing else 0.50  # Slightly relaxed thresholds
                     
                     is_match, similarity_score, best_label, all_scores = self.template_matcher.match_audio_window(
                         audio_window, self.sample_rate, match_threshold=template_threshold, debug=self.debug_mode
                     )
                     
-                    if self.debug_mode:
-                        music_status = "[MUSIC PLAYING]" if music_playing else "[QUIET]"
-                        print(f"Template match {music_status}: Score={similarity_score:.4f}, Threshold={template_threshold}, Match={is_match}, Best={best_label}")
-
                     if not is_match:
                         if self.debug_mode:
                             print(f"Filtered: Template confidence too low ({similarity_score:.4f} < {template_threshold})")
                         time.sleep(self.step_duration)
                         continue
-                except Exception as e:
+                    else:
+                        if self.debug_mode:
+                            print(f"Template verified: Score={similarity_score:.4f}")
+                else:
                     if self.debug_mode:
-                        print(f"Template matching error (continuing): {e}")
-                    # Continue anyway - NN detection was positive
-             
-
+                        print(f"Skipping template check (confidence {confidence:.3f} is very high)")
+                
+                # Both VAD and optionally template matching passed
                 should_exit = self.handle_wake_word_detection(process_command_callback)
                 if should_exit:
                     self.detection_running = False  # Set to False before breaking

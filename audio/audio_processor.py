@@ -426,7 +426,8 @@ class AudioProcessors:
                 try:
                     pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
                     pygame.mixer.init()
-                    self._play_bluetooth_wakeup()
+                    # Disabled Bluetooth wakeup to prevent double sound
+                    # self._play_bluetooth_wakeup()
                     pygame.mixer.music.load(tmp_file_path)
                     pygame.mixer.music.set_volume(0.8)
                     pygame.mixer.music.play()

@@ -120,29 +120,29 @@ class TemplateMatcher:
                 print(f"  [VAD] f1_var={f1_variability:.4f}, f2_var={f2_variability:.4f}, f3_var={f3_variability:.4f}, centroid_var={centroid_variability:.1f}")
             
             # ===== Decision logic - detect formant patterns of speech =====
-            # PERMISSIVE: NN already has high confidence (0.99), so VAD just needs weak indicators
-            # Accept any reasonable speech indicator, reject only obvious non-speech
+            # STRICT: NN detection alone can have false positives, VAD must be reliable
+            # Only accept clear speech indicators, reject ambiguous cases
             
             # F1 variability indicator
-            if f1_variability > 0.05:
+            if f1_variability > 0.08:  # Increased from 0.05
                 if debug:
                     print(f"  [VAD] Decision: ACCEPT (F1 variation)")
                 return True
             
             # F2 variability indicator
-            if f2_variability > 0.03:
+            if f2_variability > 0.06:  # Increased from 0.03
                 if debug:
                     print(f"  [VAD] Decision: ACCEPT (F2 variation)")
                 return True
             
             # F3 variability indicator
-            if f3_variability > 0.02:
+            if f3_variability > 0.05:  # Increased from 0.02
                 if debug:
                     print(f"  [VAD] Decision: ACCEPT (F3 variation)")
                 return True
             
-            # Centroid movement indicator (lower threshold)
-            if centroid_variability > 200:
+            # Centroid movement indicator (stricter threshold)
+            if centroid_variability > 400:  # Increased from 200
                 if debug:
                     print(f"  [VAD] Decision: ACCEPT (spectral movement)")
                 return True
