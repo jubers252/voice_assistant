@@ -161,37 +161,32 @@ class WakeWordManager:
             # Handle wake word detection
             if detected:
                 # ===== VERIFICATION STAGE 1: Voice Activity Detection =====
-                # Check if audio contains actual speech (not just music/noise)
                 is_speech = self.template_matcher.is_speech(audio_window, self.sample_rate, debug=self.debug_mode)
                 
                 if not is_speech:
-                    # Audio is likely music/background, skip further processing
                     if self.debug_mode:
                         print("Filtered: Detected false positive from music/background (VAD check)")
                     time.sleep(self.step_duration)
                     continue
                 
                 # ===== VERIFICATION STAGE 2: Template Matching (quick secondary filter) =====
-                # Only check templates for confidence < 0.98 (high confidence doesn't need template check)
-                if confidence < 0.98:
-                    music_playing = self.is_spotify_playing()
-                    template_threshold = 0.30 if music_playing else 0.50  # Slightly relaxed thresholds
-                    
-                    is_match, similarity_score, best_label, all_scores = self.template_matcher.match_audio_window(
-                        audio_window, self.sample_rate, match_threshold=template_threshold, debug=self.debug_mode
+            
+                music_playing = self.is_spotify_playing()
+                template_threshold = 0.25 if music_playing else 0.55  # Slightly relaxed thresholds
+                
+                is_match, similarity_score, best_label, all_scores = self.template_matcher.match_audio_window(
+                    audio_window, self.sample_rate, match_threshold=template_threshold, debug=self.debug_mode
                     )
                     
-                    if not is_match:
-                        if self.debug_mode:
-                            print(f"Filtered: Template confidence too low ({similarity_score:.4f} < {template_threshold})")
-                        time.sleep(self.step_duration)
-                        continue
-                    else:
-                        if self.debug_mode:
-                            print(f"Template verified: Score={similarity_score:.4f}")
+                if not is_match:
+                    if self.debug_mode:
+                        print(f"Filtered: Template confidence too low ({similarity_score:.4f} < {template_threshold})")
+                    time.sleep(self.step_duration)
+                    continue
                 else:
                     if self.debug_mode:
-                        print(f"Skipping template check (confidence {confidence:.3f} is very high)")
+                        print(f"Template verified: Score={similarity_score:.4f}")
+            
                 
                 # Both VAD and optionally template matching passed
                 should_exit = self.handle_wake_word_detection(process_command_callback)

@@ -69,7 +69,7 @@ class AudioProcessors:
 
         # Audio processing
         self.sample_rate = 22050
-        self.duration = 1.5
+        self.duration = 1.0
         self.debug_mode = True           
 
         # Speech interruption control

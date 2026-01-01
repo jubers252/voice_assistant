@@ -54,12 +54,13 @@ class VoiceAssistantRefactored:
         self.reminder_manager.set_audio_processors(self.audio_processors)
         self.reminder_manager.start_reminder_checker()
         
-        # Wake word detector
-        ww_model_path = f"{model_dir}/WWD_improved_mems_v2.h5"
+
+        ww_model_path = f"{model_dir}/WWD_improved_updated_v5.h5"
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         
         try:
+            print(f"Loading wake word model from: {ww_model_path}")
             self.wake_word_detector = WakeWordDetector(model_path=ww_model_path)
         except Exception as e:
             print(f"Warning: wake word model not loaded during init: {e}")

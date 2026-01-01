@@ -25,10 +25,13 @@ import glob
 df = pd.read_pickle(os.path.join("model_training", "final_audio_data_csv", "audio_data_cnn_improved.pkl"))
 
 ##### 2. Prepare Data for Training #####
-X = np.stack(df["feature"].values)  # shape: (samples, time_steps, 120)
+X = np.stack(df["feature"].values)  # shape: (samples, time_steps, 120, 2) - stereo from preprocessing
+# Flatten the stereo channels to match inference format
+if X.ndim == 4:  # If stereo (has 2 channels dimension)
+    X = X.reshape(X.shape[0], X.shape[1], X.shape[2] * X.shape[3])  # (samples, 44, 240)
 X = X.astype(np.float32)
-desired_length = X.shape[1]  # Number of time steps
-feature_dim = X.shape[2]     # Number of features (120)
+desired_length = X.shape[1]  # Number of time steps (44)
+feature_dim = X.shape[2]     # Number of features (240 = 120*2 channels)
 
 print(f"Data shape: {X.shape}")
 print(f"Feature dimension: {feature_dim}")

@@ -6,7 +6,6 @@ from contextlib import contextmanager
 import numpy as np
 import threading
 import time
-import whisper
 import io
 import wave
 
@@ -120,13 +119,13 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 20  # Lower threshold to catch quieter speech
+        self.recognizer.energy_threshold = 200  # INMP441 mic requires lower threshold for proper detection
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.15
-        self.recognizer.dynamic_energy_ratio = 1.5  # Reduced from 2.0 for better natural speech detection
-        self.recognizer.pause_threshold = 1.5  # 3.0 seconds of silence before stopping (allow long natural pauses)
-        self.recognizer.phrase_threshold = 0.1  # Minimum 100ms to catch speech start quickly
-        self.recognizer.non_speaking_duration = 1.0  # Max 2.0 seconds pause mid-phrase for natural speaking (breathing, hesitation)
+        self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
+        self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
+        self.recognizer.pause_threshold = 1.0  # 1.0 seconds of silence before stopping
+        self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
+        self.recognizer.non_speaking_duration = 0.7  # Max 0.7 seconds pause mid-phrase
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -172,14 +171,8 @@ class SpeechRecognizer:
                         t_mic_open = timing_module.time()
                         print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
                         
-                        # RE-APPLY aggressive thresholds just before listening
-                        # (in case they got reset somewhere)
-                        self.recognizer.pause_threshold = 1.0  # 1 second of silence (reduced from 2.0)
-                        self.recognizer.non_speaking_duration = 0.8  # 0.8 seconds pause mid-phrase (reduced from 1.5)
-                        self.recognizer.phrase_threshold = 0.1  # Start capturing after 100ms
-                        
-                        # Skip ambient noise calibration - it's too aggressive
-                        # Dynamic threshold will handle adjustment during listening
+                        # Settings are already configured in _setup_recognizer()
+                        # Using consistent thresholds everywhere to avoid conflicts
                         print(f"Energy threshold: {self.recognizer.energy_threshold:.0f}")
                         print(f"Phrase threshold: {self.recognizer.phrase_threshold:.2f}s")
                         print(f"Pause threshold: {self.recognizer.pause_threshold:.2f}s")
@@ -299,44 +292,6 @@ class SpeechRecognizer:
             return None
         finally:
             # Clean up audio data after recognition
-            try:
-                import gc
-                gc.collect()
-            except:
-                pass
-
-    def _recognize_audio_whisper(self, audio):
-        """Recognize audio using OpenAI Whisper model"""
-        try:
-            # Convert AudioData to WAV bytes
-            wav_buffer = io.BytesIO()
-            with wave.open(wav_buffer, 'wb') as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(audio.sample_width)
-                wav_file.setframerate(audio.sample_rate)
-                wav_file.writeframes(audio.frame_data)
-            wav_buffer.seek(0)
-            
-            # Load Whisper model and transcribe
-            print("[WHISPER] Transcribing...")
-            model = whisper.load_model("base", device="cpu")
-            result = model.transcribe(wav_buffer, language="en", verbose=False)
-            
-            command = result.get("text", "").strip()
-            if command:
-                print(f"[WHISPER] You said: {command}")
-                cleaned_command = command.lower().strip()
-                if len(cleaned_command) < 2:
-                    print("[WHISPER] Command too short, trying again...")
-                    return None
-                return cleaned_command
-            else:
-                print("[WHISPER] Empty transcription")
-                return None
-        except Exception as e:
-            print(f"[WHISPER] Recognition error: {e}")
-            return None
-        finally:
             try:
                 import gc
                 gc.collect()
