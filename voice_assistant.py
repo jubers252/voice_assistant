@@ -46,7 +46,11 @@ class VoiceAssistantRefactored:
         self.audio_processors.set_digital_gain(MIC_GAIN)
         print(f"Microphone digital gain set to {MIC_GAIN}x")
         
-        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led)
+        # Check if Whisper should be used (set USE_WHISPER=true in .env)
+        use_whisper = os.getenv('USE_WHISPER', 'false').lower() == 'true'
+        if use_whisper:
+            print("[ASSISTANT] Whisper speech recognition enabled")
+        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led, use_whisper=use_whisper)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 

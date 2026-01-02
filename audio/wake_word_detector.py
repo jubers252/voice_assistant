@@ -89,7 +89,7 @@ class WakeWordDetector:
             print(f"Error extracting features: {e}")
             return None
 
-    def detect_wakeword(self, audio_window, sample_rate, energy_threshold=0.010, confidence_threshold=None):
+    def detect_wakeword(self, audio_window, sample_rate, energy_threshold=0.001, confidence_threshold=None):
         """Return True if wake word is detected in the given audio window."""
         # Use optimal threshold from training if not specified
         if confidence_threshold is None:
