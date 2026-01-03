@@ -389,17 +389,17 @@ class AdvancedWakeWordPipeline:
         if is_night_mode:
             # Night: More sensitive for low-volume detection
             thresholds = {
-                'nn_confidence': 0.70,      # Lowered from 0.70
-                'trigger_threshold': 0.50,  # Lowered from 0.60
-                'min_energy': 0.005,        # Much lower (accepts very quiet speech)
+                'nn_confidence': 0.90,      # Much looser NN confidence
+                'trigger_threshold': 0.45,  # Very loose trigger
+                'min_energy': 0.0002,       # VERY low - accepts whispers and distant speech
                 'mode': 'NIGHT'
             }
         else:
             # Day: Standard thresholds
             thresholds = {
-                'nn_confidence': 0.70,      # Standard
-                'trigger_threshold': 0.60,  # Standard
-                'min_energy': 0.02,         # Higher (requires moderate volume)
+                'nn_confidence': 0.95,      # Much looser NN confidence
+                'trigger_threshold': 0.45,  # Very loose trigger
+                'min_energy': 0.0002,       # VERY low - accepts whispers and distant speech
                 'mode': 'DAY'
             }
         

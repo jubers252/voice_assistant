@@ -417,7 +417,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="control_spotify_playback",
-            description="Control Spotify. Use when: 'pause', 'resume', 'next', 'skip'. Input: pause|resume|next|skip",
+            description="Resume, pause, or skip Spotify playback. CRITICAL: Use when user says: 'play', 'resume', 'continue', 'pause', 'stop', 'next', 'skip'. Input format: pause|resume|next|skip (e.g., 'resume' to play music, 'pause' to stop, 'next' to skip song)",
             func=control_function
         )
     
@@ -1059,11 +1059,21 @@ class LangChainAgentProcessor:
 - Use ask_follow_up_question tool when clarification needed
 - No special characters, simple spoken language
 
+**SPOTIFY PLAYBACK CONTROL - MUST USE TOOL:**
+When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
+→ ALWAYS call control_spotify_playback tool with: pause|resume|next|skip
+→ Examples: 
+  - "play song" or "resume" → use control_spotify_playback with "resume"
+  - "pause" → use control_spotify_playback with "pause"
+  - "next song" or "skip" → use control_spotify_playback with "next"
+  - "pause music" → use control_spotify_playback with "pause"
+
 **KEY TOOLS:**
 - HOME AUTOMATION: control|device:true/false (e.g., control|light:true)
 - VOLUME: increase/decrease/mute/set
 - SEARCH: news, prices, weather, web queries
-- SPOTIFY: play|track/album/artist, pause, resume, next, skip
+- SPOTIFY CONTROL: pause, resume, next, skip (use control_spotify_playback tool)
+- SPOTIFY PLAY: play specific track/album/artist (use play_spotify_track/album/artist tools)
 - TELEGRAM: send message, photo, document, video
 - ZEPTO: login, search, add_product, checkout, place_order
 - REMINDERS: set, list, cancel, check

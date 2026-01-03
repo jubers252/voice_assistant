@@ -143,7 +143,7 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 200  # INMP441 mic requires lower threshold for proper detection
+        self.recognizer.energy_threshold = 100  # Lowered to detect quiet speech
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
         self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
@@ -170,9 +170,8 @@ class SpeechRecognizer:
         if attempt == 0:
             if self.pixel_led:
                 self.pixel_led.set_error()
-                self.audio_processor.speak(error_message)
             print(f"[ERROR] {error_message}")
-            time.sleep(3.0)  # Give audio time to settle
+            time.sleep(2.0)  # Give audio time to settle
             if self.pixel_led:
                 self.pixel_led.set_listening()
             self.audio_processor.play_beep_sound()

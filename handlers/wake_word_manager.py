@@ -149,7 +149,7 @@ class WakeWordManager:
             with self.buffer_lock:
                 audio_window = np.array(self.audio_buffer).copy()
             
-            # Process through advanced multi-stage pipeline
+   
             results = self.advanced_pipeline.process_audio_chunk(
                 audio_window, 
                 debug=self.debug_mode

@@ -53,10 +53,7 @@ class TemplateMatcher:
     def is_speech(self, audio, sample_rate=None, debug=False):
         """
         Detect if audio contains human speech (even with loud background music).
-        
-        Uses formant detection to identify speech. Formants are distinctive peaks
-        in human speech that persist even when music is playing. This method detects
-        how formants vary over time - a key indicator of human speech.
+        Uses Zero-Crossing Rate (ZCR) - speech has distinctive ZCR patterns.
         
         Args:
             audio (ndarray): Audio signal (1D array).
@@ -70,92 +67,55 @@ class TemplateMatcher:
             sample_rate = self.sample_rate
         
         try:
-            # Compute magnitude spectrogram
-            S = librosa.stft(audio, n_fft=self.n_fft, hop_length=self.hop_length)
-            mag_spec = np.abs(S)
+            # Use librosa's built-in zero_crossing_rate
+            zcr = librosa.feature.zero_crossing_rate(audio)[0]
+            zcr_mean = np.mean(zcr)
+            zcr_std = np.std(zcr)
             
-            # Get frequency bins
-            freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=self.n_fft)
-            
-            # ===== Formant band analysis =====
-            # F1 (first formant): 700-1220 Hz - strong in vowels
-            # F2 (second formant): 1220-2600 Hz - discriminative
-            # F3 (third formant): 2600-3500 Hz - present in speech
-            
-            f1_mask = (freqs >= 700) & (freqs <= 1220)
-            f2_mask = (freqs >= 1220) & (freqs <= 2600)
-            f3_mask = (freqs >= 2600) & (freqs <= 3500)
-            
-            # Energy in each formant band per time frame
-            f1_energy = np.sum(mag_spec[f1_mask, :], axis=0)
-            f2_energy = np.sum(mag_spec[f2_mask, :], axis=0)
-            f3_energy = np.sum(mag_spec[f3_mask, :], axis=0)
-            total_energy = np.sum(mag_spec, axis=0)
-            
-            # Formant ratios (normalize by total energy)
-            f1_ratio = f1_energy / (total_energy + 1e-10)
-            f2_ratio = f2_energy / (total_energy + 1e-10)
-            f3_ratio = f3_energy / (total_energy + 1e-10)
-            
-            # Key insight: Speech formants CHANGE over time as we speak
-            # Music instruments are more static
-            f1_variability = np.std(f1_ratio) if len(f1_ratio) > 1 else 0
-            f2_variability = np.std(f2_ratio) if len(f2_ratio) > 1 else 0
-            f3_variability = np.std(f3_ratio) if len(f3_ratio) > 1 else 0
-            
-            # ===== Spectral centroid per frame =====
-            # Calculate centroid for each time frame separately
-            centroid_per_frame = []
-            for t in range(mag_spec.shape[1]):
-                spec_frame = mag_spec[:, t]
-                total = np.sum(spec_frame)
-                if total > 1e-10:
-                    centroid = np.sum(freqs * spec_frame) / total
-                    centroid_per_frame.append(centroid)
-            
-            centroid_per_frame = np.array(centroid_per_frame)
-            centroid_variability = np.std(centroid_per_frame) if len(centroid_per_frame) > 1 else 0
+            # Speech characteristics:
+            # - Mean ZCR: 0.1-0.3 (speech)
+            # - Music ZCR: varies widely (0.05-0.6)
+            # - But ZCR std is HIGH for speech (varies between frames)
+            # - ZCR std is LOW for music (consistent across frames)
             
             if debug:
-                print(f"  [VAD] f1_var={f1_variability:.4f}, f2_var={f2_variability:.4f}, f3_var={f3_variability:.4f}, centroid_var={centroid_variability:.1f}")
+                print(f"  [VAD] ZCR_mean={zcr_mean:.4f}, ZCR_std={zcr_std:.4f}")
             
-            # ===== Decision logic - detect formant patterns of speech =====
-            # STRICT: NN detection alone can have false positives, VAD must be reliable
-            # Only accept clear speech indicators, reject ambiguous cases
-            
-            # F1 variability indicator
-            if f1_variability > 0.08:  # Increased from 0.05
+            # Speech: high ZCR variability + reasonable mean
+            if zcr_std > 0.08 and zcr_mean > 0.05:
                 if debug:
-                    print(f"  [VAD] Decision: ACCEPT (F1 variation)")
+                    print(f"  [VAD] Decision: ACCEPT (high ZCR variability: {zcr_std:.4f})")
                 return True
             
-            # F2 variability indicator
-            if f2_variability > 0.06:  # Increased from 0.03
+            # Speech in quiet: high mean ZCR
+            if zcr_mean > 0.25:
                 if debug:
-                    print(f"  [VAD] Decision: ACCEPT (F2 variation)")
+                    print(f"  [VAD] Decision: ACCEPT (high ZCR mean: {zcr_mean:.4f})")
                 return True
             
-            # F3 variability indicator
-            if f3_variability > 0.05:  # Increased from 0.02
-                if debug:
-                    print(f"  [VAD] Decision: ACCEPT (F3 variation)")
-                return True
+            # Use MFCC coefficient variance as secondary check
+            mfcc = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=13)
+            mfcc_var = np.mean(np.var(mfcc, axis=1))  # Average variance across coefficients
             
-            # Centroid movement indicator (stricter threshold)
-            if centroid_variability > 400:  # Increased from 200
-                if debug:
-                    print(f"  [VAD] Decision: ACCEPT (spectral movement)")
-                return True
-            
-            # Reject borderline cases
             if debug:
-                print(f"  [VAD] Decision: REJECT (insufficient speech indicators)")
+                print(f"  [VAD] MFCC_variance={mfcc_var:.4f}")
+            
+            # Speech: high MFCC variability
+            if mfcc_var > 50:  # Speech has high coefficient variation
+                if debug:
+                    print(f"  [VAD] Decision: ACCEPT (high MFCC variance: {mfcc_var:.4f})")
+                return True
+            
+            # Reject: low ZCR variability + low MFCC variation = likely music
+            if debug:
+                print(f"  [VAD] Decision: REJECT (zcr_std={zcr_std:.4f}, mfcc_var={mfcc_var:.4f})")
             return False
             
         except Exception as e:
             if debug:
                 print(f"  [VAD] Error in speech detection: {e}")
             return True  # Default to speech on error
+        
         
     # ==================== MFCC Feature Extraction ====================
     
