@@ -868,7 +868,7 @@ class LangChainAgentProcessor:
                 time.sleep(0.2)
                 
                 # Listen with longer timeout for follow-up
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=3)
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=1)
                 
                 if follow_up_command:
                     print(f"Received follow-up response: '{follow_up_command}'")

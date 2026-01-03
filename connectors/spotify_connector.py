@@ -25,7 +25,6 @@ class SpotifyConnector:
         """Find and cache device by name from setup.txt or first active device. Returns dict with id/name or False."""
         try:
             devices = self.spotify.devices()
-            print(devices)
             if len(devices['devices']) > 0:
                 # Try to find preferred device from setup.txt
                 if preferred_device_name:
@@ -33,10 +32,11 @@ class SpotifyConnector:
                         if device['name'] == preferred_device_name:
                             self.device_id = device['id']
                             return {"device_id": device['id'], "device_name": device['name']}
-                    print(f"Preferred device '{preferred_device_name}' not found, using first active device")
                 
                 # Fallback to first active device
                 self.device_id = devices['devices'][0]['id']
+                device_name = devices['devices'][0]['name']
+                print(f"Using active device: {device_name} ({self.device_id})")
                 return {"device_id": devices['devices'][0]['id'], "device_name": devices['devices'][0]['name']}
             self.device_id = None
             return False

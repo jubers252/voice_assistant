@@ -106,7 +106,7 @@ class SpeechRecognizer:
             energy = np.sqrt(np.mean(audio_data ** 2))
             
             # If energy is low, likely silence
-            if energy < 0.02:  # Very low energy = silence
+            if energy < 0.005:  # Very low energy = silence
                 return False
             
             return True
@@ -168,23 +168,20 @@ class SpeechRecognizer:
             True if should retry, False if should return None
         """
         if attempt == 0:
-            # First failure: Red LED + speak error + wait + Blue LED for retry
             if self.pixel_led:
                 self.pixel_led.set_error()
-            # Don't speak on first error - just wait and retry silently
-            # (prevents microphone from picking up TTS output)
+                self.audio_processor.speak(error_message)
             print(f"[ERROR] {error_message}")
-            time.sleep(2.0)  # Give audio time to settle
+            time.sleep(3.0)  # Give audio time to settle
             if self.pixel_led:
                 self.pixel_led.set_listening()
-            return True  # Retry
+            self.audio_processor.play_beep_sound()
+            return True  
         else:
-            # Second failure: Red LED + speak error + return None
+
             if self.pixel_led:
                 self.pixel_led.set_error()
-            # On second failure, speak the error before giving up
-            self.audio_processor.speak(error_message)
-            return False  # Don't retry
+            return False
 
     def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
         """Listen for user command with retry logic (retries once, then returns error)."""
@@ -227,14 +224,14 @@ class SpeechRecognizer:
                     return command
                 else:
                     # Recognition failed, treat as error
-                    if not self._handle_listen_error(attempt, "Sorry, couldn't understand you. Let me try again."):
-                        self.audio_processor.play_beep_sound()
-                        return None
-
+                    if not self._handle_listen_error(attempt, "Sorry, no speech detected."):
+                       
+                        pass
+               
             except Exception as e:
                 print(f"[ASSISTANT] Error: {e}")
                 if not self._handle_listen_error(attempt, "Sorry, couldn't hear you. Let me try again."):
-                    return None
+                    pass
             
             finally:
                 if audio is not None:
@@ -391,10 +388,10 @@ class SpeechRecognizer:
                                 # Timeout is ok - device is working, just no audio
                                 pass
                         self.device_index = idx
-                        print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
+                        print(f"[MIC] Using device {idx}: {names[idx]}")
                         return True
                 except Exception as e:
-                    print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}: {e}")
+                    print(f"[MIC] Device {idx} failed: {type(e).__name__}: {e}")
                     continue
 
         # Try all other devices
@@ -411,10 +408,10 @@ class SpeechRecognizer:
                         except sr.WaitTimeoutError:
                             pass
                     self.device_index = idx
-                    print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
+                    print(f"[MIC] Using device {idx}: {names[idx]}")
                     return True
             except Exception as e:
-                print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}")
+                print(f"[MIC] Device {idx} failed: {type(e).__name__}")
                 continue
 
         # Last resort - use None (system default)
