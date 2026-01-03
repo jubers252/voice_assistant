@@ -169,7 +169,7 @@ python voice_assistant.py
 ## Configuration
 
 ### Audio Settings
-- **Sample Rate**: 22050 Hz (configurable in audio_processor.py)
+- **Sample Rate**: 16000 Hz (configurable in audio_processor.py)
 - **Wake Word Confidence**: Adjustable threshold in wake_word_detector.py
 - **TTS Voices**: Configurable in audio_processor.py
 

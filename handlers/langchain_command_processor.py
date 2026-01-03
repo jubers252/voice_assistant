@@ -6,7 +6,7 @@ This replaces your current CommandProcessor with an intelligent agent
 
 import os
 import threading
-import platform
+import json
 import time
 import speech_recognition as sr
 from typing import Dict, Any
@@ -38,9 +38,64 @@ from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
 from connectors.zepto_order_automation import ZeptoScraper
+from connectors.home_automation import HomeAutomation
 import asyncio
 
 load_dotenv()
+
+
+# Comprehensive Roman to Devanagari mapping
+ROMAN_TO_DEVANAGARI_COMPREHENSIVE = {
+    # Common words
+    'aur': 'और', 'hai': 'है', 'band': 'बंद', 'on': 'ऑन', 'off': 'ऑफ',
+    'light': 'लाइट', 'fan': 'फैन', 'zero': 'ज़ीरो', 'device': 'डिवाइस',
+    'kiya': 'किया', 'kar': 'कर', 'diya': 'दिया', 'hain': 'हैं', 'ho': 'हो',
+    'abhi': 'अभी', 'ab': 'अब', 'karo': 'करो', 'turn': 'टर्न', 'on': 'ऑन',
+    # Common verbs and adjectives
+    'chalau': 'चलाऊ', 'band': 'बंद', 'khola': 'खोला', 'bandh': 'बंध',
+    # Articles and prepositions
+    'mein': 'में', 'ko': 'को', 'se': 'से', 'par': 'पर', 'tak': 'तक',
+    # Verb forms
+    'kar': 'कर', 'dena': 'देना', 'lena': 'लेना', 'jana': 'जाना',
+}
+
+
+def detect_language(text: str) -> str:
+    """Detect if text is in Hindi or English"""
+    # Count Devanagari characters
+    devanagari_count = sum(1 for c in text if '\u0900' <= c <= '\u097F')
+    # Count English characters
+    english_count = sum(1 for c in text if c.isalpha() and ord(c) < 128)
+    
+    if devanagari_count > english_count * 0.5:
+        return 'hindi'
+    return 'english'
+
+
+def is_roman_hindi(text: str) -> bool:
+    """Check if text contains Roman transliterated Hindi"""
+    # Check for common Roman Hindi patterns
+    roman_patterns = [
+        r'\b(aur|hai|band|light|fan|zero|device|kiya|kar|diya|hain|ho|abhi)\b',
+        r'\b(mein|ko|se|par|tak|dena|lena|jana)\b',
+    ]
+    text_lower = text.lower()
+    for pattern in roman_patterns:
+        if re.search(pattern, text_lower):
+            return True
+    return False
+
+
+def convert_roman_to_devanagari_smart(text: str) -> str:
+    """Smart conversion from Roman to Devanagari"""
+    # First, do direct word replacements
+    result = text
+    for roman, devanagari in ROMAN_TO_DEVANAGARI_COMPREHENSIVE.items():
+        # Case-insensitive replacement with word boundaries
+        result = re.sub(r'\b' + roman + r'\b', devanagari, result, flags=re.IGNORECASE)
+    
+    return result
+
 
 
 class LangChainAgentProcessor:
@@ -75,7 +130,7 @@ class LangChainAgentProcessor:
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
         self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
-        
+        self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
         self._zepto_thread = None
@@ -151,6 +206,56 @@ class LangChainAgentProcessor:
             func=current_weather_function
         )
     
+    def _create_home_automation_tool(self) -> Tool:
+        """Control home automation devices"""
+        def home_automation_function(command: str) -> str:
+            try:
+                parts = command.split("|")
+                action = parts[0].lower().strip()
+                
+                if action == "status":
+                    status = self.home_automation.get_status()
+                    if status:
+                        status_str = ", ".join([f"{k}: {'on' if v else 'off'}" for k, v in status.items()])
+                        return f"Current device status: {status_str}"
+                    else:
+                        return "Unable to retrieve device status"
+                
+                elif action == "control":
+                    if len(parts) < 2:
+                        return "Please provide devices. Format: control|light:true|fan:false"
+                    
+                    # Parse device:value pairs from pipe-separated string
+                    devices = {}
+                    for i in range(1, len(parts)):
+                        pair = parts[i].split(":")
+                        if len(pair) == 2:
+                            device_name = pair[0].strip()
+                            device_value = pair[1].strip().lower()
+                            # Convert string to boolean
+                            devices[device_name] = device_value in ['true', '1', 'yes', 'on']
+                    
+                    if not devices:
+                        return "No valid devices found"
+                    
+                    self.home_automation.send_cmd(devices)
+                    return "Updated devices"
+                
+                else:
+                    return "Home automation actions: status or control"
+                    
+            except Exception as e:
+                return f"Home automation error: {str(e)}"
+        
+        return Tool(
+            name="control_home_automation",
+            description='Use this tool to control smart home devices (lights, fans, zero light etc). ALWAYS use for: turn on/off light, fan, or any device. Queries: turn on light, turn off fan, light on, fan off, device status, what devices are on. Format: "status" to check all device states, or "control|device_name:true|device_name:false" to set devices. Device names: light, fan, zero, etc.',
+            func=home_automation_function
+        )
+
+
+
+
     def _create_weather_forecast_tool(self) -> Tool:
         """Get weather forecast for a location"""
         def forecast_function(location: str) -> str:
@@ -312,7 +417,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="control_spotify_playback",
-            description="Control Spotify. Use when: 'pause', 'resume', 'next', 'skip'. Input: pause|resume|next|skip",
+            description="Resume, pause, or skip Spotify playback. CRITICAL: Use when user says: 'play', 'resume', 'continue', 'pause', 'stop', 'next', 'skip'. Input format: pause|resume|next|skip (e.g., 'resume' to play music, 'pause' to stop, 'next' to skip song)",
             func=control_function
         )
     
@@ -763,7 +868,7 @@ class LangChainAgentProcessor:
                 time.sleep(0.2)
                 
                 # Listen with longer timeout for follow-up
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=3)
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=1)
                 
                 if follow_up_command:
                     print(f"Received follow-up response: '{follow_up_command}'")
@@ -776,7 +881,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="ask_follow_up_question",
-            description="MANDATORY - Ask clarifying questions when user input is ambiguous. Use when: volume request without direction ('increase'/'decrease'/'mute'), incomplete shopping action, ambiguous product search, unclear confirmation. Format: your question as natural text. CRITICAL RULE: Any response containing '?' MUST use this tool instead of text response. Examples: 'Would you like to increase or decrease the volume?', 'Which product would you like to add?', 'What quantity do you need?'",
+            description="Ask clarifying questions when needed: volume direction, device selection, product/quantity choice, confirmation, payment method, time setup. Use for any ambiguous user input. Format: natural question text.",
             func=ask_follow_up_function
         )
     
@@ -905,6 +1010,7 @@ class LangChainAgentProcessor:
             self._create_current_weather_tool(),
             self._create_weather_forecast_tool(),
             self._create_timezone_tool(),
+            self._create_home_automation_tool(),
             self._create_spotify_play_track_tool(),
             self._create_spotify_play_album_tool(),
             self._create_spotify_play_artist_tool(),
@@ -942,49 +1048,40 @@ class LangChainAgentProcessor:
         )
         
         # Create system prompt
-        system_prompt = """You are Sofi, a female voice assistant in Pune, India year - 2025.
+        system_prompt = """You are Sofi, a female voice assistant in Pune, India.
 
-**TTS RULES:**
-- Keep responses SHORT and conversational for voice output
-- Use simple spoken language, no special characters dont add "•", "-", "→", etc.
-- Break complex info into brief bullet points
-- generate tts friendly responses as assistant speaking.
+**LANGUAGE:**
+- Hindi input → respond in हिंदी देवनागरी only (never roman transliteration)
+- English input → respond in English only
+
+**RULES:**
+- Keep responses SHORT and conversational
+- Use ask_follow_up_question tool when clarification needed
+- No special characters, simple spoken language
+
+**SPOTIFY PLAYBACK CONTROL - MUST USE TOOL:**
+When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
+→ ALWAYS call control_spotify_playback tool with: pause|resume|next|skip
+→ Examples: 
+  - "play song" or "resume" → use control_spotify_playback with "resume"
+  - "pause" → use control_spotify_playback with "pause"
+  - "next song" or "skip" → use control_spotify_playback with "next"
+  - "pause music" → use control_spotify_playback with "pause"
+
+**KEY TOOLS:**
+- HOME AUTOMATION: control|device:true/false (e.g., control|light:true)
+- VOLUME: increase/decrease/mute/set
+- SEARCH: news, prices, weather, web queries
+- SPOTIFY CONTROL: pause, resume, next, skip (use control_spotify_playback tool)
+- SPOTIFY PLAY: play specific track/album/artist (use play_spotify_track/album/artist tools)
+- TELEGRAM: send message, photo, document, video
+- ZEPTO: login, search, add_product, checkout, place_order
+- REMINDERS: set, list, cancel, check
 
 **QUESTION RULE:**
 - NEVER ask questions in your response text
 - If you need to ask anything, always use ask_follow_up_question tool for clarification
 - Any response with "?" must use the tool instead
-
-**LANGUAGE RULE - CRITICAL:**
-- Match user's language exactly
-- Hindi input → always respond ONLY in Hindi Devanagari (हिंदी देवनागरी) never use romanized form
-- English input → respond in English
-- NEVER use romanized Hindi (no "mausam", use "मौसम")
-- NEVER mix scripts
-
-**CAPABILITIES:** weather, Spotify, search, Amazon, reminders, Telegram, volume, BigBasket, Zepto
-
-**VOLUME CONTROL (MANDATORY - ALWAYS USE TOOL):**
-- ANY volume request MUST call control_system_volume tool
-- NEVER respond about volume without calling the tool
-- Parse user intent: "increase/up/louder" → increase, "decrease/down/quiet" → decrease, "set/put to X" → set with level, "mute/quiet" → mute, "unmute/loud" → unmute
-- Format tool input: action|step|level (examples: "increase|10", "decrease|5", "set||50")
-- Step defaults to 5 if not specified, use larger steps only if user specifies
-
-**WEB SEARCH FOR LATEST UPDATES (MANDATORY):**
-- ALWAYS use search_web tool when user asks for: latest news, current prices, today's information, recent updates, live info, what's trending, current status
-- Use when: "what's the latest", "current", "today", "right now", "latest news about", "what's new", "latest updates", "current price of"
-- NEVER answer from knowledge cutoff - always search for current information
-- Format: Just the search query (e.g., "latest Bitcoin price", "current weather in Mumbai", "trending news today")
-- Examples: "latest iPhone price", "today's stock market updates", "current COVID cases in India"
-
-**BigBasket ORDERING (IMPORTANT):**
- For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
-        BigBasket Shopping:
-        - Workflow: login - search - show results - ask selection - clear_cart - add_product - checkout - place_order - close_browser
-        - For 'search'/'add_product': pass both action and product parameters
-         - Always show search results and clear the cart before adding to cart
-        - Always get confirmation from user before calling 'place_order'
 
 **Zepto ORDERING (IMPORTANT):**
  For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
@@ -997,8 +1094,15 @@ class LangChainAgentProcessor:
         - ALWAYS get confirmation from user before calling 'place_order' using ask_follow_up_question tool
         - After order placed, call cleanup to close browser
         - Always clean the browser session after processing order or failed attempts to avoid multiple logins.
-       
-Brief TTS-friendly, do not add any special character in responses."""
+
+**WEB SEARCH FOR LATEST UPDATES (MANDATORY):**
+- ALWAYS use search_web tool when user asks for: latest news, current prices, today's information, recent updates, live info, what's trending, current status
+- Use when: "what's the latest", "current", "today", "right now", "latest news about", "what's new", "latest updates", "current price of"
+- NEVER answer from knowledge cutoff - always search for current information
+- Format: Just the search query (e.g., "latest Bitcoin price", "current weather in Mumbai", "trending news today")
+- Examples: "latest iPhone price", "today's stock market updates", "current COVID cases in India"
+
+**CAPABILITIES:** Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation"""
         
         # Create prompt template
         prompt = ChatPromptTemplate.from_messages([
@@ -1020,7 +1124,7 @@ Brief TTS-friendly, do not add any special character in responses."""
             agent=agent,
             tools=self.tools,
             memory=memory,
-            verbose=True,  # Shows the agent's reasoning process
+            verbose=False,  # Disabled to prevent double response output
             handle_parsing_errors=True,
             max_iterations=25  # Increased for complex workflows like BigBasket ordering
             # Removed early_stopping_method as it's deprecated in newer versions
@@ -1053,6 +1157,15 @@ Brief TTS-friendly, do not add any special character in responses."""
                 result = self.agent_executor.invoke({"input": user_command})
                 response = result["output"]
                 print(response)
+                
+                # Detect input language
+                input_lang = detect_language(user_command)
+                
+                # Fix Roman Hindi to Devanagari if input was Hindi and output is Roman
+                if input_lang == 'hindi' and is_roman_hindi(response):
+                    response = convert_roman_to_devanagari_smart(response)
+                    print(f"Converted to Devanagari: {response}")
+                
                 # Add to conversation history
                 self.conversation_history.append({"role": "user", "content": user_command})
                 self.conversation_history.append({"role": "assistant", "content": response})

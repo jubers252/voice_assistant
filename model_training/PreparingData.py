@@ -2,12 +2,39 @@
 import sounddevice as sd
 from scipy.io.wavfile import write
 import os
+import numpy as np
 
 
-SAMPLE_RATE = 16000
-RECORD_SECONDS = 1
+SAMPLE_RATE = 22050  # 22.05 kHz
+RECORD_SECONDS = 2
+DIGITAL_GAIN = 5.0  # Amplify recorded audio (1.0 = no gain, 5.0 = 5x louder)
 SAVE_DIR = os.path.join(os.path.dirname(__file__), "audio_data")  # Always save in model_training/audio
 os.makedirs(SAVE_DIR, exist_ok=True)
+
+
+def apply_digital_gain(audio, gain=DIGITAL_GAIN):
+    """
+    Apply digital gain to audio data.
+    
+    Parameters:
+    -----------
+    audio: numpy array
+        Audio samples
+    gain: float
+        Gain multiplier (1.0 = no change, 4.0 = 4x louder)
+    
+    Returns:
+    --------
+    numpy array
+        Amplified audio (clipped to prevent overflow)
+    """
+    amplified = audio * gain
+    
+    # Clip to prevent overflow (keep in valid range)
+    # For 16-bit audio: -32768 to 32767
+    amplified = np.clip(amplified, -1.0, 1.0)
+    
+    return amplified
 
 
 def record_audio_and_save(save_path, n_times=50):
@@ -25,14 +52,15 @@ def record_audio_and_save(save_path, n_times=50):
     """
 
     input("To start recording Wake Word press Enter: ")
-    for i in range(350, n_times):
-        fs = 22050  # Original recording sample rate
-        seconds = 2
-
-        myrecording = sd.rec(int(seconds * fs), samplerate=fs, channels=1)
+    for i in range(256, n_times):
+        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
         sd.wait()
+        
+        # Apply digital gain
+        myrecording = apply_digital_gain(myrecording, gain=DIGITAL_GAIN)
+        
         filename = f"wakeword_{i}.wav"
-        write(os.path.join(save_path, filename), fs, myrecording)
+        write(os.path.join(save_path, filename), SAMPLE_RATE, myrecording)
         input(f"Press to record next or two stop press ctrl + C ({i + 1}/{n_times}): ")
 
 def record_background_sound(save_path, n_times=1000):
@@ -52,22 +80,19 @@ def record_background_sound(save_path, n_times=1000):
     """
 
     input("To start recording your background sounds press Enter: ")
-    for i in range(900, n_times):
-        fs = 22050  # Original recording sample rate
-        seconds = 2 
-
-        myrecording = sd.rec(int(seconds * fs), samplerate=fs, channels=1)
+    for i in range(400, n_times):
+        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
         sd.wait()
-        write(os.path.join(save_path, str(i) + ".wav"), fs, myrecording)
+        write(os.path.join(save_path, str(i) + ".wav"), SAMPLE_RATE, myrecording)
         print(f"Currently on {i+1}/{n_times}")
 
 # Step 1: Record yourself saying the Wake Word
 # print("Recording the Wake Word:\n")
-# record_background_sound(SAVE_DIR, n_times=1100) 
+record_background_sound(SAVE_DIR, n_times=1100) 
 # Step 2: Record your background sounds (Just let it run, it will auto
 # matically record)
 # print("Recording the Background sounds:\n")
-record_audio_and_save(SAVE_DIR, n_times=400)
+# record_audio_and_save(SAVE_DIR, n_times=400)
 
 
 

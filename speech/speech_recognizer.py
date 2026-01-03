@@ -3,7 +3,15 @@ from dotenv import load_dotenv
 import speech_recognition as sr
 import os
 from contextlib import contextmanager
-
+import numpy as np
+import time
+import io
+import wave
+import openai
+from openai import OpenAI
+import time as timing_module
+import gc
+        
 # Load environment variables
 load_dotenv()
 
@@ -22,17 +30,38 @@ def suppress_alsa_errors():
         os.close(old_stderr)
 
 class SpeechRecognizer:
-    def __init__(self, audio_processor, device_index=None, pixel_led=None):
+    def __init__(self, audio_processor, device_index=None, pixel_led=None, use_whisper=False):
         """Initialize recognizer and pick a safe microphone device index.
 
         On Linux the device index used on Windows (e.g. 1) may be invalid and
         attempting to open it causes ALSA/PyAudio errors. We try to pick a
         working device automatically and fall back to the system default.
+        
+        Args:
+            audio_processor: Audio processor instance
+            device_index: Optional microphone device index
+            pixel_led: Optional LED control instance
+            use_whisper: If True, use OpenAI Whisper for recognition instead of Google
         """
         self.device_index = None
         self.recognizer = sr.Recognizer()
         self.audio_processor = audio_processor
         self.pixel_led = pixel_led
+        self.use_whisper = use_whisper
+        
+        # Set Whisper language from environment variable (default: English)
+        self.whisper_language = os.getenv('WHISPER_LANGUAGE', 'en')
+        
+        # Initialize OpenAI client if using Whisper
+        if self.use_whisper:
+            api_key = os.getenv('OPENAI_API_KEY')
+            if not api_key:
+                print("[RECOGNIZER] Warning: OPENAI_API_KEY not found in environment. Falling back to Google Speech Recognition.")
+                self.use_whisper = False
+            else:
+                self.openai_client = OpenAI(api_key=api_key)
+                print("[RECOGNIZER] OpenAI Whisper initialized")
+        
         self._setup_recognizer()
         try:
             self._choose_device_index()
@@ -58,15 +87,69 @@ class SpeechRecognizer:
         except Exception as e:
             print(f"[RECOGNIZER] Microphone warm-up failed (non-critical): {e}")
 
+    def _check_voice_activity(self, audio_data, sample_rate, silence_duration=1.5):
+        """
+        Check if there's voice activity in audio using energy detection.
+        Returns True if voice is detected, False if only silence.
+        
+        Args:
+            audio_data: audio samples as numpy array
+            sample_rate: sample rate of audio
+            silence_duration: seconds of silence threshold
+        """
+        try:
+            # Convert bytes to numpy array if needed
+            if isinstance(audio_data, bytes):
+                audio_data = np.frombuffer(audio_data, dtype=np.int16).astype(float) / 32768.0
+            
+            # Energy threshold
+            energy = np.sqrt(np.mean(audio_data ** 2))
+            
+            # If energy is low, likely silence
+            if energy < 0.005:  # Very low energy = silence
+                return False
+            
+            return True
+        except Exception as e:
+            return True  # Default to True if detection fails
+    
+    def _vad_monitor_thread(self, stop_event, audio_queue, silence_threshold=1.5):
+        """
+        Monitor audio in background and detect silence.
+        Signals to stop listening if silence detected for threshold seconds.
+        """
+        consecutive_silence = 0.0
+        silent_frame_duration = 0.1  # Each frame is ~100ms
+        
+        while not stop_event.is_set():
+            try:
+                # Get audio frames from queue (non-blocking)
+                if not audio_queue.empty():
+                    frame = audio_queue.get(timeout=0.1)
+                    is_speaking = self._check_voice_activity(frame, self.recognizer.sample_rate)
+                    
+                    if not is_speaking:
+                        consecutive_silence += silent_frame_duration
+                        if consecutive_silence >= silence_threshold:
+                            print(f"[VAD] Silence detected for {silence_threshold}s, stopping...")
+                            stop_event.set()
+                            break
+                    else:
+                        consecutive_silence = 0.0  # Reset on voice detection
+                else:
+                    time.sleep(0.05)
+            except Exception as e:
+                time.sleep(0.05)
+    
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 20  # Lower threshold to catch quieter speech
+        self.recognizer.energy_threshold = 100  # Lowered to detect quiet speech
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.15
-        self.recognizer.dynamic_energy_ratio = 1.5  # Reduced from 2.0 for better natural speech detection
-        self.recognizer.pause_threshold = 2.0  # 3.0 seconds of silence before stopping (allow long natural pauses)
-        self.recognizer.phrase_threshold = 0.1  # Minimum 100ms to catch speech start quickly
-        self.recognizer.non_speaking_duration = 1.5  # Max 2.0 seconds pause mid-phrase for natural speaking (breathing, hesitation)
+        self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
+        self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
+        self.recognizer.pause_threshold = 1.0  # 1.0 seconds of silence before stopping
+        self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
+        self.recognizer.non_speaking_duration = 0.7  # Max 0.7 seconds pause mid-phrase
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -74,165 +157,108 @@ class SpeechRecognizer:
         else:
             print(f"I didn't catch that. Please try again... (attempt {retry_count + 1})")
 
-    def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=2):
-        """
-        Listen for user command with follow-up functionality and retry logic.
-        """
-        import time as timing_module
-        import gc
+    def _handle_listen_error(self, attempt, error_message):
+        """Handle listen/recognition error with LED feedback and retry logic.
         
-        if is_follow_up:
-            print("[ASSISTANT] Listening for follow-up response...")
-            timeout = min(timeout, 20)
+        Args:
+            attempt: Current attempt number (0 for first, 1 for second)
+            error_message: Message to speak to user (only spoken on final failure)
+            
+        Returns:
+            True if should retry, False if should return None
+        """
+        if attempt == 0:
+            if self.pixel_led:
+                self.pixel_led.set_error()
+            print(f"[ERROR] {error_message}")
+            time.sleep(2.0)  # Give audio time to settle
+            if self.pixel_led:
+                self.pixel_led.set_listening()
+            self.audio_processor.play_beep_sound()
+            return True  
         else:
-            print("[ASSISTANT] Listening for command...")
 
-        retry_count = 0
-        while retry_count <= max_retries:
+            if self.pixel_led:
+                self.pixel_led.set_error()
+            return False
+
+    def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
+        """Listen for user command with retry logic (retries once, then returns error)."""
+        msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
+        print(f"[ASSISTANT] {msg}")
+        self._print_attempt(0, is_follow_up)
+        
+        for attempt in range(max_retries + 1):
             microphone = None
             audio = None
             try:
-                # Try opening the microphone with ALSA error suppression
-                mic_kwargs = {}
-                if self.device_index is not None:
-                    mic_kwargs['device_index'] = self.device_index
-                
-                # Suppress ALSA warnings only during microphone object creation
-                t_mic_start = timing_module.time()
+                mic_kwargs = {"device_index": self.device_index} if self.device_index is not None else {}
+                if self.pixel_led:
+                    self.pixel_led.set_listening()
                 with suppress_alsa_errors():
-                    try:
-                        microphone = sr.Microphone(**mic_kwargs)
-                    except (OSError, AttributeError) as e:
-                        # Failed to find/open microphone device
-                        raise Exception(f"Cannot open microphone device: {type(e).__name__}: {e}")
+                    microphone = sr.Microphone(**mic_kwargs)
                 
-                # Open microphone stream (also with ALSA suppression)
                 with suppress_alsa_errors():
                     with microphone as source:
-                        t_mic_open = timing_module.time()
-                        print(f"⏱️ Microphone open time: {(t_mic_open - t_mic_start)*1000:.0f}ms")
-                        
-                        # RE-APPLY aggressive thresholds just before listening
-                        # (in case they got reset somewhere)
-                        self.recognizer.pause_threshold = 2.0  # 3 seconds of silence
-                        self.recognizer.non_speaking_duration = 1.5  # 2.5 seconds pause mid-phrase
-                        self.recognizer.phrase_threshold = 0.1  # Start capturing after 100ms
-                        
-                        # Skip ambient noise calibration - it's too aggressive
-                        # Dynamic threshold will handle adjustment during listening
-                        print(f"Energy threshold: {self.recognizer.energy_threshold:.0f}")
-                        print(f"Phrase threshold: {self.recognizer.phrase_threshold:.2f}s")
-                        print(f"Pause threshold: {self.recognizer.pause_threshold:.2f}s")
-                        print(f"Non-speaking duration: {self.recognizer.non_speaking_duration:.2f}s")
-                        
-                        self._print_attempt(retry_count, is_follow_up)
-                        print("i m listening...")
-                        listen_timeout = timeout if retry_count == 0 else timeout + 3
-
-                        # Ensure recognizer exists
-                        if not self.recognizer:
-                            print("[ASSISTANT] Speech recognizer not initialized")
-                            raise Exception("Recognizer not initialized")
-
-                        t_listen_start = timing_module.time()
+                        print("Listening...")
                         try:
-                            audio = self.recognizer.listen(source, timeout=listen_timeout, phrase_time_limit=20)
-                        except sr.WaitTimeoutError as wte:
-                            # This is expected - no speech detected
-                            print(f"[ASSISTANT] No speech detected (timeout after {listen_timeout}s). Trying again... ({retry_count + 1}/{max_retries + 1})")
+                            audio = self.recognizer.listen(source, timeout=15, phrase_time_limit=20)
+                        except sr.WaitTimeoutError:
+                            print(f"[ASSISTANT] No speech detected. Attempt {attempt + 1}/{max_retries + 1}")
                             if self.pixel_led:
                                 self.pixel_led.off()
-                            retry_count += 1
+                            if attempt < max_retries:
+                                self._print_attempt(attempt + 1, is_follow_up)
                             continue
-                        except Exception as listen_error:
-                            print(f"[ASSISTANT] Listen error: {type(listen_error).__name__}: {listen_error}")
-                            if self.pixel_led:
-                                self.pixel_led.off()
-                            retry_count += 1
-                            continue
-                        
-                        t_listen_end = timing_module.time()
-                        print(f"⏱️ Listen duration: {(t_listen_end - t_listen_start)*1000:.0f}ms")
 
-                # Basic validation of audio object
-                if audio is None or not hasattr(audio, 'frame_data') or not hasattr(audio, 'sample_rate'):
-                    print("[ASSISTANT] Invalid audio captured, retrying...")
-                    retry_count += 1
+                if not audio or len(audio.frame_data) < 400:
+                    print("[ASSISTANT] Audio too short, retrying...")
+                    if attempt < max_retries:
+                        self._print_attempt(attempt + 1, is_follow_up)
                     continue
 
-                print(f"[ASSISTANT] Audio length: {len(audio.frame_data) / audio.sample_rate:.2f} seconds")
                 print("Recognizing...")
-
-                if len(audio.frame_data) < 1000:
-                    print("[ASSISTANT] Audio too short, trying again...")
-                    retry_count += 1
-                    continue
-
                 command = self._recognize_audio(audio)
                 if command:
                     return command
                 else:
-                    retry_count += 1
-                    continue
-
+                    # Recognition failed, treat as error
+                    if not self._handle_listen_error(attempt, "Sorry, no speech detected."):
+                       
+                        pass
+               
             except Exception as e:
-                if self.pixel_led:
-                    self.pixel_led.off()
-                
-                error_msg = str(e) if str(e) else "Unknown error"
-                print(f"[ASSISTANT] Microphone/listen error: {error_msg}")
-                
-                # On first retry, try to find a working device
-                if retry_count == 0:
-                    print("[ASSISTANT] Searching for working microphone device...")
-                    if self._choose_device_index(force_search=True):
-                        print(f"[ASSISTANT] Found device, retrying with device_index={self.device_index}")
-                    retry_count += 1
-                    continue
-                else:
-                    print("[ASSISTANT] Microphone still unavailable, skipping retry")
-                    retry_count += 1
-                    continue
+                print(f"[ASSISTANT] Error: {e}")
+                if not self._handle_listen_error(attempt, "Sorry, couldn't hear you. Let me try again."):
+                    pass
+            
             finally:
-                # Explicitly clean up audio and microphone objects
                 if audio is not None:
                     try:
-                        # Delete audio frame data explicitly
                         if hasattr(audio, 'frame_data'):
                             del audio.frame_data
                         del audio
                     except:
                         pass
-                
                 if microphone is not None:
                     try:
                         microphone.close()
                         del microphone
                     except:
                         pass
-                
-                # Force garbage collection to free C resources
                 gc.collect()
-                    
-        print("[ASSISTANT] No valid command detected after multiple attempts.")
-        # Speak feedback only after all retries are exhausted
+        
+        print("[ASSISTANT] No command detected after multiple attempts.")
         self.audio_processor.speak("I didn't hear anything. Please call if you need me.")
         return None
 
     def _recognize_audio(self, audio):
+        """Recognize audio using either OpenAI Whisper or Google Speech Recognition"""
         try:
-            command = self.recognizer.recognize_google(audio, language='en-US')
-            print(f"[ASSISTANT] You said: {command}")
-            cleaned_command = command.lower().strip()
-            if len(cleaned_command) < 2:
-                print("[ASSISTANT] Command too short, trying again...")
-                # Don't speak here - let it retry silently
-                return None
-            return cleaned_command
-        except (sr.RequestError, sr.UnknownValueError) as e:
-            print(f"[ASSISTANT] Recognition error: {e}.")
-            # Don't speak here - let the caller handle it to avoid self-listening
-            return None
+            if self.use_whisper:
+                return self._recognize_with_whisper(audio)
+            else:
+                return self._recognize_with_google(audio)
         except Exception as e:
             print(f"[ASSISTANT] Unexpected recognition error: {e}")
             return None
@@ -243,6 +269,70 @@ class SpeechRecognizer:
                 gc.collect()
             except:
                 pass
+
+    def _recognize_with_google(self, audio):
+        """Recognize audio using Google Speech Recognition"""
+        try:
+            command = self.recognizer.recognize_google(audio, language='en-US')
+            print(f"[ASSISTANT] You said: {command}")
+            cleaned_command = command.lower().strip()
+            if len(cleaned_command) < 2:
+                print("[ASSISTANT] Command too short, trying again...")
+                # Don't speak here - let it retry silently
+                return None
+            return cleaned_command
+        except (sr.RequestError, sr.UnknownValueError) as e:
+            print(f"[ASSISTANT] Google Recognition error: {e}.")
+            # Don't speak here - let the caller handle it to avoid self-listening
+            return None
+
+    def _recognize_with_whisper(self, audio):
+        """Recognize audio using OpenAI Whisper API"""
+        try:
+            # Convert audio object to WAV file for Whisper API
+            wav_data = self._audio_to_wav(audio)
+            
+            # Send to Whisper API
+            print(f"[ASSISTANT] Sending audio to Whisper API (Language: {self.whisper_language})...")
+            transcript = self.openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=("audio.wav", wav_data, "audio/wav"),
+               
+            )
+            
+            command = transcript.text
+            print(f"[ASSISTANT] Whisper recognized: {command}")
+            cleaned_command = command.lower().strip()
+            
+            if len(cleaned_command) < 2:
+                print("[ASSISTANT] Command too short, trying again...")
+                return None
+            
+            return cleaned_command
+            
+        except openai.APIError as e:
+            print(f"[ASSISTANT] OpenAI API error: {e}.")
+            return None
+        except Exception as e:
+            print(f"[ASSISTANT] Whisper recognition error: {e}")
+            return None
+
+    def _audio_to_wav(self, audio):
+        """Convert speech_recognition Audio object to WAV bytes"""
+        try:
+            # Create WAV file in memory
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(audio.sample_rate)
+                wav_file.writeframes(audio.frame_data)
+            
+            wav_buffer.seek(0)
+            return wav_buffer.getvalue()
+        except Exception as e:
+            print(f"[ASSISTANT] Error converting audio to WAV: {e}")
+            raise
 
     def list_available_microphones(self):
         """Return a list of available microphone names."""
@@ -297,10 +387,10 @@ class SpeechRecognizer:
                                 # Timeout is ok - device is working, just no audio
                                 pass
                         self.device_index = idx
-                        print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
+                        print(f"[MIC] Using device {idx}: {names[idx]}")
                         return True
                 except Exception as e:
-                    print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}: {e}")
+                    print(f"[MIC] Device {idx} failed: {type(e).__name__}: {e}")
                     continue
 
         # Try all other devices
@@ -317,10 +407,10 @@ class SpeechRecognizer:
                         except sr.WaitTimeoutError:
                             pass
                     self.device_index = idx
-                    print(f"[MIC] ✓ Using device {idx}: {names[idx]}")
+                    print(f"[MIC] Using device {idx}: {names[idx]}")
                     return True
             except Exception as e:
-                print(f"[MIC] ✗ Device {idx} failed: {type(e).__name__}")
+                print(f"[MIC] Device {idx} failed: {type(e).__name__}")
                 continue
 
         # Last resort - use None (system default)

@@ -69,7 +69,7 @@ class AudioProcessors:
 
         # Audio processing
         self.sample_rate = 22050
-        self.duration = 1.5
+        self.duration = 1.0
         self.debug_mode = True           
 
         # Speech interruption control
@@ -77,6 +77,21 @@ class AudioProcessors:
         self.speech_interrupted = False
         self.speech_thread = None
         self.pixel_led = None  # Will be set by voice assistant if available
+        
+        # Initialize pygame mixer once to prevent double initialization corruption
+        self._init_pygame_mixer()
+    
+    def _init_pygame_mixer(self):
+        """Initialize pygame mixer once to prevent double initialization corruption"""
+        try:
+            if not pygame.mixer.get_init():
+                pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
+                pygame.mixer.init()
+                print("Pygame mixer initialized successfully")
+            else:
+                print("Pygame mixer already initialized")
+        except Exception as e:
+            print(f"Warning: Failed to initialize pygame mixer: {e}")
     
     def set_pixel_led(self, pixel_led):
         """Set pixel LED controller for visual feedback during speech"""
@@ -86,80 +101,7 @@ class AudioProcessors:
         """Set template matcher for pre-filtering audio stream to speech only"""
         self._template_matcher = template_matcher
     
-    def enhance_speech(self, audio_chunk):
-        """
-        Enhance speech by removing background music using combined filtering.
-        
-        Uses high-pass filtering (250 Hz) + spectral gating (-30 dB).
-        This approach removes music's bass interference while preserving wake word.
-        
-        Args:
-            audio_chunk (ndarray): Audio samples to enhance
-            
-        Returns:
-            ndarray: Enhanced audio with reduced background noise
-        """
-        try:
-            from scipy import signal
-            
-            # ===== STRATEGY 1: High-pass filter (250 Hz, 4th order) =====
-            # Aggressively removes music's bass while preserving speech formants
-            # Frequency analysis shows:
-            #   - Background music: Heavy energy in sub-bass (0-250 Hz)
-            #   - Wake word: Dominant at 415.5 Hz with formants 250-4000 Hz
-            nyquist = self.sample_rate / 2
-            high_pass_freq = 250  # Hz (aggressive bass removal for music rejection)
-            normalized_freq = high_pass_freq / nyquist
-            
-            # Use 4th order Butterworth filter for steeper rolloff (more aggressive)
-            b, a = signal.butter(4, normalized_freq, btype='high')
-            filtered = signal.filtfilt(b, a, audio_chunk)
-            
-            # ===== STRATEGY 2: Spectral gating (threshold -30 dB) =====
-            # Suppress quiet frequency components where noise typically lives
-            # More aggressive than -35 dB to better remove music masking
-            try:
-                import librosa
-                
-                # Compute STFT for spectral analysis
-                D = librosa.stft(filtered, n_fft=2048, hop_length=512)
-                S = np.abs(D)
-                
-                # Convert to dB with reference to max
-                S_db = librosa.power_to_db(S ** 2, ref=np.max)
-                
-                # Create frequency mask: suppress components below -30 dB threshold (more aggressive)
-                threshold_db = -30  # More aggressive than -35 (removes more noise)
-                mask = S_db > threshold_db
-                
-                # Apply mask to suppress quiet noise
-                S_gated = S * mask.astype(float)
-                
-                # Reconstruct time-domain signal
-                D_gated = S_gated * np.exp(1j * np.angle(D))
-                enhanced = librosa.istft(D_gated, hop_length=512)
-                
-                # Pad/trim to match original length if needed
-                if len(enhanced) < len(audio_chunk):
-                    enhanced = np.pad(enhanced, (0, len(audio_chunk) - len(enhanced)))
-                elif len(enhanced) > len(audio_chunk):
-                    enhanced = enhanced[:len(audio_chunk)]
-                
-            except (ImportError, Exception):
-                # If librosa not available or STFT fails, skip spectral gating
-                enhanced = filtered
-            
-            # ===== Subtle normalization =====
-            max_val = np.max(np.abs(enhanced))
-            if max_val > 1.2:  # Only normalize if needed
-                enhanced = enhanced / max_val
-            
-            return enhanced
-            
-        except Exception as e:
-            # On error, return original
-            return audio_chunk
-    
+   
     def set_audio_buffer(self, buffer, buffer_lock):
         """Set external audio buffer for the callback to use
         
@@ -284,11 +226,11 @@ class AudioProcessors:
         if lang == "hi":
             language_code = "hi-IN"
             voice_name = "hi-IN-Chirp3-HD-Achernar"
-            speaking_rate = 1.0  # Normal rate for natural speech
+            speaking_rate = 0.90  # Normal rate for natural speech
         else:
             language_code = "en-IN"
             voice_name = "en-IN-Chirp3-HD-Achernar"
-            speaking_rate = 1.0  # Normal rate for natural speech
+            speaking_rate = 0.95  # Normal rate for natural speech
         
         print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
         try:
@@ -424,9 +366,10 @@ class AudioProcessors:
             # Play audio with pygame (with fallback)
             if os.path.exists(tmp_file_path):
                 try:
-                    pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
-                    pygame.mixer.init()
-                    self._play_bluetooth_wakeup()
+                    # Ensure mixer is initialized (single initialization per session)
+                    if not pygame.mixer.get_init():
+                        self._init_pygame_mixer()
+                    
                     pygame.mixer.music.load(tmp_file_path)
                     pygame.mixer.music.set_volume(0.8)
                     pygame.mixer.music.play()
@@ -435,7 +378,6 @@ class AudioProcessors:
                         time.sleep(0.1)
 
                     pygame.mixer.music.stop()
-                    pygame.mixer.quit()
                 except Exception as pygame_error:
                     print(f"Pygame audio failed: {pygame_error}")
                   
@@ -635,10 +577,10 @@ class AudioProcessors:
 
             if os.path.exists(beep_file):
                 try:
-                    # Try pygame with better parameters first
-                    import pygame
-                    pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=512)
-                    pygame.mixer.init()
+                    # Ensure mixer is initialized (single initialization per session)
+                    if not pygame.mixer.get_init():
+                        self._init_pygame_mixer()
+                    
                     pygame.mixer.music.load(beep_file)
                     pygame.mixer.music.set_volume(0.6)  # Lower volume for beep
                     pygame.mixer.music.play()
@@ -647,7 +589,6 @@ class AudioProcessors:
                     while pygame.mixer.music.get_busy():
                         pygame.time.wait(10)
                     
-                    pygame.mixer.quit()
                 except Exception as pygame_error:
                     print(f"Pygame beep failed: {pygame_error}")
                     # Fallback to system beep
@@ -661,49 +602,37 @@ class AudioProcessors:
             self._system_beep()
 
     def audio_callback(self, indata, frames, time_info, status):
-        """Audio callback function for real-time audio processing
+        """Audio callback function - stores raw audio to buffer.
         
-        Applies speech filtering to reduce background music/noise from reaching
-        the wake word detector. Only human speech is stored in the buffer.
-        
-        Note: This callback stores audio data in the VoiceAssistant's buffer,
-        not in AudioProcessors itself.
+        All detection logic (VAD or pipeline) happens during processing.
         """
         if status:
             print(f"Audio callback status: {status}")
-        # Defensive checks
+        
         if indata is None or len(indata) == 0:
             return
 
         try:
-            # Average both stereo channels for better audio quality
+            # Average both stereo channels
             if indata.ndim > 1 and indata.shape[1] == 2:
                 audio_samples = np.mean(indata, axis=1)
             else:
                 audio_samples = indata[:, 0]
         except Exception:
-            # Fallback if audio is already 1-D
             audio_samples = indata.flatten()
         
-        # Apply digital gain for MEMS microphones
+        # Apply digital gain
         if hasattr(self, 'digital_gain') and self.digital_gain != 1.0:
             audio_samples = audio_samples * self.digital_gain
-            # Prevent clipping
             audio_samples = np.clip(audio_samples, -1.0, 1.0)
 
-        # ===== Store audio in buffer =====
-        # Note: Audio is stored raw here. Filtering is applied only to the
-        # detection window in wake_word_manager before model inference.
-        should_store = True
-        
-        # Store in the VoiceAssistant's buffer (if available)
-        if should_store and hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
+        # Store raw audio in buffer
+        if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
             try:
                 with self._external_buffer_lock:
                     self._external_buffer.extend(audio_samples)
-            except Exception as e:
-                pass  # Silently skip buffer errors
-        # Buffer not configured is OK - initialization happens asynchronously
+            except Exception:
+                pass
 
         
     # Comprehensive list of romanized Hindi words

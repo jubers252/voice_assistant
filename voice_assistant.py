@@ -8,14 +8,12 @@ import time
 import threading
 import sounddevice as sd
 from dotenv import load_dotenv
-
-
 # Component imports
 from audio.audio_processor import AudioProcessors
 from audio.wake_word_detector import WakeWordDetector
 from speech.speech_recognizer import SpeechRecognizer
 from conversation.conversation_manager import ConversationManager
-
+from connectors.spotify_connector import SpotifyConnector
 from connectors.reminder_manager import ReminderManager
 from handlers.wake_word_manager import WakeWordManager
 # from handlers.command_processor import CommandProcessor  # Replaced by LangChain processor
@@ -48,7 +46,11 @@ class VoiceAssistantRefactored:
         self.audio_processors.set_digital_gain(MIC_GAIN)
         print(f"Microphone digital gain set to {MIC_GAIN}x")
         
-        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led)
+        # Check if Whisper should be used (set USE_WHISPER=true in .env)
+        use_whisper = os.getenv('USE_WHISPER', 'false').lower() == 'true'
+        if use_whisper:
+            print("[ASSISTANT] Whisper speech recognition enabled")
+        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led, use_whisper=use_whisper)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 
@@ -56,12 +58,13 @@ class VoiceAssistantRefactored:
         self.reminder_manager.set_audio_processors(self.audio_processors)
         self.reminder_manager.start_reminder_checker()
         
-        # Wake word detector
-        ww_model_path = f"{model_dir}/WWD_improved_mems_v2.h5"
+
+        ww_model_path = f"{model_dir}/WWD_improved_updated_v5.h5"
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         
         try:
+            print(f"Loading wake word model from: {ww_model_path}")
             self.wake_word_detector = WakeWordDetector(model_path=ww_model_path)
         except Exception as e:
             print(f"Warning: wake word model not loaded during init: {e}")
@@ -77,14 +80,11 @@ class VoiceAssistantRefactored:
         )
         
         # Try to initialize Spotify connector for music detection
-        try:
-            from connectors.spotify_connector import SpotifyConnector
-            self.spotify_connector = SpotifyConnector()
-            self.wake_word_manager.set_spotify_connector(self.spotify_connector)
-            print("Spotify connector initialized for music detection")
-        except Exception as e:
-            print(f"Warning: Could not initialize Spotify connector: {e}")
-            self.spotify_connector = None
+
+        
+        self.spotify_connector = SpotifyConnector(None)
+           
+    
       
         self.command_processor = LangChainAgentProcessor(
             conversation_history=self.conversation_history,
@@ -149,7 +149,7 @@ class VoiceAssistantRefactored:
                 
                 # Main loop - just keep running while detection is active
                 while self.wake_word_manager.detection_running:
-                    time.sleep(1.0)  # Reduced frequency since reminders run in background
+                    time.sleep(1.0) 
                     
         except KeyboardInterrupt:
             print("\nProgram stopped by user")
