@@ -139,6 +139,28 @@ class AudioProcessors:
                 sd.wait()
             
             print("Recording complete.")
+            
+            # Balance gain across stereo channels before flattening
+            if self.audio_channels == 2 and audio.ndim == 2:
+                # Normalize each channel to same RMS level
+                channel_left = audio[:, 0]
+                channel_right = audio[:, 1]
+                
+                # Calculate RMS for each channel
+                rms_left = np.sqrt(np.mean(channel_left ** 2))
+                rms_right = np.sqrt(np.mean(channel_right ** 2))
+                
+                if rms_left > 0 and rms_right > 0:
+                    # Gain balance: scale both channels to average RMS
+                    avg_rms = (rms_left + rms_right) / 2
+                    gain_left = avg_rms / rms_left
+                    gain_right = avg_rms / rms_right
+                    
+                    audio[:, 0] = channel_left * gain_left
+                    audio[:, 1] = channel_right * gain_right
+                    
+                    print(f"Balanced stereo gain - Left gain: {gain_left:.3f}, Right gain: {gain_right:.3f}")
+            
             audio_flat = audio.flatten()
             
             # Apply fixed digital gain
