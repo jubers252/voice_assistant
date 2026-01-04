@@ -234,7 +234,6 @@ class AudioProcessors:
         
         print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
         try:
-            # Ensure a path was provided
             if not speech_file_path:
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                 speech_file_path = tmp.name
@@ -248,12 +247,8 @@ class AudioProcessors:
                 # Text fits in one request - best for natural speech
                 chunks = [text]
             else:
-                # Only split if absolutely necessary
-                # Split by sentences to maintain naturalness
                 import re
-                
-                # Split by sentence boundaries (. ! ? followed by space)
-                # This preserves sentence structure
+
                 sentences = re.split(r'(?<=[.!?।])\s+', text)
                 
                 chunks = []
