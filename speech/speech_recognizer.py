@@ -143,7 +143,7 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 100  # Lowered to detect quiet speech
+        self.recognizer.energy_threshold = 50  # Lowered to detect quiet speech
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
         self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection

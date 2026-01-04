@@ -17,7 +17,6 @@ from plot_cm import plot_confusion_matrix
 import librosa
 import tensorflow as tf
 import tensorflow_hub as hub
-import tensorflow_io as tfio
 import glob
 ##### 1. Load Preprocessed Data (MFCC features) #####
 # This file is created by your PreprocessingData.py script
@@ -25,13 +24,10 @@ import glob
 df = pd.read_pickle(os.path.join("model_training", "final_audio_data_csv", "audio_data_cnn_improved.pkl"))
 
 ##### 2. Prepare Data for Training #####
-X = np.stack(df["feature"].values)  # shape: (samples, time_steps, 120, 2) - stereo from preprocessing
-# Flatten the stereo channels to match inference format
-if X.ndim == 4:  # If stereo (has 2 channels dimension)
-    X = X.reshape(X.shape[0], X.shape[1], X.shape[2] * X.shape[3])  # (samples, 44, 240)
+X = np.stack(df["feature"].values)  # shape: (samples, time_steps, 120)
 X = X.astype(np.float32)
-desired_length = X.shape[1]  # Number of time steps (44)
-feature_dim = X.shape[2]     # Number of features (240 = 120*2 channels)
+desired_length = X.shape[1]  # Number of time steps
+feature_dim = X.shape[2]     # Number of features (120)
 
 print(f"Data shape: {X.shape}")
 print(f"Feature dimension: {feature_dim}")
@@ -104,7 +100,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_improved_v4.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_mems_new_model.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")

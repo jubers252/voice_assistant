@@ -2,6 +2,7 @@
 import librosa
 import numpy as np
 from keras.models import load_model
+from sklearn.preprocessing import StandardScaler
 
 
 
@@ -14,11 +15,10 @@ class WakeWordDetector:
         self.n_fft = n_fft
         self.hop_length = hop_length
         
-        # Stereo configuration
+        # Model configuration (matches training)
         self.desired_length = 44
-        self.feature_dim = 120  # 40 MFCC + 40 delta + 40 delta2
-        self.channels = 2  # Stereo
-        self.optimal_threshold = 0.679  # Updated from training results - much better separation!
+        self.feature_dim = 120
+        self.optimal_threshold = 0.868  # Updated from retraining (suggested threshold for optimal detection)
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")
@@ -28,68 +28,52 @@ class WakeWordDetector:
     def _warmup_model(self):
         """Run a dummy prediction to initialize the model and avoid first-time delay"""
         try:
-            # Create dummy stereo audio (2 seconds of silence)
-            dummy_audio = np.zeros((2, int(self.sample_rate * 2.0)))  # Stereo: (2, samples)
+            # Create dummy audio (1 second of silence)
+            dummy_audio = np.zeros(int(self.sample_rate * 1.0))
             
             # Extract features from dummy audio
             features = self.extract_features(dummy_audio, self.sample_rate)
             
             if features is not None:
-                # Reshape to model input: (1, time_steps, features*channels)
-                features = features.reshape(1, self.desired_length, self.feature_dim * self.channels)
+                # Pad/trim to desired length
+                desired_length = 44
+                if features.shape[0] < desired_length:
+                    features = np.pad(features, ((0, desired_length - features.shape[0]), (0, 0)), mode='constant')
+                else:
+                    features = features[:desired_length]
+                
+                # Reshape and run prediction
+                features = features.reshape(1, desired_length, 120)
                 _ = self.model.predict(features, verbose=0)
-                print(f"Wake word detector warmed up - expecting stereo input shape: (2, samples)")
                 
         except Exception as e:
             print(f"Warmup warning: {e}")
             # Continue even if warmup fails
 
     def extract_features(self, audio, sample_rate):
-        """Extract MFCC features from stereo audio (one set per channel)"""
         try:
-            # Handle stereo audio - process each channel separately
-            if audio.ndim == 1:
-                audio = np.array([audio, audio])  # Duplicate mono to stereo
+            # Convert stereo to mono if needed (matches preprocessing)
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=0)  # Average channels for mono
             
-            all_channel_features = []
+            mfcc = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=self.n_mfcc, n_fft=self.n_fft, hop_length=self.hop_length)
+            mfcc_delta = librosa.feature.delta(mfcc)
+            mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
+            features = np.concatenate((mfcc, mfcc_delta, mfcc_delta2), axis=0)
+            features = features.T  # Transpose to (time_steps, features)
             
-            for channel_idx in range(audio.shape[0]):
-                channel_audio = audio[channel_idx]
-                
-                # Normalize audio first (MUST match training)
-                channel_audio = channel_audio / (np.max(np.abs(channel_audio)) + 1e-8)
-                
-                # Extract MFCC features
-                mfcc = librosa.feature.mfcc(y=channel_audio, sr=sample_rate, n_mfcc=self.n_mfcc, 
-                                           hop_length=self.hop_length, n_fft=self.n_fft)
-                
-                # Add delta features (first and second derivatives)
-                delta_mfcc = librosa.feature.delta(mfcc)
-                delta2_mfcc = librosa.feature.delta(mfcc, order=2)
-                
-                # Combine features for this channel
-                channel_features = np.vstack([mfcc, delta_mfcc, delta2_mfcc])  # Shape: (120, time)
-                
-                # Pad or truncate to desired length
-                if channel_features.shape[1] < self.desired_length:
-                    pad_width = self.desired_length - channel_features.shape[1]
-                    channel_features = np.pad(channel_features, ((0,0),(0,pad_width)), mode='constant')
-                else:
-                    channel_features = channel_features[:, :self.desired_length]
-                
-                all_channel_features.append(channel_features.T)  # Shape: (desired_length, 120)
+            # Normalize features using StandardScaler (MUST match training preprocessing)
+            scaler = StandardScaler()
+            flat_features = features.flatten()
+            normalized_flat = scaler.fit_transform(flat_features.reshape(-1, 1)).flatten()
+            features = normalized_flat.reshape(features.shape)
             
-            # Stack both channels and flatten for model input
-            # Shape (desired_length, 120, 2) -> flatten to (desired_length, 240)
-            stereo_features = np.stack(all_channel_features, axis=2)  # (desired_length, 120, 2)
-            stereo_features = stereo_features.reshape(self.desired_length, self.feature_dim * self.channels)
-            
-            return stereo_features
+            return features
         except Exception as e:
             print(f"Error extracting features: {e}")
             return None
 
-    def detect_wakeword(self, audio_window, sample_rate, energy_threshold=0.0005, confidence_threshold=None):
+    def detect_wakeword(self, audio_window, sample_rate, energy_threshold=0.00005, confidence_threshold=None):
         """Return True if wake word is detected in the given audio window."""
         # Use optimal threshold from training if not specified
         if confidence_threshold is None:
@@ -98,16 +82,15 @@ class WakeWordDetector:
         energy = np.sqrt(np.mean(audio_window ** 2))
         if energy < energy_threshold:
             return False, energy, None
-            
         features = self.extract_features(audio_window, sample_rate)
-        
         if features is None:
             return False, energy, None
-            
-        # Reshape for model: (1, time_steps, features*channels)
-        features = features.reshape(1, self.desired_length, self.feature_dim * self.channels)
+        if features.shape[0] < self.desired_length:
+            features = np.pad(features, ((0, self.desired_length - features.shape[0]), (0, 0)), mode='constant')
+        else:
+            features = features[:self.desired_length]
+        features = features.reshape(1, self.desired_length, self.feature_dim)
         prediction = self.model.predict(features, verbose=0)[0][0]
-        
         return prediction > confidence_threshold, energy, prediction
         
   

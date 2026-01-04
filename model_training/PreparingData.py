@@ -6,13 +6,14 @@ import numpy as np
 
 
 SAMPLE_RATE = 22050  # 22.05 kHz
-RECORD_SECONDS = 2
+RECORD_SECONDS = 1
 DIGITAL_GAIN = 5.0  # Amplify recorded audio (1.0 = no gain, 5.0 = 5x louder)
 SAVE_DIR = os.path.join(os.path.dirname(__file__), "audio_data")  # Always save in model_training/audio
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
 def apply_digital_gain(audio, gain=DIGITAL_GAIN):
+    
     """
     Apply digital gain to audio data.
     
@@ -52,7 +53,7 @@ def record_audio_and_save(save_path, n_times=50):
     """
 
     input("To start recording Wake Word press Enter: ")
-    for i in range(256, n_times):
+    for i in range(205, n_times):
         myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
         sd.wait()
         
@@ -63,7 +64,7 @@ def record_audio_and_save(save_path, n_times=50):
         write(os.path.join(save_path, filename), SAMPLE_RATE, myrecording)
         input(f"Press to record next or two stop press ctrl + C ({i + 1}/{n_times}): ")
 
-def record_background_sound(save_path, n_times=1000):
+def record_background_sound(save_path, n_times=2500):
     """
     This function will run automatically `n_times` and record your background sounds so you can make some
     keybaord typing sound and saying something gibberish.
@@ -80,7 +81,7 @@ def record_background_sound(save_path, n_times=1000):
     """
 
     input("To start recording your background sounds press Enter: ")
-    for i in range(400, n_times):
+    for i in range(2000, n_times):
         myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
         sd.wait()
         write(os.path.join(save_path, str(i) + ".wav"), SAMPLE_RATE, myrecording)
@@ -88,7 +89,8 @@ def record_background_sound(save_path, n_times=1000):
 
 # Step 1: Record yourself saying the Wake Word
 # print("Recording the Wake Word:\n")
-record_background_sound(SAVE_DIR, n_times=1100) 
+record_audio_and_save(SAVE_DIR, n_times=2500) 
+
 # Step 2: Record your background sounds (Just let it run, it will auto
 # matically record)
 # print("Recording the Background sounds:\n")
