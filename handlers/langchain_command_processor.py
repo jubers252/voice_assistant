@@ -862,7 +862,7 @@ class LangChainAgentProcessor:
                 print("Now listening for follow-up response...")
                 
                 # Create recognizer with better microphone handling
-                recognizer = SpeechRecognizer(self.audio_processors)
+                recognizer = SpeechRecognizer(self.audio_processors, use_whisper=True)
 
                 self.audio_processors.play_beep_sound()
                 time.sleep(0.2)
