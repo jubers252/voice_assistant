@@ -39,8 +39,7 @@ class AIResponseHandler:
             response = client.chat.completions.create(
                 model="gpt-4.1",
                 messages=messages_to_send,
-                max_tokens=150,
-                temperature=0.7
+                max_tokens=150
             )
             reply = response.choices[0].message.content.strip()
             

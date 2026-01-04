@@ -213,7 +213,6 @@ class LangChainOllamaAgent:
             llm = Ollama(
                 model=self.model_name,
                 base_url=self.ollama_base_url,
-                temperature=0.3,  # Lower temperature for faster, more focused responses
                 num_predict=256,  # Limit response length for speed
                 num_ctx=2048,     # Smaller context window for faster processing
                 top_k=20,         # Reduce sampling space

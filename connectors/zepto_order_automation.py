@@ -735,7 +735,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             await self.page.wait_for_timeout(2000)
             if isinstance(product_index, int):
                 logger.info(f"Using product index: {product_index}")    
-                product_index = product_index -1
+                # product_index = product_index 
             # Get all product anchors
             anchors = await self.page.query_selector_all("a[href*='/pn/']")
             logger.info(f"Found {len(anchors)} product anchors")

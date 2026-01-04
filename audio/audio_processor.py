@@ -48,6 +48,28 @@ def suppress_alsa_errors():
 
 CONVERSATION_FILE = "conversation_history.json"
 
+def clean_text_for_speech(text: str) -> str:
+    """
+    Clean text before passing to speech synthesis.
+    Removes special characters that may interfere with TTS.
+    
+    Args:
+        text: Text to clean
+        
+    Returns:
+        Cleaned text with special characters removed
+    """
+    # Remove unwanted special characters: - * . ( ) ? > <
+    special_chars = ['-', '*', '.', '(', ')', '?', '>', '<']
+    cleaned_text = text
+    for char in special_chars:
+        cleaned_text = cleaned_text.replace(char, '')
+    
+    # Clean up extra spaces that may have been created
+    cleaned_text = ' '.join(cleaned_text.split())
+    
+    return cleaned_text
+
 # Wake word detection parameters (matching training)
 n_mfcc = 40
 n_fft = 2048
@@ -202,6 +224,9 @@ class AudioProcessors:
         """
         Threaded TTS function with interruption support and improved Hindi handling
         """
+        # Clean text before processing
+        text = clean_text_for_speech(text)
+        
         # Stop any current speech first
         if self.is_speaking:
             self.stop_speech()

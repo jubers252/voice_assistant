@@ -73,8 +73,7 @@ User: {user_message}"""
             response = client.chat.completions.create(
                 model="gpt-4.1",
                 messages=[{"role": "system", "content": tool_prompt}],
-                max_tokens=50,  # Much smaller - just need JSON
-                temperature=0.0
+                max_tokens=50  # Much smaller - just need JSON
             )
             reply = response.choices[0].message.content.strip()
             try:

@@ -129,7 +129,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -846,6 +846,10 @@ class LangChainAgentProcessor:
         """Tool for the AI to ask follow-up questions and continue listening"""
         def ask_follow_up_function(question: str) -> str:
             try:
+                # Set LED to speaking state
+                if self.pixel_led:
+                    self.pixel_led.set_speaking()
+                
                 # Speak the follow-up question (LED controlled in audio_processor)
                 self.audio_processors.speak(question)
                 
@@ -857,18 +861,22 @@ class LangChainAgentProcessor:
                 print("Speech completed, ready for follow-up...")
                 time.sleep(0.5)  # Longer buffer to ensure TTS cleanup
                 
+                # Set LED to listening state
+                if self.pixel_led:
+                    self.pixel_led.set_listening()
+                
                 # Now listen for follow-up response
                 print(f"AI asked: {question}")
                 print("Now listening for follow-up response...")
                 
                 # Create recognizer with better microphone handling
-                recognizer = SpeechRecognizer(self.audio_processors, use_whisper=True)
+                recognizer = SpeechRecognizer(self.audio_processors)
 
                 self.audio_processors.play_beep_sound()
                 time.sleep(0.2)
                 
                 # Listen with longer timeout for follow-up
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=1)
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=3)
                 
                 if follow_up_command:
                     print(f"Received follow-up response: '{follow_up_command}'")
@@ -881,126 +889,11 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="ask_follow_up_question",
-            description="Ask clarifying questions when needed: volume direction, device selection, product/quantity choice, confirmation, payment method, time setup. Use for any ambiguous user input. Format: natural question text.",
+            description="MANDATORY tool when you need to ask ANY question or need clarification from user. If your response would have a question mark '?', you MUST use this tool instead of responding with text. This tool speaks your question and waits for user's voice response. Input: your question text. NEVER ask questions in your text response - ALWAYS use this tool for questions.",
             func=ask_follow_up_function
         )
     
-    def _create_bigbasket_tool(self) -> Tool:
-        """BigBasket shopping tool: add products, clear cart, checkout, place order"""
-        def bigbasket_function(input_str: str) -> str:
-            try:
-                # Parse input - handle formats: "action", "action|product", "action|product|quantity"
-                parts = input_str.split("|")
-                action = parts[0].lower().strip()
-                product = parts[1].strip() if len(parts) > 1 else ""
-                quantity = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
-                
-                if action == "login":
-                    result = self.big_basket_connector.login_to_bigbasket()
-                    return f"BigBasket login: {result}"
-                elif action == "search":
-                    if not product:
-                        return "Please specify a product to search."
-                    result = self.big_basket_connector.search_product_info(product)
-                    return f"BigBasket search results: {result}"
-                elif action == "clear_cart":
-                    result = self.big_basket_connector.clear_cart()
-                    return f"BigBasket clear cart: {result}"
-                elif action == "add_product":
-                    if not product:
-                        return "Please specify a product to add."
-                    result = self.big_basket_connector.add_product_to_cart(product, quantity)
-                    
-                    # Handle different result statuses
-                    if result.get('status') == 'success':
-                        msg = f"Added {quantity} x {product} to cart"
-                        
-                        # Use actual cart item details if available
-                        if result.get('added_item'):
-                            item = result['added_item']
-                            msg = f"Added {item['quantity']} x {item['name']}"
-                            if item.get('price'):
-                                msg += f" at {item['price']}"
-                        
-                        return msg + "."
-                    elif result.get('status') == 'out_of_stock':
-                        msg = result.get('message', f"{product} is out of stock")
-                        alternatives = result.get('alternatives', [])
-                        if alternatives:
-                            alt_list = "\n".join([f"{i+1}. {alt.get('name', alt)}" for i, alt in enumerate(alternatives[:5])])
-                            return f"{msg}\n\nAvailable alternatives:\n{alt_list}\n\nWould you like to add any of these alternatives instead?"
-                        return f"{msg}. No alternatives found."
-                    elif result.get('status') == 'alternatives':
-                        msg = result.get('message', 'Product not found')
-                        alternatives = result.get('alternatives', [])
-                        if alternatives:
-                            alt_list = "\n".join([f"{i+1}. {alt.get('name', alt)}" for i, alt in enumerate(alternatives[:5])])
-                            return f"{msg}\n\nDid you mean:\n{alt_list}\n\nPlease confirm which product you want."
-                        return f"{msg}"
-                    else:
-                        error = result.get('error', 'Unknown error')
-                        return f"Failed to add {product}: {error}"
-                elif action == "add_multiple":
-                    if not product:
-                        return "Please specify products to add in format: product1:qty1,product2:qty2"
-                    result = self.big_basket_connector.add_multiple_products(product)
-                    
-                    # Format response for multiple products
-                    if result.get('status') in ['success', 'partial', 'failed']:
-                        summary = result.get('summary', {})
-                        results_list = result.get('results', [])
-                        
-                        # Build summary message
-                        msg = f"Added {summary.get('successful', 0)} out of {summary.get('total_products', 0)} products.\n\n"
-                        
-                        # List successes
-                        successes = [r for r in results_list if r['status'] == 'added']
-                        if successes:
-                            msg += "✓ Successfully added:\n"
-                            for r in successes:
-                                msg += f"  - {r['product']} (qty: {r['quantity']})\n"
-                        
-                        # List out-of-stock items
-                        out_of_stock = [r for r in results_list if r['status'] == 'out_of_stock']
-                        if out_of_stock:
-                            msg += "\n⚠ Out of stock:\n"
-                            for r in out_of_stock:
-                                msg += f"  - {r['product']}\n"
-                                if r.get('alternatives'):
-                                    msg += f"    Alternatives available: {len(r['alternatives'])} options\n"
-                        
-                        # List failures
-                        failures = [r for r in results_list if r['status'] not in ['added', 'out_of_stock']]
-                        if failures:
-                            msg += "\n✗ Could not add:\n"
-                            for r in failures:
-                                msg += f"  - {r['product']}: {r.get('message', 'Not found')}\n"
-                        
-                        # Ask for confirmation if there are out-of-stock items
-                        if out_of_stock:
-                            msg += "\nWould you like to see alternatives for out-of-stock items?"
-                        
-                        return msg
-                    else:
-                        return f"BigBasket add multiple error: {result.get('error', 'Unknown error')}"
-                elif action == "checkout":
-                    result = self.big_basket_connector.proceed_to_checkout()
-                    return f"BigBasket checkout: {result}"
-                elif action == "place_order":
-                    result = self.big_basket_connector.place_order_cod()
-                    return f"BigBasket place order: {result}"
-                elif action == "close_browser":
-                    self.big_basket_connector.close_browser()
-                    return f"BigBasket browser session closed."
-                else:
-                    return "Supported actions: login, search, clear_cart, add_product, add_multiple, checkout, place_order, close_browser"
-            except Exception as e:
-                return f"BigBasket tool error: {str(e)}"
-        return Tool(
-            name="bigbasket_tool",
-            description="BigBasket grocery shopping. When user wants to ORDER/BUY groceries: 1) login 2) clear_cart 3) add_product/add_multiple 4) ask confirmation using ask_follow_up_question 5) checkout 6) place_order 7) close_browser. Format: 'action|product|quantity' for add_product, 'add_multiple|product1:qty1,product2:qty2' for multiple items, or just 'action' for login/checkout/place_order. ALWAYS ask user confirmation before checkout using ask_follow_up_question tool.",
-            func=bigbasket_function
-        )
+
 
     def _setup_langchain_agent(self):
         """Setup the LangChain agent with tools and memory"""
@@ -1029,7 +922,6 @@ class LangChainAgentProcessor:
             self._create_telegram_video_tool(),
             self._create_volume_control_tool(),
             self._create_follow_up_question_tool(),
-            self._create_bigbasket_tool(),
             self._zepto_ordering_tool()
         ]
         
@@ -1056,8 +948,12 @@ class LangChainAgentProcessor:
 
 **RULES:**
 - Keep responses SHORT and conversational
-- Use ask_follow_up_question tool when clarification needed
-- No special characters, simple spoken language
+- ALWAYS use ask_follow_up_question tool when you need clarification or additional user input
+- If user input is ambiguous, incomplete, or you need confirmation, MUST use ask_follow_up_question tool
+- NEVER ask questions directly in your response text (no "?" in text responses)
+- Always think step-by-step for complex tasks
+- Use simple, natural language suitable for voice output
+- No special characters, markdown, or formatting
 
 **SPOTIFY PLAYBACK CONTROL - MUST USE TOOL:**
 When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
@@ -1076,6 +972,8 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
 - SPOTIFY PLAY: play specific track/album/artist (use play_spotify_track/album/artist tools)
 - TELEGRAM: send message, photo, document, video
 - ZEPTO: login, search, add_product, checkout, place_order
+- AMAZON PRODUCTS: Use search_amazon_single_product for specific product details (price, rating, link). Use search_amazon_multiple_products to compare options. Always summarize key info: name, price, rating, link for user. For ambiguous queries, use ask_follow_up_question to clarify what product user wants.
+- AMAZON ORDERS: Use track_amazon_orders to show recent purchases. Example: "show orders from last 7 days" or "what did I order". Provide order summaries with dates and details.
 - REMINDERS: set, list, cancel, check
 
 **QUESTION RULE:**
@@ -1083,17 +981,18 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
 - If you need to ask anything, always use ask_follow_up_question tool for clarification
 - Any response with "?" must use the tool instead
 
-**Zepto ORDERING (IMPORTANT):**
- For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
-        Zepto Shopping:
-        - Workflow: login -> clear_cart -> search|product_name -> add_product|product_name|quantity|index -> order_details -> checkout -> ask user confirmation -> place_order → cleanup
-        - For 'search': pass action|product_name format
-        - explain search results to user and ask which product to add
-        - For 'add_product': pass action|product_name|quantity|product_index format (index from search results)
-        - checkout action automatically selects COD payment method
-        - ALWAYS get confirmation from user before calling 'place_order' using ask_follow_up_question tool
-        - After order placed, call cleanup to close browser
-        - Always clean the browser session after processing order or failed attempts to avoid multiple logins.
+**Zepto ORDERING (WITH UNIT CONVERSION):**
+Workflow: login → clear_cart → search|product_name → add_product|product_name|qty|index → order_details → checkout → place_order → cleanup
+CRITICAL - Handle unit conversions automatically:
+- User says "2 liters of 500ml milk" → Calculate: 2000ml ÷ 500ml = 4 units → Call add_product with quantity=4
+- User says "1kg of 250g sugar" → Calculate: 1000g ÷ 250g = 4 units → Call add_product with quantity=4
+- User says "3 units" → Just use quantity=3 as-is
+Key actions:
+- Always clear cart before new order
+- Search: show results (name, size, price) and ask which one via ask_follow_up_question
+- Add: calculate qty from units if needed, add to cart
+- Always confirm before place_order using ask_follow_up_question
+- Close the browser after order completes or cancelled
 
 **WEB SEARCH FOR LATEST UPDATES (MANDATORY):**
 - ALWAYS use search_web tool when user asks for: latest news, current prices, today's information, recent updates, live info, what's trending, current status
@@ -1124,7 +1023,7 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
             agent=agent,
             tools=self.tools,
             memory=memory,
-            verbose=False,  # Disabled to prevent double response output
+            verbose=True,  # Disabled to prevent double response output
             handle_parsing_errors=True,
             max_iterations=25  # Increased for complex workflows like BigBasket ordering
             # Removed early_stopping_method as it's deprecated in newer versions
