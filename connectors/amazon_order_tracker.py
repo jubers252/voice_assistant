@@ -1011,6 +1011,7 @@ def get_order(tool_request) -> List[Dict[str, Any]]:
         import traceback
         traceback.print_exc()
 if __name__ == "__main__":
-    tool_request = {"days": 60}  # Example input to
-    get_order(tool_request)
+    tool_request = {"days": 30}  # Example input to
+    result = get_order(tool_request)
+    print(result)
     pass

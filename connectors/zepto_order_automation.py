@@ -820,6 +820,12 @@ class ZeptoScraper(ZeptoLoginAsync):
         logger.info("Navigating to cart")
         
         try:
+            # Check if already on cart page
+            current_url = self.page.url
+            if 'cart=open' in current_url or '/cart' in current_url or '/checkout' in current_url:
+                logger.info(f"Already on cart page: {current_url}")
+                return True
+            
             # Wait for page to be ready
             await self.page.wait_for_load_state('domcontentloaded')
             await self.page.wait_for_timeout(2000)
@@ -1163,7 +1169,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             logger.error(f"Failed to extract order details: {e}")
             return {}
 
-    async def clear_cart(self, ):
+    async def clear_cart(self ):
         """Clear all items from cart."""
         logger.info("Clearing cart")
         try:
@@ -1171,6 +1177,16 @@ class ZeptoScraper(ZeptoLoginAsync):
             if not await self.goto_cart():
                 logger.error("Failed to navigate to cart")
                 return False
+            
+            # Verify we're on cart page
+            current_url = self.page.url
+            if 'cart=open' not in current_url and '/cart' not in current_url and '/checkout' not in current_url:
+                logger.warning(f"Not on cart page, current URL: {current_url}. Retrying...")
+                await self.page.wait_for_timeout(2000)
+                if not await self.goto_cart():
+                    logger.error("Failed to navigate to cart on retry")
+                    return False
+            
             is_high_demand = await self.check_high_demand_flag()
             if is_high_demand:
                 logger.warning("High demand - try again later")

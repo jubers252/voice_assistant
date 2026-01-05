@@ -44,22 +44,6 @@ import asyncio
 load_dotenv()
 
 
-# Comprehensive Roman to Devanagari mapping
-ROMAN_TO_DEVANAGARI_COMPREHENSIVE = {
-    # Common words
-    'aur': 'और', 'hai': 'है', 'band': 'बंद', 'on': 'ऑन', 'off': 'ऑफ',
-    'light': 'लाइट', 'fan': 'फैन', 'zero': 'ज़ीरो', 'device': 'डिवाइस',
-    'kiya': 'किया', 'kar': 'कर', 'diya': 'दिया', 'hain': 'हैं', 'ho': 'हो',
-    'abhi': 'अभी', 'ab': 'अब', 'karo': 'करो', 'turn': 'टर्न', 'on': 'ऑन',
-    # Common verbs and adjectives
-    'chalau': 'चलाऊ', 'band': 'बंद', 'khola': 'खोला', 'bandh': 'बंध',
-    # Articles and prepositions
-    'mein': 'में', 'ko': 'को', 'se': 'से', 'par': 'पर', 'tak': 'तक',
-    # Verb forms
-    'kar': 'कर', 'dena': 'देना', 'lena': 'लेना', 'jana': 'जाना',
-}
-
-
 def detect_language(text: str) -> str:
     """Detect if text is in Hindi or English"""
     # Count Devanagari characters
@@ -70,32 +54,6 @@ def detect_language(text: str) -> str:
     if devanagari_count > english_count * 0.5:
         return 'hindi'
     return 'english'
-
-
-def is_roman_hindi(text: str) -> bool:
-    """Check if text contains Roman transliterated Hindi"""
-    # Check for common Roman Hindi patterns
-    roman_patterns = [
-        r'\b(aur|hai|band|light|fan|zero|device|kiya|kar|diya|hain|ho|abhi)\b',
-        r'\b(mein|ko|se|par|tak|dena|lena|jana)\b',
-    ]
-    text_lower = text.lower()
-    for pattern in roman_patterns:
-        if re.search(pattern, text_lower):
-            return True
-    return False
-
-
-def convert_roman_to_devanagari_smart(text: str) -> str:
-    """Smart conversion from Roman to Devanagari"""
-    # First, do direct word replacements
-    result = text
-    for roman, devanagari in ROMAN_TO_DEVANAGARI_COMPREHENSIVE.items():
-        # Case-insensitive replacement with word boundaries
-        result = re.sub(r'\b' + roman + r'\b', devanagari, result, flags=re.IGNORECASE)
-    
-    return result
-
 
 
 class LangChainAgentProcessor:
@@ -129,7 +87,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -531,7 +489,7 @@ class LangChainAgentProcessor:
                 result = get_order(tool_request)
                 
                 if isinstance(result, list) and result:
-                    return f"Found {len(result)} orders from last {days} days: {str(result)[:400]}..."
+                    return f"Found {len(result)} orders from last {days} days: {str(result)}..."
                 elif isinstance(result, list):
                     return f"No orders found from the last {days} days."
                 else:
@@ -782,11 +740,64 @@ class LangChainAgentProcessor:
         """Zepto grocery ordering tool (placeholder)"""
         def zepto_function(input_str: str) -> str:
             try:
+                # Parse from RIGHT to handle product names with pipes
+                # Format: action|product_name|quantity|product_index
+                # Example: add_product|Maccain French Fires | Crispy $ ready to cook|2|4
+                
                 parts = input_str.split("|")
+              
                 action = parts[0].lower().strip()
-                product = parts[1].strip() if len(parts) > 1 else ""
-                quantity = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
-                product_index = int(parts[3].strip()) if len(parts) > 3 and parts[3].strip().isdigit() else 0
+
+                quantity = 1
+                product_index = 0
+                product = ""
+                
+                if len(parts) >= 4:
+                    # Last part is product_index
+                    last_part = parts[-1].strip()
+                    if last_part.isdigit():
+                        product_index = int(last_part)
+                        print(f"[ZEPTO DEBUG] Product index from last part: {product_index}")
+                    else:
+                        print(f"[ZEPTO DEBUG] Warning: Last part '{last_part}' is not numeric, using default 0")
+                    
+                    # Second to last is quantity
+                    second_last = parts[-2].strip()
+                    if second_last.isdigit():
+                        quantity = int(second_last)
+                        print(f"[ZEPTO DEBUG] Quantity from 2nd-last part: {quantity}")
+                    else:
+                        print(f"[ZEPTO DEBUG] Warning: 2nd-last part '{second_last}' is not numeric, using default 1")
+                    
+                    # Everything in between is product name (can contain pipes)
+                    product = "|".join(parts[1:-2]).strip()
+                    print(f"[ZEPTO DEBUG] Product name from middle parts: '{product}'")
+                    
+                elif len(parts) >= 3:
+                    # Could be: action|product|quantity
+                    last_part = parts[-1].strip()
+                    if last_part.isdigit():
+                        quantity = int(last_part)
+                        print(f"[ZEPTO DEBUG] Quantity: {quantity}")
+                    else:
+                        print(f"[ZEPTO DEBUG] Warning: Last part not numeric: '{last_part}'")
+                    
+                    product = "|".join(parts[1:-1]).strip()
+                    print(f"[ZEPTO DEBUG] Product name: '{product}'")
+                    
+                elif len(parts) >= 2:
+                    product = parts[1].strip()
+                    print(f"[ZEPTO DEBUG] Product name only: '{product}'")
+                
+                # Validate for add_product action
+                if action == "add_product":
+                    if not product:
+                        return "Error: Product name is empty. Format: add_product|product_name|quantity|index"
+                    if quantity < 1:
+                        return f"Error: Invalid quantity {quantity}. Must be >= 1"
+                    if product_index < 0:
+                        return f"Error: Invalid product index {product_index}. Must be >= 0"
+                    print(f"[ZEPTO DEBUG] Validation passed. Product='{product}', Qty={quantity}, Index={product_index}")
                 
                 if action == "login":
                     self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
@@ -807,6 +818,7 @@ class LangChainAgentProcessor:
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
                         print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    print(f"[ZEPTO DEBUG] Calling add_product_to_cart with: product='{product}', quantity={quantity}, index={product_index}")
                     result = self._run_in_zepto_loop(self.zepto_scraper.add_product_to_cart(product, quantity, product_index))
                     return f"Zepto add product result: {result}"
                 elif action == "order_details":
@@ -833,6 +845,7 @@ class LangChainAgentProcessor:
                 else:
                     return f"Unknown action: {action}. Supported: login, search, add_product, order_details, checkout, place_order, cleanup"
             except Exception as e:
+                print(f"[ZEPTO ERROR] {str(e)}")
                 return f"Zepto tool error: {str(e)}"
         
         return Tool(
@@ -882,6 +895,7 @@ class LangChainAgentProcessor:
                     print(f"Received follow-up response: '{follow_up_command}'")
                     return f"User responded: {follow_up_command}"
                 else:
+                    
                     return "No follow-up response received"
                     
             except Exception as e:
@@ -941,100 +955,30 @@ class LangChainAgentProcessor:
         )
         
         # Create system prompt
-        system_prompt = """ You are Sofi, a female voice assistant based in Pune, India.
+        system_prompt = """You are Sofi, female voice assistant in Pune, India.
 
-LANGUAGE RULES
-- Hindi input → respond only in हिंदी देवनागरी
-- English input → respond only in English
-- Never use Roman Hindi
+LANGUAGE: Hindi → हिंदी देवनागरी only. English → English only.
 
-RESPONSE STYLE
-- Keep responses short, natural, and conversational
-- Suitable for voice output
-- No special characters, markdown, emojis, or formatting
-- Use simple language
-- Think step by step internally for complex tasks
+VOICE OUTPUT: Short, natural, conversational. No markdown, emojis, special chars. Think internally for complex tasks.
 
-QUESTION HANDLING (STRICT)
-- Never ask questions directly in response text
-- Never include "?" in response text
-- If clarification, confirmation, or more input is required, ALWAYS use ask_follow_up_question tool
-- Any question must be asked only via the tool
+QUESTIONS: Use ask_follow_up_question tool ONLY. Never ask in response text. If ambiguous/incomplete → use tool.
 
-AMBIGUITY RULE
-- If user input is ambiguous, incomplete, or needs confirmation, MUST use ask_follow_up_question tool
+TOOLS:
+Spotify: control_spotify_playback (resume|pause|next), play_spotify_track, play_spotify_album, play_spotify_artist
+Home Automation: control device on/off
+Volume: increase, decrease, mute, set
+Web Search: news, weather, prices, live info (always for "latest", "current", "today", "now")
+Amazon: search_amazon_single_product, search_amazon_multiple_products (include: name, price, rating, link)
+Amazon Orders: track_amazon_orders (show date + details)
+Reminders: set, list, cancel, check
+Telegram: message, photo, document, video
+Zepto: login → clear_cart → search|product_name → add_product|product_name|quantity|product_index → order_details → checkout → place_order → cleanup. Always confirm before place_order. Ask via tool after search.
+ZEPTO ADD_PRODUCT FORMAT: Use format 'add_product|product_name|quantity|product_index'. Example: 'add_product|McCain French Fries Crispy $ ready to cook|2|4'. The product_name comes from search results and can contain pipes. quantity is the amount to add. product_index is the position in search results (0-based).
+PAYMENT PAGE: Once on payment page, NO back button exists. If user cancels/changes mind, tell them: "Cannot go back from payment. Need to close current order and start fresh. Would you like to proceed or cancel?"
 
-SPOTIFY PLAYBACK CONTROL (MANDATORY TOOL USE)
-When user intent matches:
-play, resume → resume  
-pause, stop → pause  
-next, skip → next  
+TIME-SENSITIVE: Use search_web tool for current info. Never answer from internal knowledge.
 
-Always call control_spotify_playback tool with:
-pause | resume | next | skip
-
-SPOTIFY CONTENT PLAY
-- Play specific track → play_spotify_track
-- Play album → play_spotify_album
-- Play artist → play_spotify_artist
-
-KEY TOOLS AND DOMAINS
-- Home Automation: control|device:true/false
-- Volume: increase, decrease, mute, set
-- Web Search: news, weather, prices, live info
-- Spotify: playback control and content play
-- Telegram: send message, photo, document, video
-- Reminders: set, list, cancel, check
-- Amazon Products:
-  - search_amazon_single_product for one item
-  - search_amazon_multiple_products for comparison
-  - Always summarize: name, price, rating, link
-  - If product is unclear, use ask_follow_up_question
-- Amazon Orders:
-  - Use track_amazon_orders
-  - Show summaries with date and details
-- Zepto: login, search, add_product, checkout, place_order
-
-ZEPTO ORDERING WORKFLOW (STRICT)
-login  
-clear_cart  
-search|product_name  
-add_product|product_name|quantity|index  
-order_details  
-checkout  
-place_order  
-cleanup  
-
-ZEPTO UNIT CONVERSION (AUTOMATIC)
-- Convert total requested quantity into item units
-Examples:
-- 2 liters of 500ml milk → 4 units
-- 1kg of 250g sugar → 4 units
-- If user says units directly, use as-is
-
-ZEPTO RULES
-- Always clear cart before a new order
-- After search, show options and ask selection via ask_follow_up_question
-- Always confirm before place_order using ask_follow_up_question
-- Close browser after order completes or is cancelled
-
-WEB SEARCH (MANDATORY FOR CURRENT INFO)
-Always use search_web tool for:
-- latest, current, today, now, live, trending, right now
-- prices, news, weather, status updates
-
-Never answer time-sensitive queries from internal knowledge.
-
-Search format:
-Only the query string
-Examples:
-- current weather in Pune
-- latest Bitcoin price
-- today news India
-
-CAPABILITIES
-Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation
-"""
+CAPABILITIES: Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation."""
         # Create prompt template
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
@@ -1088,14 +1032,6 @@ Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zep
                 result = self.agent_executor.invoke({"input": user_command})
                 response = result["output"]
                 print(response)
-                
-                # Detect input language
-                input_lang = detect_language(user_command)
-                
-                # Fix Roman Hindi to Devanagari if input was Hindi and output is Roman
-                if input_lang == 'hindi' and is_roman_hindi(response):
-                    response = convert_roman_to_devanagari_smart(response)
-                    print(f"Converted to Devanagari: {response}")
                 
                 # Add to conversation history
                 self.conversation_history.append({"role": "user", "content": user_command})
