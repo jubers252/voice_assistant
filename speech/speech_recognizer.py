@@ -211,7 +211,7 @@ class SpeechRecognizer:
                                 self._print_attempt(attempt + 1, is_follow_up)
                             continue
 
-                if not audio or len(audio.frame_data) < 200:
+                if not audio or len(audio.frame_data) < 100:
                     print("[ASSISTANT] Audio too short, retrying...")
                     if attempt < max_retries:
                         self._print_attempt(attempt + 1, is_follow_up)
