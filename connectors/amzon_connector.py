@@ -263,16 +263,23 @@ def extract_bank_offers_from_soup(soup: BeautifulSoup) -> Optional[list]:
 
 
 def fetch_product_info_from_page(first_item: Dict[str, Any], oxylabs_result: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """Fetch the product page (from URL or ASIN) and extract common product fields."""
+    """Fetch the product page (from URL or ASIN) and extract common product fields.
+    Falls back to Oxylabs raw data when page scraping fails."""
     identifier = first_item.get('url') or first_item.get('asin')
     if not identifier:
         return None
     product_url = identifier if isinstance(identifier, str) and identifier.startswith('http') else f"https://www.amazon.in/dp/{identifier}"
 
+    # Get raw data from first_item for fallback
+    raw_data = first_item.get('raw', {})
+    
     soup = fetch_product_page(product_url)
+    
+    # If page fetch failed, use Oxylabs raw data
     if not soup:
-        return None
-
+        return _build_product_info_from_raw(first_item, raw_data, product_url)
+    
+    # Try to extract from page
     title = safe_select_text(soup, '#productTitle') or safe_select_text(soup, 'h1')
     # price heuristics
     price = None
@@ -299,19 +306,68 @@ def fetch_product_info_from_page(first_item: Dict[str, Any], oxylabs_result: Opt
     bullets = [b.get_text().strip() for b in soup.select('#feature-bullets ul li') if b.get_text().strip()]
     description = extract_description_from_soup(soup)
     bank_offers = extract_bank_offers_from_soup(soup)
-  
-    return {
-        'title': title,
+    
+    # Build result with fallbacks to raw data
+    result = {
+        'title': title or raw_data.get('title'),
         'asin': first_item.get('asin'),
         'url': product_url,
-        'price': price,
-        'image': image,
-        'rating': rating,
-        'reviews_count': reviews,
+        'price': price or _format_price_from_raw(raw_data),
+        'image': image or raw_data.get('url_image'),
+        'rating': rating or _get_rating_from_raw(raw_data),
+        'reviews_count': reviews or _get_reviews_from_raw(raw_data),
         'bullets': bullets,
-        'raw_first_item': first_item.get('raw'),
+        'raw_first_item': raw_data,
         'bank_offers': bank_offers,
+        'sales_volume': raw_data.get('sales_volume'),
     }
+    
+    return result
+
+
+def _build_product_info_from_raw(first_item: Dict[str, Any], raw_data: Dict[str, Any], product_url: str) -> Dict[str, Any]:
+    """Build product info entirely from Oxylabs raw data when page scraping fails."""
+    return {
+        'title': raw_data.get('title'),
+        'asin': first_item.get('asin'),
+        'url': product_url,
+        'price': _format_price_from_raw(raw_data),
+        'image': raw_data.get('url_image'),
+        'rating': _get_rating_from_raw(raw_data),
+        'reviews_count': _get_reviews_from_raw(raw_data),
+        'bullets': [],
+        'raw_first_item': raw_data,
+        'bank_offers': None,
+        'sales_volume': raw_data.get('sales_volume'),
+    }
+
+
+def _format_price_from_raw(raw_data: Dict[str, Any]) -> Optional[str]:
+    """Extract and format price from raw Oxylabs data."""
+    if not raw_data:
+        return None
+    price = raw_data.get('price')
+    currency = raw_data.get('currency', 'INR')
+    if price:
+        if currency == 'INR':
+            return f"₹{price}"
+        return f"{currency} {price}"
+    return None
+
+
+def _get_rating_from_raw(raw_data: Dict[str, Any]) -> Optional[str]:
+    """Extract rating from raw Oxylabs data."""
+    if not raw_data:
+        return None
+    rating = raw_data.get('rating')
+    return str(rating) if rating else None
+
+
+def _get_reviews_from_raw(raw_data: Dict[str, Any]) -> Optional[str]:
+    """Extract review count from raw Oxylabs data."""
+    if not raw_data:
+        return None
+    return raw_data.get('reviews_count')
 
 
 # --- Helpers: Oxylabs parsed descriptions fallback ---

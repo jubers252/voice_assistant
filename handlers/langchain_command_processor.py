@@ -400,35 +400,46 @@ class LangChainAgentProcessor:
         """Search Amazon for detailed information about a single product"""
         def single_product_function(query: str) -> str:
             try:
+                from conversation.ai_respons_handler import AIResponseHandler
+                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "single_product_search",
                     "query": query
                 }
                 result = get_amazon_result(tool_request)
+                
                 # Format the result nicely for the LLM
-                if isinstance(result, dict):
+                if isinstance(result, dict) and result.get('title'):
                     title = result.get('title', 'Unknown Product')
                     price = result.get('price', 'Price not available')
                     rating = result.get('rating', 'No rating')
+                    reviews = result.get('reviews_count', 'No reviews')
                     url = result.get('url', 'N/A')
-                    asin = result.get('asin', 'N/A')
+                    sales_volume = result.get('sales_volume')
                     
-                    # Include more details if available
-                    response = f"Product: {title}\n Price: {price}\n Rating: {rating}/5\n Link: {url}"
+                    # Build a comprehensive data string for TTS summarization
+                    product_data = f"""Product Name: {title}
+Price: {price}
+Rating: {rating} out of 5 stars
+Number of Reviews: {reviews}"""
                     
-                    # Add image if available
-                    if result.get('image'):
-                        response += f"\n Image: {result.get('image')}"
+                    if sales_volume:
+                        product_data += f"\nSales Volume: {sales_volume}"
                     
-                    # Add ASIN for reference
-                    if asin != 'N/A':
-                        response += f"\nASIN: {asin}"
+                    product_data += f"\nProduct Link: {url}"
                     
-                    return response
-                return f"Single product result: {str(result)[:800]}..."
+                    # Use AI handler to create a natural TTS-friendly summary
+                    ai_handler = AIResponseHandler(self.conversation_manager)
+                    tts_response = ai_handler.get_ai_response(product_data, is_tool_response=True)
+                    
+                    return tts_response
+                elif isinstance(result, dict):
+                    return "Sorry, I couldn't find detailed information about that product. Please try another search."
+                return f"Amazon search result: {str(result)[:500]}"
             except Exception as e:
-                return f"Amazon single product search error: {str(e)}"
+                print(f"Amazon single product tool error: {e}")
+                return f"Sorry, I encountered an error while searching Amazon. Please try again."
         
         return Tool(
             name="search_amazon_single_product",
@@ -440,6 +451,8 @@ class LangChainAgentProcessor:
         """Search Amazon for multiple products (comparison/browse)"""
         def multi_product_function(query: str) -> str:
             try:
+                from conversation.ai_respons_handler import AIResponseHandler
+                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "multi_product_search",
@@ -447,22 +460,32 @@ class LangChainAgentProcessor:
                     "max_results": 5
                 }
                 result = get_amazon_result(tool_request)
-                # Format multiple products nicely
-                if isinstance(result, list):
-                    formatted_results = []
+                
+                # Format multiple products nicely for TTS
+                if isinstance(result, list) and len(result) > 0:
+                    product_list = []
                     for i, product in enumerate(result[:3], 1):  # Limit to top 3 for readability
                         title = product.get('title', 'Unknown Product')
                         price = product.get('price', 'Price not available')
-                        url = product.get('url', 'N/A')
                         rating = product.get('rating', 'No rating')
+                        reviews = product.get('reviews_count', 'No reviews')
                         
-                        product_info = f"{i}.  {title}\n    {price}\n   {rating}/5\n   {url}"
-                        formatted_results.append(product_info)
+                        product_summary = f"Product {i}: {title}. Price: {price}. Rating: {rating} out of 5 stars with {reviews} reviews."
+                        product_list.append(product_summary)
                     
-                    return f"🛒 Amazon Search Results:\n\n" + "\n\n".join(formatted_results)
-                return f"Multiple products result: {str(result)[:800]}..."
+                    # Combine all products into one string for TTS summarization
+                    products_data = " ".join(product_list)
+                    
+                    # Use AI handler to create a natural TTS-friendly summary
+                    ai_handler = AIResponseHandler(self.conversation_manager)
+                    tts_response = ai_handler.get_ai_response(products_data, is_tool_response=True)
+                    
+                    return tts_response
+                else:
+                    return "Sorry, I couldn't find any products matching your search. Please try a different search term."
             except Exception as e:
-                return f"Amazon multi-product search error: {str(e)}"
+                print(f"Amazon multi-product tool error: {e}")
+                return f"Sorry, I encountered an error while searching Amazon. Please try again."
         
         return Tool(
             name="search_amazon_multiple_products",
@@ -832,7 +855,15 @@ class LangChainAgentProcessor:
                         print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     payment_result = self._run_in_zepto_loop(self.zepto_scraper.checkout())
-                    return f"Zepto payment result: {payment_result}"
+                    
+                    # Add confirmation prompt for COD payment
+                    if payment_result.get('cod_available'):
+                        methods_str = ', '.join(payment_result.get('payment_methods', ['Cash on Delivery']))
+                        return (f"Payment page is ready. Cash on Delivery (COD) has been selected. "
+                                f"Payment methods available: {methods_str}. "
+                                f"Do you want to confirm and proceed with Cash on Delivery payment?")
+                    else:
+                        return f"Zepto payment result: {payment_result}"
                 elif action == "place_order":
                     result = self._run_in_zepto_loop(self.zepto_scraper.click_proceed_final())
                     if result and result.get("status") == "clicked":
@@ -941,7 +972,7 @@ class LangChainAgentProcessor:
         
         # Initialize LLM
         llm = ChatOpenAI(
-            model="o4-mini",
+            model="gpt-4.1-mini",
             temperature=1,  # o4-mini supports temperature values between 0 and 1
             openai_api_key=os.getenv('OPENAI_API_KEY'),
             default_headers={"openai-cache-control": "no-cache"}
@@ -961,6 +992,14 @@ LANGUAGE: Hindi → हिंदी देवनागरी only. English → E
 
 VOICE OUTPUT: Short, natural, conversational. No markdown, emojis, special chars. Think internally for complex tasks.
 
+FOLLOW-UP QUESTIONS: Always ask relevant follow-up questions based on context. Examples:
+- After showing a product: "Would you like to check prices on other platforms or see customer reviews?"
+- After weather info: "Do you need travel recommendations for that weather?"
+- After playing music: "Want me to play a similar artist or create a playlist?"
+- After order tracking: "Need help with returns or tracking another order?"
+- After reminders: "Should I set another reminder for later?"
+Do NOT ask generic "do you need anything else" - ask specific, contextual follow-ups that extend conversation.
+
 QUESTIONS: Use ask_follow_up_question tool ONLY. Never ask in response text. If ambiguous/incomplete → use tool.
 
 TOOLS:
@@ -968,11 +1007,11 @@ Spotify: control_spotify_playback (resume|pause|next), play_spotify_track, play_
 Home Automation: control device on/off
 Volume: increase, decrease, mute, set
 Web Search: news, weather, prices, live info (always for "latest", "current", "today", "now")
-Amazon: search_amazon_single_product, search_amazon_multiple_products (include: name, price, rating, link)
-Amazon Orders: track_amazon_orders (show date + details)
+Amazon: search_amazon_single_product, search_amazon_multiple_products (include: name, price, rating, link) summerize in tts friendly way.
+Amazon Orders: track_amazon_orders (show date + details) summerize in tts friendly way.
 Reminders: set, list, cancel, check
 Telegram: message, photo, document, video
-Zepto: login → clear_cart → search|product_name → add_product|product_name|quantity|product_index → order_details → checkout → place_order → cleanup. Always confirm before place_order. Ask via tool after search.
+Zepto: login → clear_cart → search|product_name → add_product|product_name|quantity|product_index → order_details → checkout → place_order → cleanup. Always confirm before final order place with cod option. Ask via tool after search.
 ZEPTO ADD_PRODUCT FORMAT: Use format 'add_product|product_name|quantity|product_index'. Example: 'add_product|McCain French Fries Crispy $ ready to cook|2|4'. The product_name comes from search results and can contain pipes. quantity is the amount to add. product_index is the position in search results (0-based).
 PAYMENT PAGE: Once on payment page, NO back button exists. If user cancels/changes mind, tell them: "Cannot go back from payment. Need to close current order and start fresh. Would you like to proceed or cancel?"
 
