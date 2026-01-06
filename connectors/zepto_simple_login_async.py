@@ -296,22 +296,50 @@ class ZeptoLoginAsync:
                     continue
             
             # Wait for OTP input
-            logger.info("Waiting for OTP input (you need to enter OTP manually)")
+            logger.info("Waiting for OTP input fields...")
             
-            # Wait for either OTP input or successful login
+            # Wait for OTP input fields (6 separate boxes)
             try:
-                # Wait for OTP input to appear
-                await self.page.wait_for_selector("input[placeholder*='OTP'], input[placeholder*='code']", timeout=10000)
-                logger.info("OTP input detected - please enter OTP manually in the browser")
+                # Wait for the OTP container to appear
+                await self.page.wait_for_selector("div.fugkX", timeout=10000)
+                logger.info("OTP input fields detected")
                 
-                # Wait for login to complete (OTP verification)
-                await self.page.wait_for_function(
-                    "() => !document.body.textContent.includes('OTP') || !document.body.textContent.includes('verification')",
-                    timeout=60000  # 1 minute timeout for manual OTP entry
-                )
+                # Get all 6 OTP input fields
+                otp_inputs = await self.page.query_selector_all("div.fugkX input[inputmode='numeric']")
+                
+                if len(otp_inputs) == 6:
+                    # Prompt user to enter OTP in command line
+                    print("\n" + "="*50)
+                    otp_code = await asyncio.get_event_loop().run_in_executor(
+                        None, 
+                        lambda: input("Enter 6-digit OTP: ")
+                    )
+                    print("="*50 + "\n")
+                    
+                    # Remove any spaces or dashes
+                    otp_code = otp_code.replace(" ", "").replace("-", "").strip()
+                    
+                    if len(otp_code) != 6 or not otp_code.isdigit():
+                        logger.error("Invalid OTP format. Must be 6 digits")
+                        return False
+                    
+                    # Fill each digit into its respective input field
+                    for i, digit in enumerate(otp_code):
+                        await otp_inputs[i].click()
+                        await otp_inputs[i].fill(digit)
+                        await self.page.wait_for_timeout(100)
+                    
+                    logger.info("OTP entered successfully")
+                    
+                    # Wait for automatic verification (usually auto-submits)
+                    await self.page.wait_for_timeout(2000)
+                else:
+                    logger.error(f"Expected 6 OTP input fields, found {len(otp_inputs)}")
+                    return False
                 
             except Exception as e:
                 logger.warning(f"OTP handling failed: {e}")
+                return False
             
             # Check if login was successful
             await self.page.wait_for_timeout(3000)

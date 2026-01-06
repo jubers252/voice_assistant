@@ -87,7 +87,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -885,6 +885,131 @@ Number of Reviews: {reviews}"""
             func=zepto_function
         )
 
+    def _create_zepto_order_history_tool(self) -> Tool:
+        """Get recent Zepto order history"""
+        def order_history_function(max_orders: str = "3") -> str:
+            try:
+                # Parse max_orders
+                try:
+                    max_orders_int = int(max_orders.strip())
+                except:
+                    max_orders_int = 3
+                
+                # Ensure logged in
+                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                    print("Not logged in - logging in first.")
+                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                
+                # Get order history
+                orders = self._run_in_zepto_loop(
+                    self.zepto_scraper.get_order_history(max_orders=max_orders_int)
+                )
+                
+                if not orders:
+                    return "No orders found in your Zepto order history."
+                
+                # Format response
+                result = f"Found {len(orders)} recent orders:\n"
+                for order in orders:
+                    result += f"\n{order['order_number']}. {order['status']} - {order['amount']}"
+                    result += f"\n   Date: {order['date']}"
+                    result += f"\n   Items: {order['item_count']}"
+                    result += f"\n   Order ID: {order['order_id'][:16]}..."
+                
+                return result
+            except Exception as e:
+                return f"Failed to get order history: {str(e)}"
+        
+        return Tool(
+            name="zepto_order_history",
+            description="Get recent Zepto order history. Input: number of orders to fetch (default 3). Returns list of recent orders with status, date, amount, and item count.",
+            func=order_history_function
+        )
+    
+    def _create_zepto_order_again_tool(self) -> Tool:
+        """Reorder a previous Zepto order"""
+        def order_again_function(order_index: str = "0") -> str:
+            try:
+                # Parse order index
+                try:
+                    index = int(order_index.strip())
+                except:
+                    return "Invalid order index. Please provide a number (0 for most recent order)."
+                
+                # Ensure logged in
+                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                    print("Not logged in - logging in first.")
+                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                
+                # Reorder
+                success = self._run_in_zepto_loop(
+                    self.zepto_scraper.order_again(order_index=index)
+                )
+                
+                if success:
+                    return f"Successfully added order {index} to cart! Use order_details to see cart contents, then checkout to proceed."
+                else:
+                    return f"Failed to reorder. Please check if order index {index} exists using order_history first."
+            except Exception as e:
+                return f"Failed to reorder: {str(e)}"
+        
+        return Tool(
+            name="zepto_order_again",
+            description="Reorder a previous Zepto order. Input: order index (0 for most recent, 1 for second most recent, etc.). This adds all items from that order to your cart.",
+            func=order_again_function
+        )
+    
+    def _create_zepto_track_orders_tool(self) -> Tool:
+        """Track recent orders with optional detailed info"""
+        def track_orders_function(params: str = "3|none") -> str:
+            try:
+                # Parse params: "max_orders|detail_index" or just "max_orders"
+                parts = params.split('|')
+                max_orders = int(parts[0].strip()) if parts[0].strip().isdigit() else 3
+                detail_index = int(parts[1].strip()) if len(parts) > 1 and parts[1].strip().isdigit() else None
+                
+                # Ensure logged in
+                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
+                    print("Not logged in - logging in first.")
+                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                
+                # Track orders
+                result = self._run_in_zepto_loop(
+                    self.zepto_scraper.track_recent_orders(
+                        max_orders=max_orders,
+                        get_details_for_index=detail_index
+                    )
+                )
+                
+                if result['total_orders'] == 0:
+                    return "No orders found."
+                
+                # Format response
+                response = f"Found {result['total_orders']} orders:\n"
+                for order in result['orders']:
+                    response += f"\n[{order['order_number']-1}] {order['status']} - {order['amount']}"
+                    response += f"\n    {order['date']} | {order['item_count']} items"
+                
+                # Add detailed info if requested
+                if result['detailed_order']:
+                    details = result['detailed_order']
+                    response += f"\n\nDetailed info for order {detail_index}:"
+                    response += f"\n  Status: {details.get('status', 'N/A')}"
+                    response += f"\n  Amount: {details.get('total_amount', 'N/A')}"
+                    response += f"\n  Order Date: {details.get('order_date', 'N/A')}"
+                    if details.get('arriving_in'):
+                        response += f"\n  Arriving in: {details['arriving_in']}"
+                
+                return response
+            except Exception as e:
+                return f"Failed to track orders: {str(e)}"
+        
+        return Tool(
+            name="zepto_track_orders",
+            description="Track recent Zepto orders with optional detailed info. Input format: 'max_orders|detail_index' (e.g., '5|0' to get 5 orders with details for first one) or just 'max_orders' (e.g., '3'). Returns order summaries with status, date, amount. If detail_index provided, includes tracking info for that order.",
+            func=track_orders_function
+        )
+
 
     def _create_follow_up_question_tool(self) -> Tool:
         """Tool for the AI to ask follow-up questions and continue listening"""
@@ -967,7 +1092,10 @@ Number of Reviews: {reviews}"""
             self._create_telegram_video_tool(),
             self._create_volume_control_tool(),
             self._create_follow_up_question_tool(),
-            self._zepto_ordering_tool()
+            self._zepto_ordering_tool(),
+            self._create_zepto_order_history_tool(),
+            self._create_zepto_order_again_tool(),
+            self._create_zepto_track_orders_tool()
         ]
         
         # Initialize LLM
@@ -1011,9 +1139,24 @@ Amazon: search_amazon_single_product, search_amazon_multiple_products (include: 
 Amazon Orders: track_amazon_orders (show date + details) summerize in tts friendly way.
 Reminders: set, list, cancel, check
 Telegram: message, photo, document, video
-Zepto: login → clear_cart → search|product_name → add_product|product_name|quantity|product_index → order_details → checkout → place_order → cleanup. Always confirm before final order place with cod option. Ask via tool after search.
-ZEPTO ADD_PRODUCT FORMAT: Use format 'add_product|product_name|quantity|product_index'. Example: 'add_product|McCain French Fries Crispy $ ready to cook|2|4'. The product_name comes from search results and can contain pipes. quantity is the amount to add. product_index is the position in search results (0-based).
-PAYMENT PAGE: Once on payment page, NO back button exists. If user cancels/changes mind, tell them: "Cannot go back from payment. Need to close current order and start fresh. Would you like to proceed or cancel?"
+Zepto Grocery Ordering:
+  WORKFLOW: login → clear_cart → search|product_name → [SHOW RESULTS] → add_product|name|qty|index → order_details → checkout → [CONFIRM] → place_order → cleanup
+  
+  SEARCH: After search completes, ALWAYS show all results to user with product names and index numbers, then use ask_follow_up_question tool to ask which one to add.
+  
+  ADD_PRODUCT: Format is 'add_product|product_name|quantity|product_index'
+    - product_name: EXACT name from search results (may contain pipes/special chars)
+    - quantity: number to add (default 1)
+    - product_index: position in results (0-based, first item = 0)
+    - Example: 'add_product|McCain French Fries Crispy & Ready to Cook|2|4'
+  
+  ORDER_DETAILS: Always check order summary before checkout. Show total, items, fees.
+  
+  CHECKOUT: Goes to payment page and auto-selects Cash on Delivery (COD). Then MUST ask confirmation using ask_follow_up_question tool: "Your order total is ₹X with Y items. Cash on Delivery is selected. Confirm to place order?"
+  
+  PLACE_ORDER: Only execute after explicit user confirmation. Once order placed, cleanup automatically.
+  
+  IMPORTANT: Payment page has NO back button. If user wants to cancel after checkout, must cleanup and restart entire order.
 
 TIME-SENSITIVE: Use search_web tool for current info. Never answer from internal knowledge.
 

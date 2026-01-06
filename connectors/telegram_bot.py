@@ -123,14 +123,30 @@ class TelegramBot:
             dict: Message info if successful, None if failed
         """
         try:
-            data = {
-                'chat_id': chat_id,
-                'photo': photo,
-                'caption': caption,
-                'parse_mode': parse_mode
-            }
-            
-            response = self._make_request('sendPhoto', data)
+            # Check if photo is a URL or file path
+            if photo.startswith('http://') or photo.startswith('https://'):
+                # Send as URL
+                data = {
+                    'chat_id': chat_id,
+                    'photo': photo,
+                    'caption': caption,
+                    'parse_mode': parse_mode
+                }
+                response = self._make_request('sendPhoto', data)
+            else:
+                # Send as file upload
+                url = f"{self.base_url}/sendPhoto"
+                data = {
+                    'chat_id': chat_id,
+                    'caption': caption,
+                    'parse_mode': parse_mode
+                }
+                
+                with open(photo, 'rb') as photo_file:
+                    files = {'photo': photo_file}
+                    response = requests.post(url, data=data, files=files, timeout=30)
+                    response.raise_for_status()
+                    response = response.json()
             
             if response.get('ok'):
                 message_id = response['result']['message_id']
@@ -140,6 +156,9 @@ class TelegramBot:
                 logger.error(f"Failed to send photo: {response.get('description', 'Unknown error')}")
                 return None
                 
+        except FileNotFoundError:
+            logger.error(f"Photo file not found: {photo}")
+            return None
         except Exception as e:
             logger.error(f"Error sending photo: {e}")
             return None
@@ -368,7 +387,7 @@ if __name__ == "__main__":
         bot.send_message(chat_id, message_text)
         
         # Send photo with caption
-        photo_url = "https://m.media-amazon.com/images/I/81QoDTzKadL._SX679_.jpg"
+        photo_url = "C:\\Users\\JUBER\\Documents\\voice_assistant\\output\\order_details.png"
         photo_caption = "Check out this amazing product!"
         bot.send_photo(chat_id, photo_url, photo_caption)
         
