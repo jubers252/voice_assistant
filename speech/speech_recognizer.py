@@ -48,6 +48,7 @@ class SpeechRecognizer:
         self.audio_processor = audio_processor
         self.pixel_led = pixel_led
         self.use_whisper = use_whisper
+        self.spotify_connector = None  # Will be set by voice assistant
         
         # Set Whisper language from environment variable (default: English)
         self.whisper_language = os.getenv('WHISPER_LANGUAGE', 'en')
@@ -141,14 +142,18 @@ class SpeechRecognizer:
             except Exception as e:
                 time.sleep(0.05)
     
+    def set_spotify_connector(self, spotify_connector):
+        """Set Spotify connector to check music playback status"""
+        self.spotify_connector = spotify_connector
+    
     def _setup_recognizer(self):
-        # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 20  # Lowered to detect quiet speech
+        # INMP441 is very sensitive - use low thresholds for quiet speech detection
+        self.recognizer.energy_threshold = 10  # Very low for quiet speech detection
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
-        self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
+        self.recognizer.dynamic_energy_adjustment_damping = 0.05  # Fast adjustment for varying volumes
+        self.recognizer.dynamic_energy_ratio = 1.2  # Lower ratio to catch quieter speech
         self.recognizer.pause_threshold = 1.0  # 1.0 seconds of silence before stopping
-        self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
+        self.recognizer.phrase_threshold = 0.15  # Lower minimum to catch quiet speech starts
         self.recognizer.non_speaking_duration = 0.7  # Max 0.7 seconds pause mid-phrase
 
     def _print_attempt(self, retry_count, is_follow_up):
@@ -184,6 +189,18 @@ class SpeechRecognizer:
 
     def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
         """Listen for user command with retry logic (retries once, then returns error)."""
+        # Reduce timeout when music is playing for faster response
+        phrase_time_limit = 15
+        if self.spotify_connector:
+            try:
+                result = self.spotify_connector.main({"action": "current_track"})
+                if result and "Currently playing" in str(result):
+                    timeout = 5
+                    phrase_time_limit = 5 
+                    print("[ASSISTANT] Music detected - using 8s timeout")
+            except Exception as e:
+                pass  # If check fails, use default timeout
+        
         msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
         print(f"[ASSISTANT] {msg}")
         self._print_attempt(0, is_follow_up)
@@ -200,9 +217,20 @@ class SpeechRecognizer:
                 
                 with suppress_alsa_errors():
                     with microphone as source:
+                        # Use shorter ambient calibration to avoid over-adjusting
+                        # This prevents threshold from getting too high for distant speech
+                        if attempt == 0:  # Only adjust on first attempt
+                            print("Quick ambient calibration...")
+                            self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                            # Cap the threshold to prevent it from getting too high
+                            if self.recognizer.energy_threshold > 50:
+                                self.recognizer.energy_threshold = 50
+                            current_threshold = self.recognizer.energy_threshold
+                            print(f"Energy threshold: {current_threshold}")
+                        
                         print("Listening...")
                         try:
-                            audio = self.recognizer.listen(source, timeout=15, phrase_time_limit=20)
+                            audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
                         except sr.WaitTimeoutError:
                             print(f"[ASSISTANT] No speech detected. Attempt {attempt + 1}/{max_retries + 1}")
                             if self.pixel_led:

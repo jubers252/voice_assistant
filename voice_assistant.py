@@ -59,7 +59,7 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
 
-        ww_model_path = f"{model_dir}/WWD_mems_new_model_v2.h5"
+        ww_model_path = f"{model_dir}/WWD_mems_new_model_v4.h5"
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         
@@ -83,6 +83,9 @@ class VoiceAssistantRefactored:
 
         
         self.spotify_connector = SpotifyConnector(None)
+        
+        # Connect Spotify to speech recognizer for dynamic timeout
+        self.recognizer.set_spotify_connector(self.spotify_connector)
            
     
       

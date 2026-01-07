@@ -530,31 +530,28 @@ Number of Reviews: {reviews}"""
         """Set a reminder tool"""
         def set_reminder_function(reminder_input: str) -> str:
             try:
-                # Parse reminder input - expected format: "text|time" or just "text"
-                parts = reminder_input.split('|', 1) if '|' in reminder_input else [reminder_input, ""]
+                # Parse reminder input - expected format: "text|time|recurring" or "text|time" or just "text"
+                parts = reminder_input.split('|')
                 text = parts[0].strip()
                 time_str = parts[1].strip() if len(parts) > 1 else "in 5 minutes"  # Default time
+                recurring = parts[2].strip() if len(parts) > 2 else "once"  # Default: one-time reminder
                 
-                action_data = {
-                    "action": "set",
-                    "text": text,
-                    "time": time_str
-                }
-                result = self.reminder_manager.handle_reminder_action(action_data)
+                result = self.reminder_manager.add_reminder(text, time_str, recurring=recurring)
                 return result
             except Exception as e:
                 return f"Set reminder error: {str(e)}"
         
         return Tool(
             name="set_reminder",
-            description="Set a reminder for the user. Input format: 'reminder text|time' (e.g., 'Call mom|in 30 minutes' or 'Meeting|tomorrow at 2 PM'). If no time specified, defaults to 5 minutes.",
+            description="Set a reminder or daily alarm for the user. Input format: 'reminder text|time|recurring' where recurring is 'once' (default) or 'daily'. Examples: 'Call mom|in 30 minutes|once', 'Wake up|7 AM|daily', 'Meeting|tomorrow at 2 PM'. For daily alarms like morning wake-up, use 'daily'. If no time specified, defaults to 5 minutes. Daily reminders repeat every day at the same time.",
             func=set_reminder_function
         )
     
     def _create_list_reminders_tool(self) -> Tool:
         """List all active reminders tool"""
-        def list_reminders_function(query: str) -> str:
+        def list_reminders_function(dummy_input: str = "") -> str:
             try:
+                # This tool doesn't need input, but LangChain requires a parameter
                 action_data = {"action": "list"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
                 return result
@@ -563,7 +560,7 @@ Number of Reviews: {reviews}"""
         
         return Tool(
             name="list_reminders",
-            description="List all active reminders. No input required.",
+            description="List all active reminders. Input can be empty string or any text (ignored).",
             func=list_reminders_function
         )
     
@@ -594,8 +591,9 @@ Number of Reviews: {reviews}"""
     
     def _create_check_reminders_tool(self) -> Tool:
         """Check for due reminders tool"""
-        def check_reminders_function(query: str) -> str:
+        def check_reminders_function(dummy_input: str = "") -> str:
             try:
+                # This tool doesn't need input, but LangChain requires a parameter
                 action_data = {"action": "check"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
                 return result
@@ -604,7 +602,7 @@ Number of Reviews: {reviews}"""
         
         return Tool(
             name="check_reminders",
-            description="Check for any due reminders right now. No input required.",
+            description="Check for any due reminders right now. Input can be empty string or any text (ignored).",
             func=check_reminders_function
         )
     
@@ -1115,20 +1113,20 @@ Number of Reviews: {reviews}"""
         
         # Create system prompt
         system_prompt = """You are Sofi, female voice assistant in Pune, India.
-
+your responses must be concise, natural, and suitable for text-to-speech.
 LANGUAGE: Hindi → हिंदी देवनागरी only. English → English only.
-
+Always respond in the same language as the user input.
 VOICE OUTPUT: Short, natural, conversational. No markdown, emojis, special chars. Think internally for complex tasks.
 
-FOLLOW-UP QUESTIONS: Always ask relevant follow-up questions based on context. Examples:
-- After showing a product: "Would you like to check prices on other platforms or see customer reviews?"
-- After weather info: "Do you need travel recommendations for that weather?"
-- After playing music: "Want me to play a similar artist or create a playlist?"
-- After order tracking: "Need help with returns or tracking another order?"
-- After reminders: "Should I set another reminder for later?"
-Do NOT ask generic "do you need anything else" - ask specific, contextual follow-ups that extend conversation.
-
-QUESTIONS: Use ask_follow_up_question tool ONLY. Never ask in response text. If ambiguous/incomplete → use tool.
+HOW TO ASK QUESTIONS:
+- NEVER put questions in your response text
+- ALWAYS use ask_follow_up_question tool when you want to ask the user something
+- Examples of contextual follow-ups to ask with followu:
+  * After showing a product: "Would you like to check prices on other platforms?"
+  * After weather info: "Do you need travel recommendations?"
+  * After playing music: "Want me to play a similar artist?"
+  * After order tracking: "Need help with returns?"
+  * After reminders: "Should I set another reminder?"use ask_follow_up_question tool immediately
 
 TOOLS:
 Spotify: control_spotify_playback (resume|pause|next), play_spotify_track, play_spotify_album, play_spotify_artist
@@ -1137,7 +1135,7 @@ Volume: increase, decrease, mute, set
 Web Search: news, weather, prices, live info (always for "latest", "current", "today", "now")
 Amazon: search_amazon_single_product, search_amazon_multiple_products (include: name, price, rating, link) summerize in tts friendly way.
 Amazon Orders: track_amazon_orders (show date + details) summerize in tts friendly way.
-Reminders: set, list, cancel, check
+Reminders: set_reminder, list_reminders, cancel_reminder, check_reminders
 Telegram: message, photo, document, video
 Zepto Grocery Ordering:
   WORKFLOW: login → clear_cart → search|product_name → [SHOW RESULTS] → add_product|name|qty|index → order_details → checkout → [CONFIRM] → place_order → cleanup

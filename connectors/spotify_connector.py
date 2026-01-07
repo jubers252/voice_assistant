@@ -212,6 +212,10 @@ class SpotifyConnector:
             bool: True if music is playing on the Raspberry Pi device, False otherwise
         """
         try:
+            # Check if Spotify client is initialized
+            if self.spotify is None:
+                return False
+            
             # Get current playback across all devices
             playback = self.spotify.current_playback()
             

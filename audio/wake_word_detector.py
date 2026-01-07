@@ -18,7 +18,7 @@ class WakeWordDetector:
         # Model configuration (matches training)
         self.desired_length = 44
         self.feature_dim = 120
-        self.optimal_threshold = 0.868  # Updated from retraining (suggested threshold for optimal detection)
+        self.optimal_threshold = 0.797  # Updated for robust model trained with background music and distance
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")
