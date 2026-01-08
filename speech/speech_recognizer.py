@@ -11,7 +11,7 @@ import openai
 from openai import OpenAI
 import time as timing_module
 import gc
-        
+import azure.cognitiveservices.speech as speechsdk  
 # Load environment variables
 load_dotenv()
 
@@ -30,7 +30,7 @@ def suppress_alsa_errors():
         os.close(old_stderr)
 
 class SpeechRecognizer:
-    def __init__(self, audio_processor, device_index=None, pixel_led=None, use_whisper=False):
+    def __init__(self, audio_processor, device_index=None, pixel_led=None, use_azure=False):
         """Initialize recognizer and pick a safe microphone device index.
 
         On Linux the device index used on Windows (e.g. 1) may be invalid and
@@ -47,21 +47,36 @@ class SpeechRecognizer:
         self.recognizer = sr.Recognizer()
         self.audio_processor = audio_processor
         self.pixel_led = pixel_led
-        self.use_whisper = use_whisper
+        self.use_azure = use_azure
         self.spotify_connector = None  # Will be set by voice assistant
         
         # Set Whisper language from environment variable (default: English)
         self.whisper_language = os.getenv('WHISPER_LANGUAGE', 'en')
         
         # Initialize OpenAI client if using Whisper
-        if self.use_whisper:
-            api_key = os.getenv('OPENAI_API_KEY')
-            if not api_key:
-                print("[RECOGNIZER] Warning: OPENAI_API_KEY not found in environment. Falling back to Google Speech Recognition.")
-                self.use_whisper = False
-            else:
-                self.openai_client = OpenAI(api_key=api_key)
-                print("[RECOGNIZER] OpenAI Whisper initialized")
+        if self.use_azure:
+            speech_key = os.getenv('tts_key')
+            endpoint = os.getenv('tts_endpoint')
+   
+            azure_languages = os.getenv('AZURE_LANGUAGES', 'en-US,hi-IN').split(',')
+       
+            self.speech_config = speechsdk.SpeechConfig(subscription=speech_key, endpoint=endpoint)
+            
+            self.speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "8000"
+            )
+            self.speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "2000"
+            )
+            self.speech_config.set_property(
+                speechsdk.PropertyId.SpeechServiceResponse_PostProcessingOption, "TrueText"
+            )
+            # Configure auto language detection
+            self.auto_detect_source_language_config = speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
+                languages=azure_languages
+            )
+            print(f"[RECOGNIZER] Azure Speech Recognition initialized with auto-detect for: {', '.join(azure_languages)}")
+         
         
         self._setup_recognizer()
      
@@ -118,7 +133,7 @@ class SpeechRecognizer:
             if self.pixel_led:
                 self.pixel_led.set_error()
             print(f"[ERROR] {error_message}")
-            time.sleep(3.0)  # Give audio time to settle
+            time.sleep(2.0)  # Give audio time to settle
 
             self.audio_processor.play_beep_sound()
             if self.pixel_led:
@@ -129,9 +144,90 @@ class SpeechRecognizer:
                 self.pixel_led.set_error()
             return False
 
+    
+    def _listen_with_azure(self, timeout=20, is_follow_up=False, max_retries=1):
+        """Listen for command using Azure Speech Recognition - simple approach"""
+        msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
+        print(f"[ASSISTANT] {msg}")
+        self._print_attempt(0, is_follow_up)
+        
+        # Temporarily increase microphone gain
+        original_gain = self.audio_processor.get_digital_gain()
+        quiet_speech_gain = float(os.getenv('AZURE_MIC_GAIN', '4.0'))
+        self.audio_processor.set_digital_gain(quiet_speech_gain)
+        print(f"[ASSISTANT] Increased mic gain to {quiet_speech_gain}x for Azure")
+        
+        try:
+            for attempt in range(max_retries + 1):
+                try:
+                    if self.pixel_led:
+                        self.pixel_led.set_listening()
+                    
+                    # Use Azure's default microphone capture (simple and working)
+                    audio_config = speechsdk.audio.AudioConfig(use_default_microphone=True)
+                    
+                    # Create recognizer with auto language detection
+                    recognizer = speechsdk.SpeechRecognizer(
+                        speech_config=self.speech_config,
+                        audio_config=audio_config,
+                        auto_detect_source_language_config=self.auto_detect_source_language_config
+                    )
+                    
+                    print("[ASSISTANT] Listening with Azure...")
+                    result = recognizer.recognize_once_async().get()
+                    
+                    if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                        detected_language = result.properties.get(
+                            speechsdk.PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult
+                        )
+                        command = result.text
+                        print(f"[ASSISTANT] Azure recognized ({detected_language}): {command}")
+                        cleaned_command = command.lower().strip()
+                        
+                        if len(cleaned_command) < 2:
+                            print("[ASSISTANT] Command too short, trying again...")
+                            if attempt < max_retries:
+                                self._print_attempt(attempt + 1, is_follow_up)
+                            continue
+                        
+                        if self.pixel_led:
+                            self.pixel_led.off()
+                        return cleaned_command
+                        
+                    elif result.reason == speechsdk.ResultReason.NoMatch:
+                        print(f"[ASSISTANT] No speech detected: {result.no_match_details}")
+                        if not self._handle_listen_error(attempt, "Sorry, no speech detected."):
+                            break
+                            
+                    elif result.reason == speechsdk.ResultReason.Canceled:
+                        cancellation = result.cancellation_details
+                        print(f"[ASSISTANT] Recognition canceled: {cancellation.reason}")
+                        if cancellation.reason == speechsdk.CancellationReason.Error:
+                            print(f"[ASSISTANT] Error: {cancellation.error_details}")
+                        if not self._handle_listen_error(attempt, "Sorry, couldn't hear you."):
+                            break
+                            
+                except Exception as e:
+                    print(f"[ASSISTANT] Azure error: {e}")
+                    if not self._handle_listen_error(attempt, "Sorry, an error occurred."):
+                        break
+                        
+        finally:
+            # Restore original microphone gain
+            self.audio_processor.set_digital_gain(original_gain)
+            print(f"[ASSISTANT] Restored mic gain to {original_gain}x")
+        
+        if self.pixel_led:
+            self.pixel_led.off()
+        print("[ASSISTANT] No command detected after multiple attempts.")
+        self.audio_processor.speak("I didn't hear anything. Please call if you need me.")
+        return None
+
     def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
         """Listen for user command with retry logic (retries once, then returns error)."""
         # Reduce timeout when music is playing for faster response
+        if self.use_azure:
+            return self._listen_with_azure(timeout, is_follow_up, max_retries)
         phrase_time_limit = 15
         if self.spotify_connector:
             try:
@@ -159,16 +255,9 @@ class SpeechRecognizer:
                 
                 with suppress_alsa_errors():
                     with microphone as source:
-                        # Use shorter ambient calibration to avoid over-adjusting
-                        # This prevents threshold from getting too high for distant speech
-                        if attempt == 0:  # Only adjust on first attempt
-                            print("Quick ambient calibration...")
-                            self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
-                            # Cap the threshold to prevent it from getting too high
-                            #if self.recognizer.energy_threshold > 50:
-                             #   self.recognizer.energy_threshold = 50
-                            current_threshold = self.recognizer.energy_threshold
-                            print(f"Energy threshold: {current_threshold}")
+
+          
+                        print(f"Energy threshold: {self.recognizer.energy_threshold}")
                         
                         print("Listening...")
                         try:
@@ -225,10 +314,8 @@ class SpeechRecognizer:
     def _recognize_audio(self, audio):
         """Recognize audio using either OpenAI Whisper or Google Speech Recognition"""
         try:
-            if self.use_whisper:
-                return self._recognize_with_whisper(audio)
-            else:
-                return self._recognize_with_google(audio)
+                 
+            return self._recognize_with_google(audio)
         except Exception as e:
             print(f"[ASSISTANT] Unexpected recognition error: {e}")
             return None
@@ -243,7 +330,7 @@ class SpeechRecognizer:
     def _recognize_with_google(self, audio):
         """Recognize audio using Google Speech Recognition"""
         try:
-            command = self.recognizer.recognize_google(audio, language='en-US')
+            command = self.recognizer.recognize_google(audio)
             print(f"[ASSISTANT] You said: {command}")
             cleaned_command = command.lower().strip()
             if len(cleaned_command) < 2:
@@ -256,53 +343,7 @@ class SpeechRecognizer:
             # Don't speak here - let the caller handle it to avoid self-listening
             return None
 
-    def _recognize_with_whisper(self, audio):
-        """Recognize audio using OpenAI Whisper API"""
-        try:
-            # Convert audio object to WAV file for Whisper API
-            wav_data = self._audio_to_wav(audio)
-            
-            # Send to Whisper API
-            print(f"[ASSISTANT] Sending audio to Whisper API (Language: {self.whisper_language})...")
-            transcript = self.openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=("audio.wav", wav_data, "audio/wav"),
-               
-            )
-            
-            command = transcript.text
-            print(f"[ASSISTANT] Whisper recognized: {command}")
-            cleaned_command = command.lower().strip()
-            
-            if len(cleaned_command) < 2:
-                print("[ASSISTANT] Command too short, trying again...")
-                return None
-            
-            return cleaned_command
-            
-        except openai.APIError as e:
-            print(f"[ASSISTANT] OpenAI API error: {e}.")
-            return None
-        except Exception as e:
-            print(f"[ASSISTANT] Whisper recognition error: {e}")
-            return None
 
-    def _audio_to_wav(self, audio):
-        """Convert speech_recognition Audio object to WAV bytes"""
-        try:
-            # Create WAV file in memory
-            wav_buffer = io.BytesIO()
-            with wave.open(wav_buffer, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(audio.sample_rate)
-                wav_file.writeframes(audio.frame_data)
-            
-            wav_buffer.seek(0)
-            return wav_buffer.getvalue()
-        except Exception as e:
-            print(f"[ASSISTANT] Error converting audio to WAV: {e}")
-            raise
 
     def list_available_microphones(self):
         """Return a list of available microphone names."""

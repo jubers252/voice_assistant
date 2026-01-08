@@ -47,10 +47,10 @@ class VoiceAssistantRefactored:
         print(f"Microphone digital gain set to {MIC_GAIN}x")
         
         # Check if Whisper should be used (set USE_WHISPER=true in .env)
-        use_whisper = os.getenv('USE_WHISPER', 'false').lower() == 'true'
-        if use_whisper:
-            print("[ASSISTANT] Whisper speech recognition enabled")
-        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led, use_whisper=use_whisper)
+        use_azure = os.getenv('USE_AZURE', 'false').lower() == 'true'
+        if use_azure:
+            print("[ASSISTANT] Azure speech recognition enabled")
+        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led, use_azure=use_azure)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 

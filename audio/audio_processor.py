@@ -452,6 +452,14 @@ class AudioProcessors:
         self.digital_gain = max(0.1, min(10.0, gain_value))  # Clamp between 0.1x and 10x
         print(f"Digital gain set to {self.digital_gain}x")
     
+    def get_digital_gain(self):
+        """Get current digital gain value
+        
+        Returns:
+            float: Current gain multiplier
+        """
+        return getattr(self, 'digital_gain', 1.0)
+    
     def check_microphones(self):
         """Check available microphones and their indices"""
         print("\nAvailable microphones:")
