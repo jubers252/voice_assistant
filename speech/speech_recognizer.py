@@ -64,12 +64,8 @@ class SpeechRecognizer:
                 print("[RECOGNIZER] OpenAI Whisper initialized")
         
         self._setup_recognizer()
-        try:
-            self._choose_device_index()
-        except Exception:
-            # Non-fatal: leave device_index as-is (None will let speech_recognition
-            # use the system default device)
-            self.device_index = None
+     
+        self.device_index = 2
         
         # Warm up microphone to avoid 100ms+ latency on first use
         self._warmup_microphone()
@@ -88,59 +84,6 @@ class SpeechRecognizer:
         except Exception as e:
             print(f"[RECOGNIZER] Microphone warm-up failed (non-critical): {e}")
 
-    def _check_voice_activity(self, audio_data, sample_rate, silence_duration=1.5):
-        """
-        Check if there's voice activity in audio using energy detection.
-        Returns True if voice is detected, False if only silence.
-        
-        Args:
-            audio_data: audio samples as numpy array
-            sample_rate: sample rate of audio
-            silence_duration: seconds of silence threshold
-        """
-        try:
-            # Convert bytes to numpy array if needed
-            if isinstance(audio_data, bytes):
-                audio_data = np.frombuffer(audio_data, dtype=np.int16).astype(float) / 32768.0
-            
-            # Energy threshold
-            energy = np.sqrt(np.mean(audio_data ** 2))
-            
-            # If energy is low, likely silence
-            if energy < 0.005:  # Very low energy = silence
-                return False
-            
-            return True
-        except Exception as e:
-            return True  # Default to True if detection fails
-    
-    def _vad_monitor_thread(self, stop_event, audio_queue, silence_threshold=1.5):
-        """
-        Monitor audio in background and detect silence.
-        Signals to stop listening if silence detected for threshold seconds.
-        """
-        consecutive_silence = 0.0
-        silent_frame_duration = 0.1  # Each frame is ~100ms
-        
-        while not stop_event.is_set():
-            try:
-                # Get audio frames from queue (non-blocking)
-                if not audio_queue.empty():
-                    frame = audio_queue.get(timeout=0.1)
-                    is_speaking = self._check_voice_activity(frame, self.recognizer.sample_rate)
-                    
-                    if not is_speaking:
-                        consecutive_silence += silent_frame_duration
-                        if consecutive_silence >= silence_threshold:
-                            print(f"[VAD] Silence detected for {silence_threshold}s, stopping...")
-                            stop_event.set()
-                            break
-                    else:
-                        consecutive_silence = 0.0  # Reset on voice detection
-                else:
-                    time.sleep(0.05)
-            except Exception as e:
-                time.sleep(0.05)
     
     def set_spotify_connector(self, spotify_connector):
         """Set Spotify connector to check music playback status"""
@@ -148,14 +91,13 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use low thresholds for quiet speech detection
-        self.recognizer.energy_threshold = 10  # Very low for quiet speech detection
+        self.recognizer.energy_threshold = 20  # Lowered to detect quiet speech
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.05  # Fast adjustment for varying volumes
-        self.recognizer.dynamic_energy_ratio = 1.2  # Lower ratio to catch quieter speech
-        self.recognizer.pause_threshold = 1.0  # 1.0 seconds of silence before stopping
-        self.recognizer.phrase_threshold = 0.15  # Lower minimum to catch quiet speech starts
-        self.recognizer.non_speaking_duration = 0.7  # Max 0.7 seconds pause mid-phrase
-
+        self.recognizer.dynamic_energy_adjustment_damping = 0.10 
+        self.recognizer.dynamic_energy_ratio = 1.3 
+        self.recognizer.pause_threshold = 1.0 
+        self.recognizer.phrase_threshold = 0.2
+        self.recognizer.non_speaking_duration = 0.7 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
             print("Please respond..." if is_follow_up else "Say your command...")
@@ -176,13 +118,13 @@ class SpeechRecognizer:
             if self.pixel_led:
                 self.pixel_led.set_error()
             print(f"[ERROR] {error_message}")
-            time.sleep(2.0)  # Give audio time to settle
+            time.sleep(3.0)  # Give audio time to settle
+
+            self.audio_processor.play_beep_sound()
             if self.pixel_led:
                 self.pixel_led.set_listening()
-            self.audio_processor.play_beep_sound()
             return True  
         else:
-
             if self.pixel_led:
                 self.pixel_led.set_error()
             return False
@@ -223,8 +165,8 @@ class SpeechRecognizer:
                             print("Quick ambient calibration...")
                             self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
                             # Cap the threshold to prevent it from getting too high
-                            if self.recognizer.energy_threshold > 50:
-                                self.recognizer.energy_threshold = 50
+                            #if self.recognizer.energy_threshold > 50:
+                             #   self.recognizer.energy_threshold = 50
                             current_threshold = self.recognizer.energy_threshold
                             print(f"Energy threshold: {current_threshold}")
                         
@@ -244,7 +186,7 @@ class SpeechRecognizer:
                     if attempt < max_retries:
                         self._print_attempt(attempt + 1, is_follow_up)
                     continue
-
+ 
                 print("Recognizing...")
                 command = self._recognize_audio(audio)
                 if command:

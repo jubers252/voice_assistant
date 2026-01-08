@@ -6,21 +6,19 @@ import threading
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.95):
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.85):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
         self.audio_processors = audio_processors
         self.recognizer = recognizer
         self.pixel_led = pixel_led
         self.sample_rate = sample_rate
-        
-        # Wake word detection thresholds (lowered for better sensitivity)
-        self.energy_threshold = energy_threshold  # Lower energy threshold (0.035 vs default 0.050)
-        self.confidence_threshold = confidence_threshold  # Lower confidence for better detection
-        # Wake word detection parameters
-        # Use a 2.0 second analysis window for wake-word detection (sliding window)
-        self.window_duration = 1.0  # seconds (matches training duration)
-        # How often (seconds) to step/check the buffer for a new window
+    
+        self.energy_threshold = energy_threshold 
+        self.confidence_threshold = confidence_threshold 
+
+        self.window_duration = 1.0  
+ 
         self.step_duration = 0.15    # seconds
         self.window_samples = int(self.window_duration * self.sample_rate)
 

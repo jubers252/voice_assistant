@@ -7,7 +7,7 @@ import numpy as np
 
 SAMPLE_RATE = 22050  # 22.05 kHz
 RECORD_SECONDS = 1
-DIGITAL_GAIN = 5.0  # Amplify recorded audio (1.0 = no gain, 5.0 = 5x louder)
+DIGITAL_GAIN = 2.0  # Amplify recorded audio (1.0 = no gain, 5.0 = 5x louder)
 SAVE_DIR = os.path.join(os.path.dirname(__file__), "audio_data")  # Always save in model_training/audio
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -53,7 +53,7 @@ def record_audio_and_save(save_path, n_times=50):
     """
 
     input("To start recording Wake Word press Enter: ")
-    for i in range(330, n_times):
+    for i in range(354, n_times):
         myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
         sd.wait()
         
