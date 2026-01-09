@@ -62,7 +62,7 @@ class LangChainAgentProcessor:
     This intelligently decides which tools to use based on user input
     """
     
-    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None):
+    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None, recognizer=None):
         """
         Initialize LangChain Agent Processor
         
@@ -70,12 +70,14 @@ class LangChainAgentProcessor:
         - conversation_history: List to store conversation history
         - audio_processors: Handler for speech/TTS functionality
         - pixel_led: Optional PixelLEDController for visual feedback
+        - recognizer: Optional SpeechRecognizer instance (for follow-up questions)
         """
         
         # Store the handlers that are actually used
         self.conversation_history = conversation_history
         self.audio_processors = audio_processors
         self.pixel_led = pixel_led
+        self.recognizer = recognizer  # Store recognizer for follow-up questions
         self.reminder_manager = ReminderManager()
         # Optional ConversationManager instance to persist history
         self.conversation_manager = conversation_manager
@@ -549,9 +551,9 @@ Number of Reviews: {reviews}"""
     
     def _create_list_reminders_tool(self) -> Tool:
         """List all active reminders tool"""
-        def list_reminders_function(dummy_input: str = "") -> str:
+        def list_reminders_function(*args, **kwargs) -> str:
             try:
-                # This tool doesn't need input, but LangChain requires a parameter
+                # This tool doesn't need input, accepts any arguments
                 action_data = {"action": "list"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
                 return result
@@ -560,8 +562,9 @@ Number of Reviews: {reviews}"""
         
         return Tool(
             name="list_reminders",
-            description="List all active reminders. Input can be empty string or any text (ignored).",
-            func=list_reminders_function
+            description="List all active reminders. No input required.",
+            func=list_reminders_function,
+            args_schema=None  # Indicates this tool accepts no arguments
         )
     
     def _create_cancel_reminder_tool(self) -> Tool:
@@ -591,9 +594,9 @@ Number of Reviews: {reviews}"""
     
     def _create_check_reminders_tool(self) -> Tool:
         """Check for due reminders tool"""
-        def check_reminders_function(dummy_input: str = "") -> str:
+        def check_reminders_function(*args, **kwargs) -> str:
             try:
-                # This tool doesn't need input, but LangChain requires a parameter
+                # This tool doesn't need input, accepts any arguments
                 action_data = {"action": "check"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
                 return result
@@ -602,8 +605,9 @@ Number of Reviews: {reviews}"""
         
         return Tool(
             name="check_reminders",
-            description="Check for any due reminders right now. Input can be empty string or any text (ignored).",
-            func=check_reminders_function
+            description="Check for any due reminders right now. No input required.",
+            func=check_reminders_function,
+            args_schema=None  # Indicates this tool accepts no arguments
         )
     
     def _create_telegram_message_tool(self) -> Tool:
@@ -1011,11 +1015,30 @@ Number of Reviews: {reviews}"""
 
     def _create_follow_up_question_tool(self) -> Tool:
         """Tool for the AI to ask follow-up questions and continue listening"""
-        def ask_follow_up_function(question: str) -> str:
+        def ask_follow_up_function(input_text: str) -> str:
             try:
+                # Parse input - format: "preamble|question" or just "question"
+                # Preamble is optional context/information to speak before asking the question
+                parts = input_text.split('|', 1)
+                if len(parts) == 2:
+                    preamble = parts[0].strip()
+                    question = parts[1].strip()
+                else:
+                    preamble = None
+                    question = input_text.strip()
+                
                 # Set LED to speaking state
                 if self.pixel_led:
                     self.pixel_led.set_speaking()
+                
+                # If there's a preamble, speak it first
+                if preamble:
+                    print(f"Speaking preamble: {preamble}")
+                    self.audio_processors.speak(preamble)
+                    # Wait for preamble to complete
+                    while hasattr(self.audio_processors, 'is_speaking') and self.audio_processors.is_speaking:
+                        time.sleep(0.1)
+                    time.sleep(0.3)  # Brief pause between preamble and question
                 
                 # Speak the follow-up question (LED controlled in audio_processor)
                 self.audio_processors.speak(question)
@@ -1036,28 +1059,34 @@ Number of Reviews: {reviews}"""
                 print(f"AI asked: {question}")
                 print("Now listening for follow-up response...")
                 
-                # Create recognizer with better microphone handling
-                recognizer = SpeechRecognizer(self.audio_processors)
+                # Use existing recognizer (with Spotify connector and Google Cloud v2 config)
+                # If no recognizer provided, create a basic one
+                if self.recognizer:
+                    recognizer = self.recognizer
+                else:
+                    recognizer = SpeechRecognizer(self.audio_processors)
 
                 self.audio_processors.play_beep_sound()
                 time.sleep(0.2)
                 
                 # Listen with longer timeout for follow-up
+                # Music detection happens inside listen_for_command, which will reduce timeout to 5s if music is playing
                 follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=1)
                 
                 if follow_up_command:
                     print(f"Received follow-up response: '{follow_up_command}'")
-                    return f"User responded: {follow_up_command}"
+                    # Return the response in a way that makes it clear this is answering the question
+                    return f"User's answer to your question: '{follow_up_command}'. Now complete the original task based on this answer without searching again."
                 else:
                     
-                    return "No follow-up response received"
+                    return "User did not respond to the question. Proceed with default action or inform user."
                     
             except Exception as e:
                 return f"Follow-up error: {str(e)}"
         
         return Tool(
             name="ask_follow_up_question",
-            description="MANDATORY tool when you need to ask ANY question or need clarification from user. If your response would have a question mark '?', you MUST use this tool instead of responding with text. This tool speaks your question and waits for user's voice response. Input: your question text. NEVER ask questions in your text response - ALWAYS use this tool for questions.",
+            description="MANDATORY tool when you need to ask ANY question or need clarification from user. Format: 'information to speak first|your question' or just 'your question'. Use the pipe separator to provide context/information BEFORE asking the question. Example: 'Three products found: Product A ₹100, Product B ₹200, Product C ₹300|Which one would you like to purchase?' This will speak the product info FIRST, then ask the question. If your response would have a question mark '?', you MUST use this tool. NEVER ask questions in your text response.",
             func=ask_follow_up_function
         )
     

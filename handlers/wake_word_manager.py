@@ -6,7 +6,7 @@ import threading
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.85):
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.95):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
         self.audio_processors = audio_processors

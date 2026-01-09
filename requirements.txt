@@ -111,6 +111,7 @@ urllib3==2.1.0
 Werkzeug==3.0.0
 wrapt==1.17.3
 google-genai==0.3.0
+google-cloud-speech>=2.20.0
 beautifulsoup4==4.12.2
 lxml==4.9.3
 indic-transliteration>=2.3.0

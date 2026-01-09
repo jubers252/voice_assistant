@@ -19,6 +19,16 @@ class SpotifyConnector:
     def __init__(self, spotify: Spotify):
         self.spotify = spotify
         self.device_id = None
+        self.speech_recognizer = None  # Reference to speech recognizer for music flag updates
+    
+    def set_speech_recognizer(self, recognizer):
+        """Set reference to speech recognizer for updating music playing flag"""
+        self.speech_recognizer = recognizer
+    
+    def _update_music_flag(self, is_playing: bool):
+        """Update the music playing flag in speech recognizer"""
+        if self.speech_recognizer:
+            self.speech_recognizer.set_music_playing(is_playing)
         
 
     def _find_device(self, preferred_device_name=None):
@@ -345,6 +355,7 @@ class SpotifyConnector:
                     result = self.smart_play_by_keyword(name, device_id=device_id)
                     
                     if result['success']:
+                        self._update_music_flag(True)  # Music started playing
                         message = result['message']
                         # Add alternatives if available
                         if result.get('alternatives'):
@@ -389,9 +400,11 @@ class SpotifyConnector:
                     
             elif tool_info.get("action") == "stop":
                 self.stop_playback(device_id=device_id)
+                self._update_music_flag(False)  # Music stopped
                 return "Playback stopped"
             elif tool_info.get("action") == "resume":
                 self.resume_playback(device_id=device_id)
+                self._update_music_flag(True)  # Music resumed
                 return "Playback resumed"
             elif tool_info.get("action") == "next":
                 self.play_next(device_id=device_id)

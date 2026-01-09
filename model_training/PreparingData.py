@@ -54,7 +54,7 @@ def record_audio_and_save(save_path, n_times=50):
 
     input("To start recording Wake Word press Enter: ")
     for i in range(354, n_times):
-        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
+        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
         
         # Apply digital gain

@@ -46,11 +46,23 @@ class VoiceAssistantRefactored:
         self.audio_processors.set_digital_gain(MIC_GAIN)
         print(f"Microphone digital gain set to {MIC_GAIN}x")
         
-        # Check if Whisper should be used (set USE_WHISPER=true in .env)
+        # Check speech recognition service to use
         use_azure = os.getenv('USE_AZURE', 'false').lower() == 'true'
-        if use_azure:
+        use_google_cloud_v2 = os.getenv('USE_GOOGLE_CLOUD_V2', 'false').lower() == 'true'
+        
+        if use_google_cloud_v2:
+            print("[ASSISTANT] Google Cloud Speech-to-Text v2 enabled")
+        elif use_azure:
             print("[ASSISTANT] Azure speech recognition enabled")
-        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led, use_azure=use_azure)
+        else:
+            print("[ASSISTANT] Using default Google Speech Recognition")
+            
+        self.recognizer = SpeechRecognizer(
+            self.audio_processors, 
+            pixel_led=self.pixel_led, 
+            use_azure=use_azure,
+            use_google_cloud_v2=use_google_cloud_v2
+        )
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 
@@ -84,8 +96,9 @@ class VoiceAssistantRefactored:
         
         self.spotify_connector = SpotifyConnector(None)
         
-        # Connect Spotify to speech recognizer for dynamic timeout
+        # Connect Spotify to speech recognizer for dynamic timeout and music flag updates
         self.recognizer.set_spotify_connector(self.spotify_connector)
+        self.spotify_connector.set_speech_recognizer(self.recognizer)
            
     
       
@@ -93,7 +106,8 @@ class VoiceAssistantRefactored:
             conversation_history=self.conversation_history,
             audio_processors=self.audio_processors,
             conversation_manager=self.conversation_manager,
-            pixel_led=self.pixel_led
+            pixel_led=self.pixel_led,
+            recognizer=self.recognizer  # Pass recognizer for follow-up questions
         )
 
 
