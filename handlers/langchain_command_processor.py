@@ -24,7 +24,8 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.memory import ConversationBufferWindowMemory
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.tools import Tool
+from langchain.tools import Tool, StructuredTool
+from pydantic import BaseModel, Field
 
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
@@ -549,22 +550,20 @@ Number of Reviews: {reviews}"""
             func=set_reminder_function
         )
     
-    def _create_list_reminders_tool(self) -> Tool:
+    def _create_list_reminders_tool(self) -> StructuredTool:
         """List all active reminders tool"""
-        def list_reminders_function(*args, **kwargs) -> str:
+        def list_reminders_function() -> str:
             try:
-                # This tool doesn't need input, accepts any arguments
                 action_data = {"action": "list"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
                 return result
             except Exception as e:
                 return f"List reminders error: {str(e)}"
         
-        return Tool(
-            name="list_reminders",
-            description="List all active reminders. No input required.",
+        return StructuredTool.from_function(
             func=list_reminders_function,
-            args_schema=None  # Indicates this tool accepts no arguments
+            name="list_reminders",
+            description="List all active reminders. No input required."
         )
     
     def _create_cancel_reminder_tool(self) -> Tool:
@@ -592,22 +591,20 @@ Number of Reviews: {reviews}"""
             func=cancel_reminder_function
         )
     
-    def _create_check_reminders_tool(self) -> Tool:
+    def _create_check_reminders_tool(self) -> StructuredTool:
         """Check for due reminders tool"""
-        def check_reminders_function(*args, **kwargs) -> str:
+        def check_reminders_function() -> str:
             try:
-                # This tool doesn't need input, accepts any arguments
                 action_data = {"action": "check"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
                 return result
             except Exception as e:
                 return f"Check reminders error: {str(e)}"
         
-        return Tool(
-            name="check_reminders",
-            description="Check for any due reminders right now. No input required.",
+        return StructuredTool.from_function(
             func=check_reminders_function,
-            args_schema=None  # Indicates this tool accepts no arguments
+            name="check_reminders",
+            description="Check for any due reminders right now. No input required."
         )
     
     def _create_telegram_message_tool(self) -> Tool:
@@ -1145,6 +1142,7 @@ Number of Reviews: {reviews}"""
 your responses must be concise, natural, and suitable for text-to-speech.
 LANGUAGE: Hindi → हिंदी देवनागरी only. English → English only.
 Always respond in the same language as the user input.
+Always response as a female voice assistant like alexa or siri.
 VOICE OUTPUT: Short, natural, conversational. No markdown, emojis, special chars. Think internally for complex tasks.
 
 HOW TO ASK QUESTIONS:
@@ -1155,6 +1153,7 @@ HOW TO ASK QUESTIONS:
   * After weather info: "Do you need travel recommendations?"
   * After playing music: "Want me to play a similar artist?"
   * After order tracking: "Need help with returns?"
+  * After provide information: "do you need anything else?"
   * After reminders: "Should I set another reminder?"use ask_follow_up_question tool immediately
 
 TOOLS:
