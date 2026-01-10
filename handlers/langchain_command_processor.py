@@ -1127,7 +1127,6 @@ Number of Reviews: {reviews}"""
             model="gpt-4o-mini",
             temperature=1,  # o4-mini supports temperature values between 0 and 1
             openai_api_key=os.getenv('OPENAI_API_KEY'),
-            default_headers={"openai-cache-control": "no-cache"}
         )
         
         # Setup memory for conversation context
@@ -1153,7 +1152,6 @@ HOW TO ASK QUESTIONS:
   * After saying "Do you need anything else?" use ask_follow_up_question tool immediately
   * After playing music: "Want me to play a similar artist?"
   * After order tracking: "Need help with returns?"
-  * After provide information: "do you need anything else?"
   * After reminders: "Should I set another reminder?"use ask_follow_up_question tool immediately
 
 TOOLS:
