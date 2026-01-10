@@ -90,7 +90,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -1124,7 +1124,7 @@ Number of Reviews: {reviews}"""
         
         # Initialize LLM
         llm = ChatOpenAI(
-            model="gpt-4.1-mini",
+            model="gpt-4o-mini",
             temperature=1,  # o4-mini supports temperature values between 0 and 1
             openai_api_key=os.getenv('OPENAI_API_KEY'),
             default_headers={"openai-cache-control": "no-cache"}
@@ -1150,7 +1150,7 @@ HOW TO ASK QUESTIONS:
 - ALWAYS use ask_follow_up_question tool when you want to ask the user something
 - Examples of contextual follow-ups to ask with followu:
   * After showing a product: "Would you like to check prices on other platforms?"
-  * After weather info: "Do you need travel recommendations?"
+  * After saying "Do you need anything else?" use ask_follow_up_question tool immediately
   * After playing music: "Want me to play a similar artist?"
   * After order tracking: "Need help with returns?"
   * After provide information: "do you need anything else?"
@@ -1179,10 +1179,11 @@ Zepto Grocery Ordering:
   ORDER_DETAILS: Always check order summary before checkout. Show total, items, fees.
   
   CHECKOUT: Goes to payment page and auto-selects Cash on Delivery (COD). Then MUST ask confirmation using ask_follow_up_question tool: "Your order total is ₹X with Y items. Cash on Delivery is selected. Confirm to place order?"
-  
+  after every zepto order completion or cancelled or failed cleanup the browser.
   PLACE_ORDER: Only execute after explicit user confirmation. Once order placed, cleanup automatically.
   
   IMPORTANT: Payment page has NO back button. If user wants to cancel after checkout, must cleanup and restart entire order.
+  for incorrect or wroing orders, apologize and offer to help with a new fresh order.
 
 TIME-SENSITIVE: Use search_web tool for current info. Never answer from internal knowledge.
 

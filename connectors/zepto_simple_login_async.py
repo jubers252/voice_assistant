@@ -168,6 +168,11 @@ class ZeptoLoginAsync:
     async def is_logged_in(self):
         """Check if user is already logged in"""
         try:
+            # Check if page is initialized
+            if not self.page:
+                logger.warning("Page not initialized - cannot check login status")
+                return False
+            
             # Wait a bit for page to load
             await self.page.wait_for_timeout(1000)
             

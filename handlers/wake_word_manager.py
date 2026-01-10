@@ -6,7 +6,7 @@ import threading
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.90):
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.97):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
         self.audio_processors = audio_processors
@@ -73,10 +73,22 @@ class WakeWordManager:
             
             if user_command:
                 print(f"Processing command: {user_command}")
-                should_exit = process_command_callback(user_command)
-                print(f"Command processing result - should_exit: {should_exit}")
-                if should_exit:
-                    return True  # Signal to break from main loop
+                # Run command processing in separate thread to avoid blocking wake word detection
+                def _process_in_thread():
+                    try:
+                        result = process_command_callback(user_command)
+                        if result:
+                            print("Command indicated exit - stopping detection")
+                            self.detection_running = False
+                    except Exception as e:
+                        print(f"Error processing command: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+                command_thread = threading.Thread(target=_process_in_thread, daemon=True)
+                command_thread.start()
+                # Don't wait for command to complete - return immediately so wake word can continue
+                print("Command processing started in background, wake word detection continues...")
             else:
                 print("No command detected, waiting for next input...")
             
@@ -124,8 +136,8 @@ class WakeWordManager:
             )
             
             # Show detection attempts with energy > 0.010 for debugging
-            if energy and energy > 0.005 and self.debug_mode:
-                print(f"Wakeword check: Detected={detected}, Energy={energy:.4f}, Confidence={confidence}")
+            # if energy and energy > 0.005 and self.debug_mode:
+            #     print(f"Wakeword check: Detected={detected}, Energy={energy:.4f}, Confidence={confidence}")
             
             # Handle wake word detection
             if detected:

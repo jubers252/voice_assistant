@@ -3,7 +3,7 @@
     "id": 1,
     "text": "\u0938\u0941\u092c\u0939 \u0915\u093e 9:00 \u092c\u091c\u0947 \u0926\u0948\u0928\u093f\u0915 \u0905\u0932\u093e\u0930\u094d\u092e",
     "description": "",
-    "remind_time": "2026-01-10T09:00:00",
+    "remind_time": "2026-01-11T09:00:00",
     "created_time": "2026-01-07T23:49:04.439155",
     "active": true,
     "notified": false,
@@ -17,6 +17,16 @@
     "created_time": "2026-01-09T23:53:54.016374",
     "active": false,
     "notified": false,
+    "recurring": "once"
+  },
+  {
+    "id": 3,
+    "text": "\u0926\u0942\u0927 \u0926\u094c\u0921\u093c \u0915\u093e \u0911\u0930\u094d\u0921\u0930 \u0915\u0930\u0928\u093e",
+    "description": "",
+    "remind_time": "2026-01-10T10:00:00",
+    "created_time": "2026-01-10T00:10:32.712614",
+    "active": true,
+    "notified": true,
     "recurring": "once"
   }
 ]

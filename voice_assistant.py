@@ -48,11 +48,8 @@ class VoiceAssistantRefactored:
         
         # Check speech recognition service to use
         use_azure = os.getenv('USE_AZURE', 'false').lower() == 'true'
-        use_google_cloud_v2 = os.getenv('USE_GOOGLE_CLOUD_V2', 'false').lower() == 'true'
         
-        if use_google_cloud_v2:
-            print("[ASSISTANT] Google Cloud Speech-to-Text v2 enabled")
-        elif use_azure:
+        if use_azure:
             print("[ASSISTANT] Azure speech recognition enabled")
         else:
             print("[ASSISTANT] Using default Google Speech Recognition")
@@ -60,8 +57,6 @@ class VoiceAssistantRefactored:
         self.recognizer = SpeechRecognizer(
             self.audio_processors, 
             pixel_led=self.pixel_led, 
-            use_azure=use_azure,
-            use_google_cloud_v2=use_google_cloud_v2
         )
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history

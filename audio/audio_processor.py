@@ -89,7 +89,7 @@ class AudioProcessors:
 
         self.recognizer = None  # Will be set by SpeechRecognizer if needed
         self.microphone = None
-        self.audio_channels = 2  # Channel configuration for microphone recording (mono)
+        self.audio_channels = 2  # Channel configuration for microphone recording (stereo)
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
         self.mic_device_id = 2   # Google voiceHAT with stereo INMP mics (hw:3,0)
         self.mic_gain_factor = 1.0  # Increased for voiceHAT stereo INMP mics
