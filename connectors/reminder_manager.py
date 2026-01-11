@@ -56,8 +56,15 @@ class ReminderManager:
         with open(REMINDERS_FILE, 'w') as f:
             json.dump(self.reminders, f, indent=2)
     
-    def add_reminder(self, text: str, remind_time: str, description: str = "") -> str:
-        """Add a new reminder with natural language time parsing."""
+    def add_reminder(self, text: str, remind_time: str, description: str = "", recurring: str = "once") -> str:
+        """Add a new reminder with natural language time parsing.
+        
+        Args:
+            text: Reminder text
+            remind_time: When to remind (e.g., '5 PM', 'in 30 minutes')
+            description: Optional description
+            recurring: 'once', 'daily', 'weekly' (default: 'once')
+        """
         try:
             remind_datetime = self._parse_time(remind_time)
             
@@ -71,7 +78,8 @@ class ReminderManager:
                 "remind_time": remind_datetime.isoformat(),
                 "created_time": datetime.now().isoformat(),
                 "active": True,
-                "notified": False
+                "notified": False,
+                "recurring": recurring
             }
             
             self.reminders.append(reminder)
@@ -174,6 +182,23 @@ class ReminderManager:
                 break
         self.save_reminders()
     
+    def _reschedule_daily_reminder(self, reminder: Dict):
+        """Reschedule a daily reminder for the next day at the same time."""
+        try:
+            current_time = datetime.fromisoformat(reminder["remind_time"])
+            next_day = current_time + timedelta(days=1)
+            
+            # Update the reminder for next day
+            for r in self.reminders:
+                if r["id"] == reminder["id"]:
+                    r["remind_time"] = next_day.isoformat()
+                    r["notified"] = False
+                    self.save_reminders()
+                    print(f"Daily reminder rescheduled for {next_day.strftime('%I:%M %p on %B %d')}")
+                    break
+        except Exception as e:
+            print(f"Error rescheduling daily reminder: {e}")
+    
     def cancel_reminder(self, reminder_id: int) -> str:
         """Cancel a specific reminder."""
         for reminder in self.reminders:
@@ -234,17 +259,25 @@ class ReminderManager:
                         
                         # Check if TTS is not currently speaking
                         if not getattr(self.audio_processors, 'is_speaking', False) and reminder["notified"] == False:
-                            # Play beep sound first
-                            self.audio_processors.play_beep_sound()
+                            # Play alarm sound (3 beeps) to get attention
+                            for _ in range(3):
+                                self.audio_processors.play_beep_sound(beep_file ="beep/japan-eas-alarm-277877.mp3")
+                                time.sleep(0.2)
                             time.sleep(0.3)
                             
                             # Speak the reminder
-                            reminder_message = f"Reminder: {reminder['text']}"
+                            recurring_text = " (Daily Alarm)" if reminder.get('recurring') == 'daily' else ""
+                            reminder_message = f"Reminder{recurring_text}: {reminder['text']}"
                             self.audio_processors.speak(reminder_message)
                             print("✓ Reminder announced successfully")
                             
-                            # Mark as notified
-                            self.mark_reminded(reminder["id"])
+                            # Handle recurring reminders
+                            if reminder.get('recurring') == 'daily':
+                                # Schedule for next day at the same time
+                                self._reschedule_daily_reminder(reminder)
+                            else:
+                                # Mark one-time reminder as notified
+                                self.mark_reminded(reminder["id"])
                         else:
                             print("Assistant is speaking, will retry reminder later")
                 

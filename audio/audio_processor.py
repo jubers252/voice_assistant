@@ -5,8 +5,6 @@ import time
 from dotenv import load_dotenv
 import sounddevice as sd
 import speech_recognition as sr
-import edge_tts
-import asyncio
 import tempfile
 import pygame
 import soundfile as sf
@@ -14,9 +12,9 @@ import threading
 import numpy as np
 from collections import deque
 from contextlib import contextmanager
-from google.cloud import texttospeech
-from google.oauth2 import service_account
 from langdetect import detect
+import re
+import azure.cognitiveservices.speech as speechsdk
 # For Hindi transliteration
 try:
     from indic_transliteration import sanscript
@@ -48,6 +46,36 @@ def suppress_alsa_errors():
 
 CONVERSATION_FILE = "conversation_history.json"
 
+def clean_text_for_speech(text: str) -> str:
+    """
+    Clean text before passing to speech synthesis.
+    Preserves sentence structure and punctuation needed for natural TTS.
+    
+    Args:
+        text: Text to clean
+        
+    Returns:
+        Cleaned text - keeps punctuation and structure for TTS
+    """
+    
+    
+    # Remove ONLY problematic characters: markdown bullets, angle brackets
+    # KEEP: periods, commas, question marks, exclamation marks (essential for TTS)
+    problematic_chars = ['*', '>', '<']
+    cleaned_text = text
+    for char in problematic_chars:
+        cleaned_text = cleaned_text.replace(char, '')
+    
+    # Remove markdown list symbols (-, •) at line start
+    cleaned_text = re.sub(r'^[-•]\s+', '', cleaned_text, flags=re.MULTILINE)
+    
+    # Clean up extra spaces but preserve structure
+    lines = cleaned_text.split('\n')
+    lines = [' '.join(line.split()) for line in lines if line.strip()]
+    cleaned_text = ' '.join(lines)
+    
+    return cleaned_text
+
 # Wake word detection parameters (matching training)
 n_mfcc = 40
 n_fft = 2048
@@ -65,7 +93,7 @@ class AudioProcessors:
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
         self.mic_device_id = 2   # Google voiceHAT with stereo INMP mics (hw:3,0)
         self.mic_gain_factor = 1.0  # Increased for voiceHAT stereo INMP mics
-        self.digital_gain = 8.0     # BOOSTED 8x: for quieter speech detection with music playing
+        self.digital_gain = 5.0     # BOOSTED 5x: for quieter speech detection with music playing
 
         # Audio processing
         self.sample_rate = 22050
@@ -139,6 +167,28 @@ class AudioProcessors:
                 sd.wait()
             
             print("Recording complete.")
+            
+            # Balance gain across stereo channels before flattening
+            if self.audio_channels == 2 and audio.ndim == 2:
+                # Normalize each channel to same RMS level
+                channel_left = audio[:, 0]
+                channel_right = audio[:, 1]
+                
+                # Calculate RMS for each channel
+                rms_left = np.sqrt(np.mean(channel_left ** 2))
+                rms_right = np.sqrt(np.mean(channel_right ** 2))
+                
+                if rms_left > 0 and rms_right > 0:
+                    # Gain balance: scale both channels to average RMS
+                    avg_rms = (rms_left + rms_right) / 2
+                    gain_left = avg_rms / rms_left
+                    gain_right = avg_rms / rms_right
+                    
+                    audio[:, 0] = channel_left * gain_left
+                    audio[:, 1] = channel_right * gain_right
+                    
+                    print(f"Balanced stereo gain - Left gain: {gain_left:.3f}, Right gain: {gain_right:.3f}")
+            
             audio_flat = audio.flatten()
             
             # Apply fixed digital gain
@@ -180,6 +230,9 @@ class AudioProcessors:
         """
         Threaded TTS function with interruption support and improved Hindi handling
         """
+        # Clean text before processing
+        # text = clean_text_for_speech(text)
+        
         # Stop any current speech first
         if self.is_speaking:
             self.stop_speech()
@@ -199,11 +252,13 @@ class AudioProcessors:
         # Reset interruption flag
         self.speech_interrupted = False
         
-        lang = detect(text)
-        # if lang != "hi" :
-        #     is_hindi = self.detect_hindi_by_keywords(text)
-        #     if is_hindi:
-        #         text = self.transliterate_to_devanagari(text)
+        # Detect language - if Hindi characters found, use Hindi
+        lang = 'en'
+        hindi_pattern = r'[\u0900-\u097F]'  # Hindi Unicode range
+        if re.search(hindi_pattern, text):
+            lang = 'hi'
+        else:
+            lang = detect(text) if text.strip() else 'en'
                 
         print(f"Final TTS text (lang={lang}): {text}")
         # Start new speech thread
@@ -214,154 +269,79 @@ class AudioProcessors:
         self.speech_thread.daemon = True
         self.speech_thread.start()
 
+    def generate_and_play_azure_tts(self, text, speech_file_path=None, lang="en"):
+        """Generate speech with Azure TTS and save to file for playback control.
         
-    def generate_and_play_google_tts(self, text, speech_file_path=None, lang="en"):
-        """Generate speech with Google Cloud TTS and save to `speech_file_path`.
-
         Returns the path to the generated file on success, or None on failure.
         """
         start_time = time.time()
         
-        # Select voice based on language
-        if lang == "hi":
-            language_code = "hi-IN"
-            voice_name = "hi-IN-Chirp3-HD-Achernar"
-            speaking_rate = 0.90  # Normal rate for natural speech
-        else:
-            language_code = "en-IN"
-            voice_name = "en-IN-Chirp3-HD-Achernar"
-            speaking_rate = 0.95  # Normal rate for natural speech
-        
-        print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
         try:
+            # Get Azure credentials from environment
+            azure_key = os.getenv("tts_key")
+            azure_region = os.getenv("tts_region", "centralindia")
+            
+            if not azure_key:
+                raise ValueError("Azure TTS key not found in environment (tts_key)")
+            
             if not speech_file_path:
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
                 speech_file_path = tmp.name
                 tmp.close()
-
-            # Google TTS has 5000 character limit per synthesis request
-            # Split only if text exceeds limit, otherwise keep it whole for natural flow
-            max_chunk_size = 5000
             
-            if len(text) <= max_chunk_size:
-                # Text fits in one request - best for natural speech
-                chunks = [text]
+            # Select voice based on language
+            if lang == "hi":
+                voice_name = "hi-IN-AartiNeural"
             else:
-                import re
-
-                sentences = re.split(r'(?<=[.!?।])\s+', text)
-                
-                chunks = []
-                current_chunk = ""
-                
-                for sentence in sentences:
-                    sentence = sentence.strip()
-                    if not sentence:
-                        continue
-                    
-                    # If adding this sentence exceeds max size, save and start new chunk
-                    test_chunk = current_chunk + (" " if current_chunk else "") + sentence
-                    if len(test_chunk) > max_chunk_size:
-                        if current_chunk.strip():
-                            chunks.append(current_chunk.strip())
-                        current_chunk = sentence
-                    else:
-                        if current_chunk:
-                            current_chunk += " " + sentence
-                        else:
-                            current_chunk = sentence
-                
-                # Add remaining chunk
-                if current_chunk.strip():
-                    chunks.append(current_chunk.strip())
-                
-                # If no chunks, use original text
-                if not chunks:
-                    chunks = [text]
-
-            print(f"Text length: {len(text)} chars. Chunks: {len(chunks)}")
-
-            # Load credentials from service account file
-            creds = service_account.Credentials.from_service_account_file(
-                "nimble-gate-366207-d1ca63590ec3.json"
-            )
+                voice_name =  "en-IN-AartiNeural"
             
-            # Create client
-            client = texttospeech.TextToSpeechClient(credentials=creds)
+            # Create Azure speech config
+            azure_config = speechsdk.SpeechConfig(subscription=azure_key, region=azure_region)
+            azure_config.speech_synthesis_voice_name = voice_name
             
-            # Generate TTS for each chunk and combine
-            audio_segments = []
-            for i, chunk in enumerate(chunks):
-                if not chunk.strip():
-                    continue
-                
-                print(f"Generating TTS chunk {i+1}/{len(chunks)}: {len(chunk)} chars")
-                    
-                response = client.synthesize_speech(
-                    input=texttospeech.SynthesisInput(text=chunk),
-                    voice=texttospeech.VoiceSelectionParams(
-                        language_code=language_code,
-                        name=voice_name,
-                    ),
-                    audio_config=texttospeech.AudioConfig(
-                        audio_encoding=texttospeech.AudioEncoding.MP3,
-                        speaking_rate=speaking_rate,
-                        pitch=0.0,  # Normal pitch
-                    )
-                )
-                audio_segments.append(response.audio_content)
+            # Output to file for playback control (supports interruption)
+            audio_config = speechsdk.audio.AudioOutputConfig(filename=speech_file_path)
             
-            # Combine all audio segments with small pause between them if multiple chunks
-            if len(audio_segments) > 1:
-                # Add small silence between chunks for natural pause
-                # This is approximately 500ms of silence
-                silence_duration = 0.5
-                combined_audio = audio_segments[0]
-                for segment in audio_segments[1:]:
-                    combined_audio += segment
-            else:
-                combined_audio = audio_segments[0] if audio_segments else b''
+            # Create synthesizer
+            synthesizer = speechsdk.SpeechSynthesizer(speech_config=azure_config, audio_config=audio_config)
             
-            print(f"Combined {len(audio_segments)} audio segment(s)")
+            print(f"Generating Azure TTS (voice={voice_name}, lang={lang})")
             
-            # Save to file
-            with open(speech_file_path, 'wb') as out:
-                out.write(combined_audio)
-
-            generation_time = time.time() - start_time
-            print(f"Audio generation took: {generation_time:.2f} seconds -> {speech_file_path}")
-            return speech_file_path
+            # Synthesize speech to file
+            result = synthesizer.speak_text_async(text).get()
+            
+            # Check result
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                generation_time = time.time() - start_time
+                print(f"Azure TTS generation took: {generation_time:.2f} seconds -> {speech_file_path}")
+                return speech_file_path
+            elif result.reason == speechsdk.ResultReason.Canceled:
+                cancellation_details = result.cancellation_details
+                print(f"Azure TTS canceled: {cancellation_details.reason}")
+                if cancellation_details.error_details:
+                    print(f"Error details: {cancellation_details.error_details}")
+                return None
+            
         except Exception as e:
-            print(f"Google TTS generation error: {e}")
+            print(f"Azure TTS error: {e}")
             return None
 
-
     def _generate_and_play_simple(self, text, prompt=None, lang="en"):
-        """Generate speech (Google Cloud TTS preferred; Edge TTS fallback) and play it."""
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        """Generate speech with Azure TTS and play with pygame for interruption support."""
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp_file_path = tmp_file.name
         tmp_file.close()
 
         try:
-            # Try Google Cloud TTS first
-            try:
-                gen_path = self.generate_and_play_google_tts(text, speech_file_path=tmp_file_path, lang=lang)
-                if not gen_path:
-                    raise RuntimeError('Google TTS generation failed')
-            except Exception as google_error:
-                print(f"Google TTS failed, falling back to Edge TTS: {google_error}")
-                # Edge TTS fallback with language support
-                if lang == "hi":
-                    voice_to_use = 'hi-IN-SwaraNeural'
-                else:
-                    voice_to_use = 'en-IN-AartiNeural'
-                communicate = edge_tts.Communicate(text, voice_to_use)
-                asyncio.run(communicate.save(tmp_file_path))
+            # Generate Azure TTS to file
+            gen_path = self.generate_and_play_azure_tts(text, speech_file_path=tmp_file_path, lang=lang)
+            if not gen_path:
+                raise RuntimeError('Azure TTS generation failed')
 
-            # Play audio with pygame (with fallback)
+            # Play audio with pygame (supports interruption via stop_speech)
             if os.path.exists(tmp_file_path):
                 try:
-                    # Ensure mixer is initialized (single initialization per session)
+                    # Ensure mixer is initialized
                     if not pygame.mixer.get_init():
                         self._init_pygame_mixer()
                     
@@ -369,6 +349,7 @@ class AudioProcessors:
                     pygame.mixer.music.set_volume(0.8)
                     pygame.mixer.music.play()
 
+                    # Play while monitoring for interruption
                     while pygame.mixer.music.get_busy() and not self.speech_interrupted:
                         time.sleep(0.1)
 
@@ -380,6 +361,7 @@ class AudioProcessors:
         except Exception as e:
             print(f"TTS error: {e}")
         finally:
+            # Clean up temp file
             try:
                 if os.path.exists(tmp_file_path):
                     time.sleep(0.2)
@@ -387,58 +369,6 @@ class AudioProcessors:
             except Exception:
                 pass
     
-    def _play_bluetooth_wakeup(self):
-        """Play a very short, quiet sound to wake up Bluetooth speaker
-        
-        This prevents the first words from being cut off on Bluetooth speakers
-        which have a startup delay.
-        """
-        try:
-            # Generate a longer wakeup sound (300ms) for slower Bluetooth speakers
-            duration = 0.3  # 300 milliseconds - longer for Bluetooth lag
-            frequency = 440  # Hz (A4 note, but will be very quiet)
-            sample_rate = 22050
-            
-            # Generate sine wave
-            t = np.linspace(0, duration, int(sample_rate * duration))
-            waveform = np.sin(2 * np.pi * frequency * t)
-            
-            # Make it very quiet (3% volume) so user barely hears it
-            waveform = waveform * 0.03
-            
-            # Convert to 16-bit PCM
-            waveform_int16 = (waveform * 32767).astype(np.int16)
-            
-            # Create a temporary WAV file
-            import wave
-            temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            temp_wav_path = temp_wav.name
-            temp_wav.close()
-            
-            with wave.open(temp_wav_path, 'w') as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)   # 16-bit
-                wav_file.setframerate(sample_rate)
-                wav_file.writeframes(waveform_int16.tobytes())
-            
-            # Play the wakeup sound
-            sound = pygame.mixer.Sound(temp_wav_path)
-            sound.set_volume(0.03)  # Very quiet
-            sound.play()
-            
-            # Wait for it to finish (300ms + buffer for Bluetooth)
-            time.sleep(0.4)
-            
-            # Clean up
-            try:
-                os.unlink(temp_wav_path)
-            except:
-                pass
-                
-        except Exception as e:
-            # If wakeup fails, just continue - not critical
-            if self.debug_mode:
-                print(f"Bluetooth wakeup sound failed (non-critical): {e}")
     
     def _speak_threaded(self, text, prompt, lang="en"):
         """Threaded speech function with interruption support and improved Hindi processing"""
@@ -468,20 +398,8 @@ class AudioProcessors:
             else:
                 print("[DEBUG] pixel_led is None - LED not available")
     
-    def _clean_hindi_text(self, text):
-        """Clean and prepare Hindi text for better TTS pronunciation"""
-        import re
-        
-        # Remove excessive punctuation that might affect pronunciation
-        text = re.sub(r'[^\w\s\u0900-\u097F.,!?]', '', text)
-        
-        # Add pauses after sentences for better clarity
-        text = re.sub(r'([.!?])', r'\1 ', text)
-        
-        # Ensure proper spacing
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
+
+    
     
     def stop_speech(self):
         """Stop current speech immediately"""
@@ -498,12 +416,13 @@ class AudioProcessors:
             if self.speech_thread and self.speech_thread.is_alive():
                 self.speech_thread.join(timeout=0.5)
     
+
     def wait_for_speech_completion(self, timeout=10):
         """Wait for current speech to complete (optional utility method)"""
         start_time = time.time()
         while self.is_speaking and (time.time() - start_time) < timeout:
             time.sleep(0.1)
-        return not self.is_speaking  # Returns True if speech completed, False if timeout
+        return not self.is_speaking  #
     
     
     def _system_beep(self):
@@ -532,6 +451,14 @@ class AudioProcessors:
         """
         self.digital_gain = max(0.1, min(10.0, gain_value))  # Clamp between 0.1x and 10x
         print(f"Digital gain set to {self.digital_gain}x")
+    
+    def get_digital_gain(self):
+        """Get current digital gain value
+        
+        Returns:
+            float: Current gain multiplier
+        """
+        return getattr(self, 'digital_gain', 1.0)
     
     def check_microphones(self):
         """Check available microphones and their indices"""
@@ -563,6 +490,8 @@ class AudioProcessors:
             print(f"Error with current microphone: {e}")
             print("Consider calling check_microphones() and updating mic_device_id")
     
+
+
     def play_beep_sound(self, beep_file = None):
         """Play a simple beep sound to indicate assistant is listening"""
         try:
@@ -595,6 +524,8 @@ class AudioProcessors:
         except Exception as e:
             print(f"Error playing beep: {e}")
             self._system_beep()
+
+
 
     def audio_callback(self, indata, frames, time_info, status):
         """Audio callback function - stores raw audio to buffer.
@@ -630,51 +561,4 @@ class AudioProcessors:
                 pass
 
         
-    # Comprehensive list of romanized Hindi words
-   
-
-    def detect_hindi_by_keywords(self, text):
-        """Simple and reliable: detect Hindi by counting Hindi words"""
-        self.HINDI_WORDS = {
-        # Pronouns
-        'main', 'mein', 'hum', 'aap', 'tum', 'tu', 'yeh', 'ye', 'woh', 'wo', 
-        'mera', 'meri', 'mere', 'tera', 'teri', 'tere', 'uska', 'uski', 'uske',
-        'hamara', 'hamari', 'hamare', 'tumhara', 'tumhari', 'tumhare',
-        
-        # Verbs
-        'hai', 'hain', 'ho', 'tha', 'thi', 'the', 'hoga', 'hogi', 'honge',
-        'karna', 'karo', 'kar', 'kiya', 'kiye', 'karta', 'karti', 'karte',
-        'jaana', 'jao', 'gaya', 'gayi', 'gaye', 'aana', 'aao', 'aaya', 'aayi',
-        'rahe', 'raha', 'rahi', 'chahiye', 'chaiye', 'sakta', 'sakti', 'sakte',
-        
-        # Question words
-        'kya', 'kaun', 'kab', 'kahan', 'kaise', 'kaisa', 'kaisi', 'kaise',
-        'kyun', 'kyu', 'kitna', 'kitni', 'kitne',
-        
-        # Common words
-        'abhi', 'aaj', 'kal', 'parso', 'subah', 'shaam', 'raat', 'din',
-        'baje', 'minute', 'ghanta', 'samay', 'waqt',
-        'bahut', 'thoda', 'jyada', 'kam', 'sab', 'kuch', 'koi',
-        'achha', 'acha', 'bura', 'theek', 'thik',
-        
-        # Postpositions
-        'ka', 'ki', 'ke', 'ko', 'se', 'mein', 'par', 'tak', 'ke liye',
-        
-        # Common phrases
-        'namaste', 'namaskar', 'dhanyavad', 'shukriya', 'maaf',
-        'haan', 'nahi', 'naa', 'ji', 'bilkul',
-        
-        # Weather/time
-        'mausam', 'garmi', 'sardi', 'baarish', 'dhoop', 'hawa',
-    }
-        words = text.lower().split()
-        
-        # Count Hindi words
-        hindi_count = sum(1 for word in words if word.strip('.,!?') in  self.HINDI_WORDS)
-        total_words = len(words)
-        
-        if hindi_count >= 3:  # At least 3 Hindi words
-            percentage = (hindi_count / total_words) * 100
-            return True
-        else:
-            return False
+ 

@@ -50,7 +50,7 @@ class VoiceAssistantRefactored:
         use_whisper = os.getenv('USE_WHISPER', 'false').lower() == 'true'
         if use_whisper:
             print("[ASSISTANT] Whisper speech recognition enabled")
-        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led, use_whisper=use_whisper)
+        self.recognizer = SpeechRecognizer(self.audio_processors, pixel_led = self.pixel_led)
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 
@@ -59,7 +59,7 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
 
-        ww_model_path = f"{model_dir}/WWD_mems_new_model_v1.h5"
+        ww_model_path = f"{model_dir}/WWD_mems_new_model_v2.h5"
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         

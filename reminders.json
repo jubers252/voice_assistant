@@ -1,101 +1,32 @@
 [
   {
     "id": 1,
-    "text": "take medicine",
+    "text": "\u0938\u0941\u092c\u0939 \u0915\u093e 9:00 \u092c\u091c\u0947 \u0926\u0948\u0928\u093f\u0915 \u0905\u0932\u093e\u0930\u094d\u092e",
     "description": "",
-    "remind_time": "2025-10-05T16:21:05.693359",
-    "created_time": "2025-10-05T16:20:05.693359",
+    "remind_time": "2026-01-12T09:00:00",
+    "created_time": "2026-01-07T23:49:04.439155",
     "active": true,
-    "notified": true
+    "notified": false,
+    "recurring": "daily"
   },
   {
     "id": 2,
-    "text": "check email",
+    "text": "whenever you need anything always ask for love",
     "description": "",
-    "remind_time": "2025-10-05T16:37:04.279220",
-    "created_time": "2025-10-05T16:36:04.280238",
-    "active": true,
-    "notified": true
+    "remind_time": "2026-01-10T00:23:54.016339",
+    "created_time": "2026-01-09T23:53:54.016374",
+    "active": false,
+    "notified": false,
+    "recurring": "once"
   },
   {
     "id": 3,
-    "text": "test alarm sound",
+    "text": "\u0926\u0942\u0927 \u0926\u094c\u0921\u093c \u0915\u093e \u0911\u0930\u094d\u0921\u0930 \u0915\u0930\u0928\u093e",
     "description": "",
-    "remind_time": "2025-10-05T16:42:20.016499",
-    "created_time": "2025-10-05T16:40:20.016499",
+    "remind_time": "2026-01-10T10:00:00",
+    "created_time": "2026-01-10T00:10:32.712614",
     "active": true,
-    "notified": true
-  },
-  {
-    "id": 999,
-    "text": "IMMEDIATE TEST ALARM - THIS SHOULD PLAY SOUND",
-    "description": "",
-    "remind_time": "2025-10-05T16:41:41.859793",
-    "created_time": "2025-10-05T16:41:42.859793",
-    "active": true,
-    "notified": true
-  },
-  {
-    "id": 5,
-    "text": "check email",
-    "description": "",
-    "remind_time": "2025-10-05T04:54:33.484458",
-    "created_time": "2025-10-05T16:52:33.484458",
-    "active": true,
-    "notified": true
-  },
-  {
-    "id": 6,
-    "text": "check email",
-    "description": "",
-    "remind_time": "2025-10-05T17:24:44.571378",
-    "created_time": "2025-10-05T17:14:44.572336",
-    "active": true,
-    "notified": true
-  },
-  {
-    "id": 7,
-    "text": "take medicine",
-    "description": "",
-    "remind_time": "2025-10-05T17:31:36.097861",
-    "created_time": "2025-10-05T17:25:36.097861",
-    "active": true,
-    "notified": true
-  },
-  {
-    "id": 8,
-    "text": "TEST REMINDER - should work",
-    "description": "",
-    "remind_time": "2025-10-05T17:32:07.871492",
-    "created_time": "2025-10-05T17:31:07.871492",
-    "active": true,
-    "notified": true
-  },
-  {
-    "id": 9,
-    "text": "take medicine",
-    "description": "",
-    "remind_time": "2025-10-05T17:45:07.382635",
-    "created_time": "2025-10-05T17:40:07.382635",
-    "active": true,
-    "notified": true
-  },
-  {
-    "id": 10,
-    "text": "Zepto milk order",
-    "description": "",
-    "remind_time": "2025-12-25T14:29:09.241517",
-    "created_time": "2025-12-25T10:29:09.241561",
-    "active": true,
-    "notified": true
-  },
-  {
-    "id": 11,
-    "text": "Reminder",
-    "description": "",
-    "remind_time": "2025-12-28T15:29:40.372207",
-    "created_time": "2025-12-28T15:28:40.372237",
-    "active": true,
-    "notified": true
+    "notified": true,
+    "recurring": "once"
   }
 ]
