@@ -403,8 +403,6 @@ class LangChainAgentProcessor:
         """Search Amazon for detailed information about a single product"""
         def single_product_function(query: str) -> str:
             try:
-                from conversation.ai_respons_handler import AIResponseHandler
-                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "single_product_search",
@@ -412,7 +410,7 @@ class LangChainAgentProcessor:
                 }
                 result = get_amazon_result(tool_request)
                 
-                # Format the result nicely for the LLM
+                # Return data directly to agent with full URL
                 if isinstance(result, dict) and result.get('title'):
                     title = result.get('title', 'Unknown Product')
                     price = result.get('price', 'Price not available')
@@ -421,22 +419,18 @@ class LangChainAgentProcessor:
                     url = result.get('url', 'N/A')
                     sales_volume = result.get('sales_volume')
                     
-                    # Build a comprehensive data string for TTS summarization
-                    product_data = f"""Product Name: {title}
-Price: {price}
-Rating: {rating} out of 5 stars
-Number of Reviews: {reviews}"""
-                    
+                    # Return formatted data directly - agent will speak naturally
+                    product_data = f"""Product: {title}
+                    Price: {price}
+                    Rating: {rating} out of 5 stars
+                    Reviews: {reviews}"""
+                            
                     if sales_volume:
                         product_data += f"\nSales Volume: {sales_volume}"
                     
-                    product_data += f"\nProduct Link: {url}"
+                    product_data += f"\nURL: {url}"
                     
-                    # Use AI handler to create a natural TTS-friendly summary
-                    ai_handler = AIResponseHandler(self.conversation_manager)
-                    tts_response = ai_handler.get_ai_response(product_data, is_tool_response=True)
-                    
-                    return tts_response
+                    return product_data
                 elif isinstance(result, dict):
                     return "Sorry, I couldn't find detailed information about that product. Please try another search."
                 return f"Amazon search result: {str(result)[:500]}"
@@ -454,8 +448,6 @@ Number of Reviews: {reviews}"""
         """Search Amazon for multiple products (comparison/browse)"""
         def multi_product_function(query: str) -> str:
             try:
-                from conversation.ai_respons_handler import AIResponseHandler
-                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "multi_product_search",
@@ -464,7 +456,7 @@ Number of Reviews: {reviews}"""
                 }
                 result = get_amazon_result(tool_request)
                 
-                # Format multiple products nicely for TTS
+                # Return data directly to agent with full URLs
                 if isinstance(result, list) and len(result) > 0:
                     product_list = []
                     for i, product in enumerate(result[:3], 1):  # Limit to top 3 for readability
@@ -472,18 +464,13 @@ Number of Reviews: {reviews}"""
                         price = product.get('price', 'Price not available')
                         rating = product.get('rating', 'No rating')
                         reviews = product.get('reviews_count', 'No reviews')
+                        url = product.get('url', 'URL not available')
                         
-                        product_summary = f"Product {i}: {title}. Price: {price}. Rating: {rating} out of 5 stars with {reviews} reviews."
+                        product_summary = f"Product {i}: {title}\nPrice: {price}\nRating: {rating} out of 5 stars\nReviews: {reviews}\nURL: {url}"
                         product_list.append(product_summary)
                     
-                    # Combine all products into one string for TTS summarization
-                    products_data = " ".join(product_list)
-                    
-                    # Use AI handler to create a natural TTS-friendly summary
-                    ai_handler = AIResponseHandler(self.conversation_manager)
-                    tts_response = ai_handler.get_ai_response(products_data, is_tool_response=True)
-                    
-                    return tts_response
+                    # Return directly - agent will format naturally for speech
+                    return "\n\n".join(product_list)
                 else:
                     return "Sorry, I couldn't find any products matching your search. Please try a different search term."
             except Exception as e:
@@ -1124,7 +1111,7 @@ Number of Reviews: {reviews}"""
         
         # Initialize LLM
         llm = ChatOpenAI(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             temperature=1,  # o4-mini supports temperature values between 0 and 1
             openai_api_key=os.getenv('OPENAI_API_KEY'),
         )
@@ -1159,7 +1146,7 @@ Spotify: control_spotify_playback (resume|pause|next), play_spotify_track, play_
 Home Automation: control device on/off
 Volume: increase, decrease, mute, set
 Web Search: news, weather, prices, live info (always for "latest", "current", "today", "now")
-Amazon: search_amazon_single_product, search_amazon_multiple_products (include: name, price, rating, link) summerize in tts friendly way.
+Amazon: search_amazon_single_product, search_amazon_multiple_products (include: name, price, rating, url) summerize in tts friendly way.
 Amazon Orders: track_amazon_orders (show date + details) summerize in tts friendly way.
 Reminders: set_reminder, list_reminders, cancel_reminder, check_reminders
 Telegram: message, photo, document, video

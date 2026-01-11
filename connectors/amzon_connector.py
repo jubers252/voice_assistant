@@ -467,9 +467,9 @@ if __name__ == '__main__':
     # Default single-product flow
    tool_request = {
        "action": "single_product_search",  # or "single_product_search"
-       "query": "vivo x 200 pro"
+       "query": "ZEBRONICS Astra 35, Portable Bluetooth Speaker"
    }
    tool_result = get_amazon_result(tool_request)
-   with open('amazon_vivo_x_fold_5_product_info.json', 'w', encoding='utf-8') as f:
+   with open('amazon_bluetooth_speacker_product_info.json', 'w', encoding='utf-8') as f:
        json.dump(tool_result, f, ensure_ascii=False, indent=2)
    print(tool_result)

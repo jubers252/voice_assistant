@@ -89,7 +89,7 @@ class SpeechRecognizer:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.10 
         self.recognizer.dynamic_energy_ratio = 1.3 
-        self.recognizer.pause_threshold = 1.0 
+        self.recognizer.pause_threshold = 1.5 
         self.recognizer.phrase_threshold = 0.2
         self.recognizer.non_speaking_duration = 0.7
     
