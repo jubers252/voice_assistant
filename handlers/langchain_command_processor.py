@@ -90,7 +90,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
