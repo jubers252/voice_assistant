@@ -85,8 +85,8 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         """Configure speech recognition parameters"""
-        self.recognizer.energy_threshold = 300
-        self.recognizer.dynamic_energy_threshold = True
+        self.recognizer.energy_threshold = 20
+        self.recognizer.dynamic_energy_threshold = False
         self.recognizer.dynamic_energy_adjustment_damping = 0.15
         self.recognizer.dynamic_energy_ratio = 1.5
         self.recognizer.pause_threshold = 1.0

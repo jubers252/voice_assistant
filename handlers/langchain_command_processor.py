@@ -11,6 +11,7 @@ import time
 import speech_recognition as sr
 from typing import Dict, Any
 from dotenv import load_dotenv
+from audio.audio_processor import clean_text_for_speech
 import re
 import warnings
 import urllib3
@@ -403,6 +404,14 @@ class LangChainAgentProcessor:
         """Search Amazon for detailed information about a single product"""
         def single_product_function(query: str) -> str:
             try:
+                # Sanitize query - remove any index prefixes like "1|", "2|" etc
+                query = query.strip()
+                if '|' in query:
+                    # Remove anything before the first pipe that looks like an index
+                    parts = query.split('|', 1)
+                    if parts[0].strip().isdigit():
+                        query = parts[1].strip()
+                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "single_product_search",
@@ -440,7 +449,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="search_amazon_single_product",
-            description="Search Amazon for detailed information about a specific single product with price, rating, and direct product link. Use when user wants detailed info about one product.",
+            description="Search Amazon for detailed information about a specific single product with price, rating, and direct product link. Use when user wants detailed info about one product. Input: product name only (e.g., 'iphone 15' NOT '1|iphone 15').",
             func=single_product_function
         )
     
@@ -448,6 +457,14 @@ class LangChainAgentProcessor:
         """Search Amazon for multiple products (comparison/browse)"""
         def multi_product_function(query: str) -> str:
             try:
+                # Sanitize query - remove any index prefixes like "1|", "2|" etc
+                query = query.strip()
+                if '|' in query:
+                    # Remove anything before the first pipe that looks like an index
+                    parts = query.split('|', 1)
+                    if parts[0].strip().isdigit():
+                        query = parts[1].strip()
+                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "multi_product_search",
@@ -479,7 +496,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="search_amazon_multiple_products",
-            description="Search Amazon for multiple products to compare options with prices, ratings, and direct product links. Use when user wants to see several product choices or browse options.",
+            description="Search Amazon for multiple products to compare options with prices, ratings, and direct product links. Use when user wants to see several product choices or browse options. Input: product name only (e.g., 'iphone 15' NOT '1|iphone 15').",
             func=multi_product_function
         )
     
@@ -1055,7 +1072,7 @@ class LangChainAgentProcessor:
                 
                 # Listen with longer timeout for follow-up
                 # Music detection happens inside listen_for_command, which will reduce timeout to 5s if music is playing
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=1)
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0)
                 
                 if follow_up_command:
                     print(f"Received follow-up response: '{follow_up_command}'")
@@ -1111,7 +1128,7 @@ class LangChainAgentProcessor:
         
         # Initialize LLM
         llm = ChatOpenAI(
-            model="gpt-4.1-mini",
+            model="ft:gpt-4.1-nano-2025-04-14:personal:sofi-20260110-1608:CwQqy5na",
             temperature=1,  # o4-mini supports temperature values between 0 and 1
             openai_api_key=os.getenv('OPENAI_API_KEY'),
         )
@@ -1124,63 +1141,23 @@ class LangChainAgentProcessor:
         )
         
         # Create system prompt
-        system_prompt = """You are Sofi, female voice assistant in Pune, India.
-your responses must be concise, natural, and suitable for text-to-speech.
-LANGUAGE: Hindi → हिंदी देवनागरी only. English → English only.
-Always respond in the same language as the user input.
-Always response as a female voice assistant like alexa or siri.
-VOICE OUTPUT: Short, natural, conversational. No markdown, emojis, special chars. Think internally for complex tasks.
+        system_prompt = """You are Sofi, a female voice assistant in Pune, India.
 
-HINDI GRAMMAR: When speaking to user in Hindi, use respectful masculine/neutral forms (आप + masculine verb endings like चाहेंगे, करेंगे, सुनेंगे) NOT feminine forms (चाहेंगी, करेंगी). Example: "और कुछ चाहेंगे?" NOT "और कुछ चाहेंगी?"
+    LANGUAGE: Match user's language - Hindi → हिंदी देवनागरी only, English → English only
 
-TIME FORMAT FOR HINDI: When telling time in Hindi, use natural format:
-- Say "3 बजकर 33 मिनट" NOT "3:33"
-- Say "सुबह 8 बजे" for 8:00 AM
-- Say "रात 11 बजकर 15 मिनट" for 11:15 PM
-- Use: सुबह (morning 5am-12pm), दोपहर (afternoon 12pm-5pm), शाम (evening 5pm-8pm), रात (night 8pm-5am)
+    HINDI: Use masculine/neutral forms (चाहेंगे, करेंगे) NOT feminine (चाहेंगी, करेंगी)
+    TIME (HINDI): "3 बजकर 33 मिनट" NOT "3:33" | सुबह/दोपहर/शाम/रात for time periods
 
-HOW TO ASK QUESTIONS:
-- NEVER put questions in your response text
-- ALWAYS use ask_follow_up_question tool when you want to ask the user something
-- Examples of contextual follow-ups to ask with followu:
-  * After showing a product: "Would you like to check prices on other platforms?"
-  * After saying "Do you need anything else?" use ask_follow_up_question tool immediately
-  * After playing music: "Want me to play a similar artist?"
-  * After order tracking: "Need help with returns?"
-  * After reminders: "Should I set another reminder?"use ask_follow_up_question tool immediately
+    OUTPUT: TTS-friendly - NO markdown [links], **bold**, bullet points. NO emojis. NO special chars. NO URLs ever. Short, natural, conversational.
+      FOLLOW-UPS: When clarification is needed, ALWAYS use the `ask_follow_up_question` tool rather than embedding a question in assistant text. Follow-ups must be one short sentence (≤12 words), specific, and polite (e.g., "Do you want the product link?"). Only ask the single piece of missing info required to proceed.
 
-TOOLS:
-Spotify: control_spotify_playback (resume|pause|next), play_spotify_track, play_spotify_album, play_spotify_artist
-Home Automation: control device on/off
-Volume: increase, decrease, mute, set
-Web Search: news, weather, prices, live info (always for "latest", "current", "today", "now")
-Amazon: search_amazon_single_product, search_amazon_multiple_products (include: name, price, rating, url) summerize in tts friendly way.
-Amazon Orders: track_amazon_orders (show date + details) summerize in tts friendly way.
-Reminders: set_reminder, list_reminders, cancel_reminder, check_reminders
-Telegram: message, photo, document, video
-Zepto Grocery Ordering:
-  WORKFLOW: login → clear_cart → search|product_name → [SHOW RESULTS] → add_product|name|qty|index → order_details → checkout → [CONFIRM] → place_order → cleanup
-  
-  SEARCH: After search completes, ALWAYS show all results to user with product names and index numbers, then use ask_follow_up_question tool to ask which one to add.
-  
-  ADD_PRODUCT: Format is 'add_product|product_name|quantity|product_index'
-    - product_name: EXACT name from search results (may contain pipes/special chars)
-    - quantity: number to add (default 1)
-    - product_index: position in results (0-based, first item = 0)
-    - Example: 'add_product|McCain French Fries Crispy & Ready to Cook|2|4'
-  
-  ORDER_DETAILS: Always check order summary before checkout. Show total, items, fees.
-  
-  CHECKOUT: Goes to payment page and auto-selects Cash on Delivery (COD). Then MUST ask confirmation using ask_follow_up_question tool: "Your order total is ₹X with Y items. Cash on Delivery is selected. Confirm to place order?"
-  after every zepto order completion or cancelled or failed cleanup the browser.
-  PLACE_ORDER: Only execute after explicit user confirmation. Once order placed, cleanup automatically.
-  
-  IMPORTANT: Payment page has NO back button. If user wants to cancel after checkout, must cleanup and restart entire order.
-  for incorrect or wroing orders, apologize and offer to help with a new fresh order.
+    AMAZON: When returning Amazon product information, Summarize product details in a concise, user-friendly way: include Title, Price (if available), Rating, Reviews count. (e.g., "1) Product A — ₹X, 4.2 star, compact, product link 2) Product B — ₹Y, 4.0star, louder, product link ").
+    when user requests send product links via Telegram, use send_telegram_message tool with product details and links.
+    CRITICAL: NEVER put questions in response text. ALWAYS use ask_follow_up_question tool.
 
-TIME-SENSITIVE: Use search_web tool for current info. Never answer from internal knowledge.
+    TIME-SENSITIVE: Use search_web tool for latest/current/today/now queries.
 
-CAPABILITIES: Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation."""
+    CAPABILITIES: Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation."""
         # Create prompt template
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
@@ -1235,9 +1212,25 @@ CAPABILITIES: Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegra
                 response = result["output"]
                 print(response)
                 
-                # Add to conversation history
+                # Add to conversation history (store original response). Also extract any product/tool links
                 self.conversation_history.append({"role": "user", "content": user_command})
-                self.conversation_history.append({"role": "assistant", "content": response})
+                # Collect URLs from assistant response and from intermediate tool outputs
+                try:
+                    intermediate = result.get("intermediate_steps", [])
+                    combined = response + '\n' + str(intermediate)
+                    links = re.findall(r'(https?://\S+)', combined)
+                    # de-duplicate while preserving order
+                    seen_links = []
+                    for l in links:
+                        if l not in seen_links:
+                            seen_links.append(l)
+                except Exception:
+                    seen_links = []
+
+                assistant_entry = {"role": "assistant", "content": response}
+                if seen_links:
+                    assistant_entry["links"] = seen_links
+                self.conversation_history.append(assistant_entry)
 
                 # Persist conversation history if a ConversationManager is provided
                 try:
@@ -1249,7 +1242,12 @@ CAPABILITIES: Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegra
                 # Only speak if this wasn't a follow-up question (which already spoke)
                 # Check if ask_follow_up_question was used by looking at agent_scratchpad
                 if "ask_follow_up_question" not in str(result.get("intermediate_steps", [])):
-                    self.audio_processors.speak(response)
+                    # Keep original response in history, but sanitize links/URLs for speech
+                    try:
+                        tts_text = clean_text_for_speech(response)
+                    except Exception:
+                        tts_text = response
+                    self.audio_processors.speak(tts_text)
                 
                 return response
             

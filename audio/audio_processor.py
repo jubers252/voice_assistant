@@ -65,15 +65,25 @@ def clean_text_for_speech(text: str) -> str:
     cleaned_text = text
     for char in problematic_chars:
         cleaned_text = cleaned_text.replace(char, '')
-    
+
+    # Convert markdown links [label](url) -> label (keep visible text, drop URL)
+    cleaned_text = re.sub(r"\[([^\]]+)\]\((?:http[s]?://[^)]+)\)", r"\1", cleaned_text)
+
+    # Remove standalone URLs (http(s) and www) that may remain
+    cleaned_text = re.sub(r'http[s]?://\S+', '', cleaned_text)
+    cleaned_text = re.sub(r'www\.\S+', '', cleaned_text)
+
     # Remove markdown list symbols (-, •) at line start
     cleaned_text = re.sub(r'^[-•]\s+', '', cleaned_text, flags=re.MULTILINE)
-    
+
+    # Clean up leftover parentheses that only contained URLs
+    cleaned_text = re.sub(r"\(\s*\)", '', cleaned_text)
+
     # Clean up extra spaces but preserve structure
     lines = cleaned_text.split('\n')
     lines = [' '.join(line.split()) for line in lines if line.strip()]
     cleaned_text = ' '.join(lines)
-    
+
     return cleaned_text
 
 # Wake word detection parameters (matching training)
@@ -230,8 +240,8 @@ class AudioProcessors:
         """
         Threaded TTS function with interruption support and improved Hindi handling
         """
-        # Clean text before processing
-        # text = clean_text_for_speech(text)
+        # Clean text before processing (remove links/URLs etc.)
+        text = clean_text_for_speech(text)
         
         # Stop any current speech first
         if self.is_speaking:

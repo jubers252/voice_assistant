@@ -191,7 +191,7 @@ def main():
     api_key = load_config()
     client = OpenAI(api_key=api_key)
     
-    training_file = "sofi_comprehensive_training.jsonl"
+    training_file = "fine_tune/sofi_comprehensive_training.jsonl"
     base_model = "gpt-4.1-nano-2025-04-14"
     
     # Locate training file
