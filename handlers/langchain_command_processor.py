@@ -6,7 +6,6 @@ This replaces your current CommandProcessor with an intelligent agent
 
 import os
 import threading
-import json
 import time
 import speech_recognition as sr
 from typing import Dict, Any
@@ -16,17 +15,23 @@ import re
 import warnings
 import urllib3
 import gc
-
+import json
 # Suppress urllib3 warnings from Selenium WebDriver connections
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
-# LangChain imports (install with: pip install langchain langchain-openai)
-from langchain.agents import AgentExecutor, create_openai_tools_agent
-from langchain.memory import ConversationBufferWindowMemory
+
+# LangChain imports
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.tools import Tool, StructuredTool
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import Tool, StructuredTool
+from langchain.agents import create_agent
 from pydantic import BaseModel, Field
+
+# LangGraph imports for multi-agent routing
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Annotated, Sequence
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+import operator
 
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
@@ -56,6 +61,18 @@ def detect_language(text: str) -> str:
     if devanagari_count > english_count * 0.5:
         return 'hindi'
     return 'english'
+
+
+# LangGraph State Definition
+class AgentState(TypedDict):
+    """State for multi-agent routing system with shared data"""
+    messages: Annotated[Sequence[BaseMessage], operator.add]
+    user_input: str
+    next_agent: str  # Which agent to route to (or 'END' to finish)
+    final_response: str
+    # Shared data between agents (can store anything: product_details, search_results, etc.)
+    shared_context: dict
+    requires_handoff: bool  # Flag if agent needs to hand off to another
 
 
 class LangChainAgentProcessor:
@@ -97,6 +114,9 @@ class LangChainAgentProcessor:
         self._zepto_loop = None
         self._zepto_thread = None
         self._setup_zepto_loop()
+        
+        # Persistent state file path
+        self.state_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'agent_state.json')
         
         # LangChain-specific setup
         self.agent_executor = None
@@ -518,7 +538,11 @@ class LangChainAgentProcessor:
                 }
                 result = get_order(tool_request)
                 
-                if isinstance(result, list) and result:
+                # Handle different return types
+                if result is False or result is None:
+                    # No orders found or scraping failed
+                    return f"No orders found from the last {days} days."
+                elif isinstance(result, list) and result:
                     return f"Found {len(result)} orders from last {days} days: {str(result)}..."
                 elif isinstance(result, list):
                     return f"No orders found from the last {days} days."
@@ -626,7 +650,9 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="send_telegram_message",
-            description="Send a text message via Telegram. Input should be the message text.",
+            description="""Send a text message via Telegram to the user's mobile. Use this when user asks to 'send', 'share', or 'forward' something to their phone/mobile/telegram. 
+            Input should be the complete message text including any URLs, product details, or information to send. 
+            ALWAYS call this tool when user wants to send something - don't just say you'll send it.""",
             func=telegram_message_function
         )
     
@@ -1016,31 +1042,8 @@ class LangChainAgentProcessor:
 
     def _create_follow_up_question_tool(self) -> Tool:
         """Tool for the AI to ask follow-up questions and continue listening"""
-        def ask_follow_up_function(input_text: str) -> str:
+        def ask_follow_up_function(question: str) -> str:
             try:
-                # Parse input - format: "preamble|question" or just "question"
-                # Preamble is optional context/information to speak before asking the question
-                parts = input_text.split('|', 1)
-                if len(parts) == 2:
-                    preamble = parts[0].strip()
-                    question = parts[1].strip()
-                else:
-                    preamble = None
-                    question = input_text.strip()
-                
-                # Set LED to speaking state
-                if self.pixel_led:
-                    self.pixel_led.set_speaking()
-                
-                # If there's a preamble, speak it first
-                if preamble:
-                    print(f"Speaking preamble: {preamble}")
-                    self.audio_processors.speak(preamble)
-                    # Wait for preamble to complete
-                    while hasattr(self.audio_processors, 'is_speaking') and self.audio_processors.is_speaking:
-                        time.sleep(0.1)
-                    time.sleep(0.3)  # Brief pause between preamble and question
-                
                 # Speak the follow-up question (LED controlled in audio_processor)
                 self.audio_processors.speak(question)
                 
@@ -1052,52 +1055,74 @@ class LangChainAgentProcessor:
                 print("Speech completed, ready for follow-up...")
                 time.sleep(0.5)  # Longer buffer to ensure TTS cleanup
                 
-                # Set LED to listening state
-                if self.pixel_led:
-                    self.pixel_led.set_listening()
-                
                 # Now listen for follow-up response
                 print(f"AI asked: {question}")
                 print("Now listening for follow-up response...")
                 
-                # Use existing recognizer (with Spotify connector and Google Cloud v2 config)
-                # If no recognizer provided, create a basic one
-                if self.recognizer:
-                    recognizer = self.recognizer
-                else:
-                    recognizer = SpeechRecognizer(self.audio_processors)
+                # Create recognizer with better microphone handling
+                recognizer = SpeechRecognizer(self.audio_processors)
 
                 self.audio_processors.play_beep_sound()
                 time.sleep(0.2)
                 
                 # Listen with longer timeout for follow-up
-                # Music detection happens inside listen_for_command, which will reduce timeout to 5s if music is playing
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0)
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=1)
                 
                 if follow_up_command:
                     print(f"Received follow-up response: '{follow_up_command}'")
-                    # Return the response in a way that makes it clear this is answering the question
-                    return f"User's answer to your question: '{follow_up_command}'. Now complete the original task based on this answer without searching again."
-                else:
                     
-                    return "User did not respond to the question. Proceed with default action or inform user."
+                    # Use router LLM to analyze if this needs re-routing
+                    router_analysis = f"""Analyze this user response to determine if it's a simple answer or a new command:
+
+USER RESPONSE: "{follow_up_command}"
+
+Is this:
+A) A simple answer (product choice like "first one"/"third"/"boat", confirmation like "yes"/"no", quantity, etc.)
+B) A new command requiring different capabilities (send to telegram, search something, play music, etc.)
+
+Respond with only: SIMPLE_ANSWER or NEW_COMMAND"""
+                    
+                    analysis_result = self.router_llm.invoke([HumanMessage(content=router_analysis)])
+                    decision = analysis_result.content.strip().upper()
+                    
+                    print(f"[FOLLOW-UP] Router analysis: {decision}")
+                    
+                    if "NEW_COMMAND" in decision:
+                        # This is a new command - re-process through main workflow
+                        print(f"[FOLLOW-UP] Detected new command, re-routing through LangGraph")
+                        try:
+                            # Process through main workflow
+                            self.process_user_command(follow_up_command)
+                            return "Follow-up command was processed successfully."
+                        except Exception as e:
+                            return f"Error processing follow-up command: {str(e)}"
+                    else:
+                        # Simple answer - return to agent
+                        return f"User's answer: '{follow_up_command}'. Now complete the task based on this answer."
+                else:
+                    return "No follow-up response received"
                     
             except Exception as e:
                 return f"Follow-up error: {str(e)}"
         
         return Tool(
             name="ask_follow_up_question",
-            description="MANDATORY tool when you need to ask ANY question or need clarification from user. Format: 'information to speak first|your question' or just 'your question'. Use the pipe separator to provide context/information BEFORE asking the question. Example: 'Three products found: Product A ₹100, Product B ₹200, Product C ₹300|Which one would you like to purchase?' This will speak the product info FIRST, then ask the question. If your response would have a question mark '?', you MUST use this tool. NEVER ask questions in your text response.",
+            description="Ask clarifying questions when needed: volume direction, device selection, product/quantity choice, confirmation, payment method, time setup. Use for any ambiguous user input. Format: natural question text.",
             func=ask_follow_up_function
         )
     
+        
 
 
     def _setup_langchain_agent(self):
-        """Setup the LangChain agent with tools and memory"""
+        """Setup LangGraph multi-agent system with specialized agents"""
         
-        # Create tools from your existing connectors
-        self.tools = [
+        # ============================================
+        # STEP 1: Organize tools by agent specialty
+        # ============================================
+        
+        # Simple Agent Tools (fast model) - Basic operations
+        self.simple_tools = [
             self._create_current_weather_tool(),
             self._create_weather_forecast_tool(),
             self._create_timezone_tool(),
@@ -1106,130 +1131,483 @@ class LangChainAgentProcessor:
             self._create_spotify_play_album_tool(),
             self._create_spotify_play_artist_tool(),
             self._create_spotify_control_tool(),
-            self._create_search_tool(),
+            self._create_volume_control_tool(),
+        ]
+        
+        # Shopping Agent Tools (smart model) - E-commerce operations
+        self.shopping_tools = [
             self._create_amazon_single_product_tool(),
             self._create_amazon_multi_product_tool(),
-            self._create_amazon_order_tracking_tool(),
-            self._create_set_reminder_tool(),
-            self._create_list_reminders_tool(),
-            self._create_cancel_reminder_tool(),
-            self._create_check_reminders_tool(),
+            self._zepto_ordering_tool(),
+            self._create_zepto_order_history_tool(),
+            self._create_zepto_order_again_tool(),
+            self._create_zepto_track_orders_tool(),
+
+        ]
+        
+        # Communication Agent Tools (fast model) - Messaging & reminders
+        self.communication_tools = [
             self._create_telegram_message_tool(),
             self._create_telegram_photo_tool(),
             self._create_telegram_document_tool(),
             self._create_telegram_video_tool(),
-            self._create_volume_control_tool(),
-            self._create_follow_up_question_tool(),
-            self._zepto_ordering_tool(),
-            self._create_zepto_order_history_tool(),
-            self._create_zepto_order_again_tool(),
-            self._create_zepto_track_orders_tool()
+            self._create_set_reminder_tool(),
+            self._create_list_reminders_tool(),
+            self._create_cancel_reminder_tool(),
+            self._create_check_reminders_tool(),
         ]
         
-        # Initialize LLM
-        llm = ChatOpenAI(
-            model="gpt-4.1-mini",
-            temperature=1,  # o4-mini supports temperature values between 0 and 1
+        # Analysis Agent Tools (smart model) - Complex reasoning
+        self.analysis_tools = [
+            self._create_search_tool(),
+            self._create_amazon_order_tracking_tool(),
+        ]
+        
+        # Follow-up tool available to all agents
+        self.follow_up_tool = self._create_follow_up_question_tool()
+        
+        # ============================================
+        # STEP 2: Initialize different LLMs
+        # ============================================
+        
+        # Fast model for simple operations (excellent tool calling at low cost)
+        self.fast_llm = ChatOpenAI(
+            model="gpt-4.1-nano",
+            temperature=0.7,
             openai_api_key=os.getenv('OPENAI_API_KEY'),
         )
         
-        # Setup memory for conversation context
-        memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            k=10  # Remember last 10 exchanges
+        # Smart model for complex reasoning (best tool calling)
+        self.smart_llm = ChatOpenAI(
+            model="gpt-4.1-mini",
+            temperature=0.3,
+            openai_api_key=os.getenv('OPENAI_API_KEY'),
         )
         
-        # Create system prompt
-        system_prompt = """You are Sofi, a female voice assistant in Pune, India.
+        # Router model (lightweight for routing decisions)
+        self.router_llm = ChatOpenAI(
+            model="gpt-4.1-nano",
+            temperature=0,
+            openai_api_key=os.getenv('OPENAI_API_KEY'),
+        )
+        
+        # ============================================
+        # STEP 3: Create the multi-agent workflow
+        # ============================================
+        
+        self._create_langgraph_workflow()
+    
+    def _load_agent_state(self) -> dict:
+        """Load persisted agent state from JSON file"""
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[STATE] Could not load agent state: {e}")
+        return {
+            "shared_context": {},
+            "conversation_history": []
+        }
+    
+    def _save_agent_state(self, state: dict):
+        """Save agent state to JSON file"""
+        try:
+            os.makedirs(os.path.dirname(self.state_file), exist_ok=True)
+            # Convert state to JSON-serializable format
+            save_data = {
+                "shared_context": state.get("shared_context", {}),
+                "last_agent": state.get("next_agent", ""),
+                "timestamp": time.time()
+            }
+            with open(self.state_file, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, indent=2, ensure_ascii=False)
+            print(f"[STATE] Saved agent state to {self.state_file}")
+        except Exception as e:
+            print(f"[STATE] Could not save agent state: {e}")
+    
+    def _create_langgraph_workflow(self):
+        """Create LangGraph workflow with router and specialized agents"""
+        
+        # Load persisted state
+        persisted_state = self._load_agent_state()
+        
+        # ============================================
+        # Define Agent Nodes
+        # ============================================
+        
+        def router_node(state: AgentState) -> AgentState:
+            """Router decides which specialized agent to use"""
+            user_input = state["user_input"]
+            
+            # ALWAYS refresh conversation history from live memory (critical for follow-ups)
+            # Initialize or update shared_context with fresh history
+            if not state.get("shared_context"):
+                state["shared_context"] = {}
+            
+            # Load recent conversation history (last 5 messages)
+            recent_history = []
+            if self.conversation_history:
+                # Get last 5 user-assistant exchanges (10 messages total)
+                recent_history = self.conversation_history[-10:]
+                print(f"[ROUTER] Loading {len(recent_history)} messages from LIVE conversation history")
+                print(f"[ROUTER] Most recent message: {recent_history[-1] if recent_history else 'None'}")
+            else:
+                print("[ROUTER] No conversation history available")
+            state["shared_context"]["recent_conversation"] = recent_history
+            
+            # Format conversation history for router context
+            history_context = ""
+            if recent_history:
+                history_context = "\n\nRECENT CONVERSATION HISTORY:\n"
+                for msg in recent_history[-6:]:  # Last 3 exchanges
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    history_context += f"{role.upper()}: {content}\n"
+            
+            router_prompt = f"""Analyze the conversation history and current query to route to the correct agent.
+
+CURRENT USER QUERY: "{user_input}"
+{history_context}
+
+AVAILABLE AGENTS AND THEIR TOOLS:
+
+SIMPLE Agent:
+- get_weather, play_spotify_music, stop_spotify, control_volume, turn_lights_on/off, turn_fan_on/off, turn_ac_on/off
+
+SHOPPING Agent:  
+- search_amazon_product, search_amazon_multi_products, zepto_add_product_to_cart, zepto_order_history, zepto_track_orders, zepto_checkout
+
+COMMUNICATION Agent:
+- send_telegram_message, send_telegram_photo, send_telegram_document, send_telegram_video, add_reminder, list_reminders, delete_reminder, mark_reminder_complete
+
+ANALYSIS Agent:
+- perform_web_search, track_amazon_orders
+
+ROUTING INSTRUCTIONS:
+1. Analyze the history to understand context (e.g., if "it" or "that" refers to a product, order, or search result)
+2. Match the query to the agent with the necessary tools
+3. For compound actions (get data + send), route to data retrieval agent first
+4. If query references previous results (e.g., "send it", "send that product"), check if data is already available:
+   - If data exists in history → COMMUNICATION
+   - If data needs to be fetched → data agent first (SHOPPING/ANALYSIS)
+
+Respond with ONLY: SIMPLE, SHOPPING, COMMUNICATION, or ANALYSIS"""
+            
+            response = self.router_llm.invoke([HumanMessage(content=router_prompt)])
+            route = response.content.strip().upper()
+            
+            # Validate and default to SIMPLE if unclear
+            if route not in ["SIMPLE", "SHOPPING", "COMMUNICATION", "ANALYSIS"]:
+                route = "SIMPLE"
+            
+            print(f"[ROUTER] Query: '{user_input}' → Routed to: {route}")
+            
+            state["next_agent"] = route.lower()
+            state["messages"] = [HumanMessage(content=user_input)]
+            return state
+        
+        def simple_agent_node(state: AgentState) -> AgentState:
+            """Simple agent for basic operations - Uses gpt-4.1-nano"""
+            tools = self.simple_tools + [self.follow_up_tool]
+            
+            system_message = """You are Sofi, a female voice assistant in Pune, India.
+
+Handle: Weather, Spotify, Volume, Home Automation.
+
+**PERSONALITY:**
+- Friendly, helpful, and conversational
+- Keep responses SHORT (1-2 sentences)
+- Natural spoken language, no special characters
 
 **LANGUAGE:**
 - Hindi input → respond in हिंदी देवनागरी only (never roman transliteration)
 - English input → respond in English only
 
-**RULES:**
+**TOOL USAGE RULES:**
+- For ANY Spotify or volume control request (play, pause, next, previous, volume up/down/mute), you MUST use the provided tool. Do NOT just describe the action—ALWAYS call the tool.
+- For weather and home automation, also use the tool if available.
+- Use ask_follow_up_question tool when clarification needed.
+- NEVER ask questions in your response text."
+            
+            # Create agent using LangGraph's prebuilt agent
+            agent_executor = create_agent(self.fast_llm, tools)
+            
+            # Prepare messages with system prompt and conversation history
+            context_messages = []
+            
+            # Add recent conversation history for context
+            if state.get("shared_context", {}).get("recent_conversation"):
+                history = state["shared_context"]["recent_conversation"]
+                history_text = "\n".join([
+                    f"{'User' if msg.get('role') == 'user' else 'Assistant'}: {msg.get('content', '')}"
+                    for msg in history[-10:]  # Last 5 exchanges
+                ])
+                context_messages.append(HumanMessage(content=f"[CONVERSATION HISTORY]\n{history_text}\n"))
+            
+            # Add system message and current query
+            context_messages.append(HumanMessage(content=f"{system_message}\n\nUser: {state['user_input']}"))
+            
+            # Run the agent
+            result = agent_executor.invoke({"messages": context_messages})
+            
+            # Extract the final AI message
+            if result.get("messages"):
+                final_message = result["messages"][-1]
+                state["final_response"] = final_message.content if hasattr(final_message, 'content') else str(final_message)
+            else:
+                state["final_response"] = "I processed your request."
+            
+            return state
+        
+        def shopping_agent_node(state: AgentState) -> AgentState:
+            """Shopping agent for e-commerce - Uses gpt-4o"""
+            tools = self.shopping_tools + [self.follow_up_tool]
+            
+            system_message = """You are Sofi, a female voice assistant in Pune, India specializing in shopping.
+
+Handle: Amazon searches, Zepto ordering, Product purchases.
+
+**PERSONALITY:**
+- Helpful shopping advisor
+- Speak product details concisely for voice (2-3 key points)
 - Keep responses SHORT and conversational
-- Use ask_follow_up_question tool when clarification needed
-- No special characters, simple spoken language
 
-**SPOTIFY PLAYBACK CONTROL - MUST USE TOOL:**
-When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
-→ ALWAYS call control_spotify_playback tool with: pause|resume|next|skip
-→ Examples: 
-  - "play song" or "resume" → use control_spotify_playback with "resume"
-  - "pause" → use control_spotify_playback with "pause"
-  - "next song" or "skip" → use control_spotify_playback with "next"
-  - "pause music" → use control_spotify_playback with "pause"
+**LANGUAGE:**
+- Hindi input → respond in हिंदी देवनागरी only
+- English input → respond in English only
 
-**KEY TOOLS:**
-- HOME AUTOMATION: control|device:true/false (e.g., control|light:true)
-- VOLUME: increase/decrease/mute/set
-- SEARCH: news, prices, weather, web queries
-- SPOTIFY CONTROL: pause, resume, next, skip (use control_spotify_playback tool)
-- SPOTIFY PLAY: play specific track/album/artist (use play_spotify_track/album/artist tools)
-- TELEGRAM: send message, photo, document, video
-- ZEPTO: login, search, add_product, checkout, place_order
-- REMINDERS: set, list, cancel, check
+**CRITICAL - URL REQUIREMENT:**
+When presenting product results, ALWAYS include the full URL for each product.
+Format: "Product name – details, ₹Price. URL: https://www.amazon.in/..."
 
-**QUESTION RULE:**
-- NEVER ask questions in your response text
-- If you need to ask anything, always use ask_follow_up_question tool for clarification
-- Any response with "?" must use the tool instead
+**RULES:**
+- Check conversation history first - if user asks for same product recently searched, reuse those results
+- ALWAYS include product URLs in your responses (user might want to send them later)
+- ALWAYS get confirmation before placing orders (use ask_follow_up_question tool)
+- For Zepto: login → clear_cart → search → show result to user → add_product → checkout → get user confirmation → place_order → cleanup
+- NEVER ask questions in your response text, use the tool
 
-**Zepto ORDERING (IMPORTANT):**
- For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
-        Zepto Shopping:
-        - Workflow: login -> clear_cart -> search|product_name -> add_product|product_name|quantity|index -> order_details -> checkout -> ask user confirmation -> place_order → cleanup
-        - For 'search': pass action|product_name format
-        - explain search results to user and ask which product to add
-        - For 'add_product': pass action|product_name|quantity|product_index format (index from search results)
-        - checkout action automatically selects COD payment method
-        - ALWAYS get confirmation from user before calling 'place_order' using ask_follow_up_question tool
-        - After order placed, call cleanup to close browser
-        - Always clean the browser session after processing order or failed attempts to avoid multiple logins.
-
-**WEB SEARCH FOR LATEST UPDATES (MANDATORY):**
-- ALWAYS use search_web tool when user asks for: latest news, current prices, today's information, recent updates, live info, what's trending, current status
-- Use when: "what's the latest", "current", "today", "right now", "latest news about", "what's new", "latest updates", "current price of"
-- NEVER answer from knowledge cutoff - always search for current information
-- Format: Just the search query (e.g., "latest Bitcoin price", "current weather in Mumbai", "trending news today")
-- Examples: "latest iPhone price", "today's stock market updates", "current COVID cases in India"
-
-**CAPABILITIES:** Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation"""
-        # Create prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
+**HISTORY REUSE:**
+If conversation history shows a recent search for the same/similar product, reuse that information instead of searching again. Only search if it's a new/different product."""
+            
+            # Create agent using LangGraph's prebuilt agent
+            agent_executor = create_agent(self.smart_llm, tools)
+            
+            # Prepare messages with system prompt and conversation history
+            context_messages = []
+            
+            # Add recent conversation history for context
+            if state.get("shared_context", {}).get("recent_conversation"):
+                history = state["shared_context"]["recent_conversation"]
+                history_text = "\n".join([
+                    f"{'User' if msg.get('role') == 'user' else 'Assistant'}: {msg.get('content', '')}"
+                    for msg in history[-10:]  # Last 5 exchanges
+                ])
+                context_messages.append(HumanMessage(content=f"[CONVERSATION HISTORY]\n{history_text}\n"))
+            
+            # Add system message and current query
+            context_messages.append(HumanMessage(content=f"{system_message}\n\nUser: {state['user_input']}"))
+            
+            # Run the agent
+            result = agent_executor.invoke({"messages": context_messages})
+            
+            # Extract the final AI message
+            if result.get("messages"):
+                final_message = result["messages"][-1]
+                state["final_response"] = final_message.content if hasattr(final_message, 'content') else str(final_message)
+            else:
+                state["final_response"] = "I processed your shopping request."
+            
+            return state
         
-        # Create agent
-        agent = create_openai_tools_agent(
-            llm=llm,
-            tools=self.tools,
-            prompt=prompt
+        def communication_agent_node(state: AgentState) -> AgentState:
+            """Communication agent for messaging - Uses gpt-4o for better tool calling"""
+            tools = self.communication_tools + [self.follow_up_tool]
+            
+            print(f"[COMMUNICATION AGENT DEBUG] Available tools: {[t.name for t in tools]}")
+            print(f"[COMMUNICATION AGENT DEBUG] Tool descriptions:")
+            for t in tools:
+                print(f"  - {t.name}: {t.description[:100]}...")
+            
+            system_message = """You are Sofi, a female voice assistant in Pune, India handling communications.
+
+Handle: Telegram messages, Reminders.
+
+**PERSONALITY:**
+- Clear and efficient communicator
+- Confirm actions taken
+- Keep responses SHORT (1 sentence)
+
+**LANGUAGE:**
+- Hindi input → respond in हिंदी देवनागरी only
+- English input → respond in English only
+
+**CONTEXT-AWARE SENDING:**
+When user says "send it", "share that", "send first product", etc:
+1. Look at the [CONVERSATION HISTORY] section above
+2. Find the most recent Assistant message containing product details/URLs
+3. Extract ALL information: product name, price, rating, and URL (starts with https://)
+4. Call send_telegram_message with the COMPLETE message including the URL
+5. Example: "Zebronics Speaker ₹755 https://amazon.in/dp/..."
+
+**CRITICAL RULES:**
+- ALWAYS search conversation history for product URLs when user says send/share
+- Include the full product details AND the URL in your telegram message
+- MUST call send_telegram_message tool - don't just describe the action
+- Only respond with confirmation AFTER calling the tool"""
+            
+            # Create agent using LangGraph's prebuilt agent
+            print(f"[COMMUNICATION AGENT DEBUG] Creating agent with model: {self.smart_llm.model_name}")
+            agent_executor = create_agent(self.smart_llm, tools)
+            print(f"[COMMUNICATION AGENT DEBUG] Agent created, type: {type(agent_executor)}")
+            
+            # Prepare messages with system prompt and conversation history
+            context_messages = []
+            
+            # Add recent conversation history for context
+            if state.get("shared_context", {}).get("recent_conversation"):
+                history = state["shared_context"]["recent_conversation"]
+                history_text = "\n".join([
+                    f"{'User' if msg.get('role') == 'user' else 'Assistant'}: {msg.get('content', '')}"
+                    for msg in history[-10:]  # Last 5 exchanges
+                ])
+                context_messages.append(HumanMessage(content=f"[CONVERSATION HISTORY]\n{history_text}\n"))
+                print(f"[COMMUNICATION AGENT DEBUG] Added {len(history)} messages from conversation history")
+            
+            # Add system message and current query
+            context_messages.append(HumanMessage(content=f"{system_message}\n\nUser: {state['user_input']}"))
+            print(f"[COMMUNICATION AGENT DEBUG] Total context messages: {len(context_messages)}")
+            print(f"[COMMUNICATION AGENT DEBUG] User input: {state['user_input']}")
+            
+            # Run the agent
+            print("[COMMUNICATION AGENT DEBUG] Invoking agent...")
+            result = agent_executor.invoke({"messages": context_messages})
+            print(f"[COMMUNICATION AGENT DEBUG] Agent invocation complete, result type: {type(result)}")
+            print(f"[COMMUNICATION AGENT DEBUG] Result keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
+            
+            # Debug: Check if tools were called
+            if result.get("messages"):
+                print(f"[COMMUNICATION AGENT] Total messages in result: {len(result['messages'])}")
+                for i, msg in enumerate(result["messages"]):
+                    msg_type = type(msg).__name__
+                    print(f"[COMMUNICATION AGENT] Message {i}: {msg_type}")
+                    if hasattr(msg, 'content'):
+                        print(f"  Content: {str(msg.content)[:200]}")
+                    if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                        print(f"[COMMUNICATION AGENT] ✅ Tool calls detected: {[tc.get('name') for tc in msg.tool_calls]}")
+                    else:
+                        print(f"[COMMUNICATION AGENT] ❌ No tool calls in this message")
+            
+            # Extract the final AI message
+            if result.get("messages"):
+                final_message = result["messages"][-1]
+                state["final_response"] = final_message.content if hasattr(final_message, 'content') else str(final_message)
+            else:
+                state["final_response"] = "I processed your communication request."
+            
+            return state
+        
+        def analysis_agent_node(state: AgentState) -> AgentState:
+            """Analysis agent for complex queries - Uses gpt-4o"""
+            tools = self.analysis_tools + [self.follow_up_tool]
+            
+            system_message = """You are Sofi, a female voice assistant in Pune, India specializing in research and analysis.
+
+Handle: Web search, Order tracking, Latest news, Current prices.
+
+**PERSONALITY:**
+- Knowledgeable research assistant
+- Summarize complex info for voice (2-3 key points)
+- Keep responses SHORT but informative
+
+**LANGUAGE:**
+- Hindi input → respond in हिंदी देवनागरी only
+- English input → respond in English only
+
+**RULES:**
+- ALWAYS search for latest/current information (don't rely on training data)
+- Focus on most relevant facts
+- Use ask_follow_up_question tool when clarification needed"""
+            
+            # Create agent using LangGraph's prebuilt agent
+            agent_executor = create_agent(self.smart_llm, tools)
+            
+            # Prepare messages with system prompt and conversation history
+            context_messages = []
+            
+            # Add recent conversation history for context
+            if state.get("shared_context", {}).get("recent_conversation"):
+                history = state["shared_context"]["recent_conversation"]
+                history_text = "\n".join([
+                    f"{'User' if msg.get('role') == 'user' else 'Assistant'}: {msg.get('content', '')}"
+                    for msg in history[-10:]  # Last 5 exchanges
+                ])
+                context_messages.append(HumanMessage(content=f"[CONVERSATION HISTORY]\n{history_text}\n"))
+            
+            # Add system message and current query
+            context_messages.append(HumanMessage(content=f"{system_message}\n\nUser: {state['user_input']}"))
+            
+            # Run the agent
+            result = agent_executor.invoke({"messages": context_messages})
+            
+            # Extract the final AI message
+            if result.get("messages"):
+                final_message = result["messages"][-1]
+                state["final_response"] = final_message.content if hasattr(final_message, 'content') else str(final_message)
+            else:
+                state["final_response"] = "I processed your analysis request."
+            
+            return state
+        
+        # ============================================
+        # Build StateGraph
+        # ============================================
+        
+        workflow = StateGraph(AgentState)
+        
+        # Add nodes
+        workflow.add_node("router", router_node)
+        workflow.add_node("simple", simple_agent_node)
+        workflow.add_node("shopping", shopping_agent_node)
+        workflow.add_node("communication", communication_agent_node)
+        workflow.add_node("analysis", analysis_agent_node)
+        
+        # Set entry point
+        workflow.set_entry_point("router")
+        
+        # Define routing logic
+        def route_to_agent(state: AgentState) -> str:
+            """Route based on router decision"""
+            return state["next_agent"]
+        
+        # Add conditional edges from router to agents
+        workflow.add_conditional_edges(
+            "router",
+            route_to_agent,
+            {
+                "simple": "simple",
+                "shopping": "shopping",
+                "communication": "communication",
+                "analysis": "analysis"
+            }
         )
         
-        # Create agent executor
-        self.agent_executor = AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            memory=memory,
-            verbose=True,  # Disabled to prevent double response output
-            handle_parsing_errors=True,
-            max_iterations=25  # Increased for complex workflows like BigBasket ordering
-            # Removed early_stopping_method as it's deprecated in newer versions
-        )
+        # All agents go to END
+        workflow.add_edge("simple", END)
+        workflow.add_edge("shopping", END)
+        workflow.add_edge("communication", END)
+        workflow.add_edge("analysis", END)
         
-        print("LangChain agent initialized with tools:", [tool.name for tool in self.tools])
+        # Compile the graph
+        self.langgraph_app = workflow.compile()
+        
+        print("[LANGGRAPH] Multi-agent workflow initialized with 4 specialized agents")
     
-
-        
     def process_user_command(self, user_command: str) -> bool:
         """
         Main method that replaces your original process_user_command
-        Now uses intelligent agent instead of manual tool selection
+        Now uses LangGraph multi-agent system instead of manual tool selection
         Includes follow-up conversation support
         """
         
@@ -1244,30 +1622,30 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
             if self.pixel_led:
                 self.pixel_led.set_processing()
             
-            # Define the agent processing function
+            # Define the agent processing function using LangGraph
             def agent_processing():
-                result = self.agent_executor.invoke({"input": user_command})
-                response = result["output"]
-                print(response)
+                # Use LangGraph multi-agent system
+                initial_state = {
+                    "messages": [],
+                    "user_input": user_command,
+                    "next_agent": "",
+                    "final_response": "",
+                    "shared_context": {},
+                    "requires_handoff": False
+                }
                 
-                # Add to conversation history (store original response). Also extract any product/tool links
+                # Run through LangGraph workflow
+                final_state = self.langgraph_app.invoke(initial_state)
+                response = final_state["final_response"]
+                
+                print(f"\n[RESPONSE] {response}\n")
+                
+                # Save agent state to file for cross-agent access
+                self._save_agent_state(final_state)
+                
+                # Add to conversation history (store original response with URLs)
                 self.conversation_history.append({"role": "user", "content": user_command})
-                # Collect URLs from assistant response and from intermediate tool outputs
-                try:
-                    intermediate = result.get("intermediate_steps", [])
-                    combined = response + '\n' + str(intermediate)
-                    links = re.findall(r'(https?://\S+)', combined)
-                    # de-duplicate while preserving order
-                    seen_links = []
-                    for l in links:
-                        if l not in seen_links:
-                            seen_links.append(l)
-                except Exception:
-                    seen_links = []
-
                 assistant_entry = {"role": "assistant", "content": response}
-                if seen_links:
-                    assistant_entry["links"] = seen_links
                 self.conversation_history.append(assistant_entry)
 
                 # Persist conversation history if a ConversationManager is provided
@@ -1277,25 +1655,23 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
                 except Exception as save_err:
                     print(f"Warning: failed to save conversation history: {save_err}")
 
-                # Only speak if this wasn't a follow-up question (which already spoke)
-                # Check if ask_follow_up_question was used by looking at agent_scratchpad
-                if "ask_follow_up_question" not in str(result.get("intermediate_steps", [])):
-                    # Keep original response in history, but sanitize links/URLs for speech
-                    try:
-                        tts_text = clean_text_for_speech(response)
-                    except Exception:
-                        tts_text = response
+                if "ask_follow_up_question" not in response.lower():
+                    # Remove URLs for TTS (keep them in conversation history)
+                    import re
+                    tts_text = re.sub(r'https?://\S+', '', response)  # Remove all URLs
+                    tts_text = re.sub(r'URL:\s*', '', tts_text)  # Remove "URL:" label
+                    tts_text = tts_text.strip()
+                    
                     self.audio_processors.speak(tts_text)
                 
                 return response
             
-            # Process directly without delayed feedback
             response = agent_processing()
             
-            # Explicitly clean up memory after agent processing
+
             gc.collect()
             
-            # No need to check for follow-up questions - the LLM will use the ask_follow_up_question tool when needed
+
             
             print("Agent processing completed. Ready for next command.")
             return False
