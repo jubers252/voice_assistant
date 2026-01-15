@@ -109,7 +109,10 @@ class VoiceAssistantRefactored:
         self.wake_word_manager.start_detection()
         
         try:
-            self.audio_processors.play_beep_sound(beep_file="beep/startup_sound.wav")
+            # Use absolute path for beep file
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            beep_path = os.path.join(script_dir, "beep", "startup_sound.wav")
+            self.audio_processors.play_beep_sound(beep_file=beep_path)
             
             # Suppress ALSA errors when opening audio stream
             import sys

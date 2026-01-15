@@ -508,6 +508,12 @@ class AudioProcessors:
             # Use the specific beep file
             if not beep_file:
                 beep_file = "beep/short-beep-tone-47916.mp3"
+            
+            # Convert relative path to absolute if needed
+            if not os.path.isabs(beep_file):
+                script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                beep_file = os.path.join(script_dir, beep_file)
+                print(f"[DEBUG] Resolved beep file path: {beep_file}")
 
             if os.path.exists(beep_file):
                 try:
@@ -529,6 +535,8 @@ class AudioProcessors:
                     self._system_beep()
             else:
                 print(f"Beep file not found: {beep_file}")
+                print(f"[DEBUG] Checked absolute path: {os.path.abspath(beep_file)}")
+                print(f"[DEBUG] Current working directory: {os.getcwd()}")
                 self._system_beep()
 
         except Exception as e:
