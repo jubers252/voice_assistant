@@ -48,11 +48,12 @@ class SpeechRecognizer:
         self.audio_processor = audio_processor
         self.pixel_led = pixel_led
         self.use_whisper = use_whisper
-        
-        # Set Whisper language from environment variable (default: English)
+        self.is_music_playing = False
+        self.spotify_connector = None
+
         self.whisper_language = os.getenv('WHISPER_LANGUAGE', 'en')
         
-        # Initialize OpenAI client if using Whisper
+
         if self.use_whisper:
             api_key = os.getenv('OPENAI_API_KEY')
             if not api_key:
@@ -66,13 +67,24 @@ class SpeechRecognizer:
         try:
             self._choose_device_index()
         except Exception:
-            # Non-fatal: leave device_index as-is (None will let speech_recognition
-            # use the system default device)
             self.device_index = None
         
-        # Warm up microphone to avoid 100ms+ latency on first use
+
         self._warmup_microphone()
     
+    def set_spotify_connector(self, spotify_connector):
+        """Set Spotify connector to check music playback status"""
+        self.spotify_connector = spotify_connector
+    
+    def set_music_playing(self, is_playing: bool):
+        """Set the music playing state flag"""
+        self.is_music_playing = is_playing
+        if is_playing:
+            print("[RECOGNIZER] Music playback started - will use optimized settings")
+        else:
+            print("[RECOGNIZER] Music playback stopped - reverting to normal settings")
+            self.is_music_playing = False
+
     def _warmup_microphone(self):
         """Pre-open and close microphone to prime the device driver"""
         try:
@@ -143,13 +155,13 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 50  # Lowered to detect quiet speech
+        self.recognizer.energy_threshold = 20  # Lowered to detect quiet speech
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
         self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
-        self.recognizer.pause_threshold = 1.0  # 1.0 seconds of silence before stopping
+        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
         self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
-        self.recognizer.non_speaking_duration = 0.7  # Max 0.7 seconds pause mid-phrase
+        self.recognizer.non_speaking_duration = 1.0  # Max 1.0 seconds pause mid-phrase
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -184,6 +196,14 @@ class SpeechRecognizer:
 
     def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
         """Listen for user command with retry logic (retries once, then returns error)."""
+
+        if self.is_music_playing:
+            timeout = 5
+            print("[ASSISTANT] Music is playing - using 5s timeout")
+        
+        phrase_time_limit = 5 if timeout == 5 else 15
+        
+
         msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
         print(f"[ASSISTANT] {msg}")
         self._print_attempt(0, is_follow_up)
@@ -202,7 +222,7 @@ class SpeechRecognizer:
                     with microphone as source:
                         print("Listening...")
                         try:
-                            audio = self.recognizer.listen(source, timeout=15, phrase_time_limit=20)
+                            audio = self.recognizer.listen(source, timeout=20, phrase_time_limit=20)
                         except sr.WaitTimeoutError:
                             print(f"[ASSISTANT] No speech detected. Attempt {attempt + 1}/{max_retries + 1}")
                             if self.pixel_led:
@@ -211,7 +231,7 @@ class SpeechRecognizer:
                                 self._print_attempt(attempt + 1, is_follow_up)
                             continue
 
-                if not audio or len(audio.frame_data) < 400:
+                if not audio or len(audio.frame_data) < 100:
                     print("[ASSISTANT] Audio too short, retrying...")
                     if attempt < max_retries:
                         self._print_attempt(attempt + 1, is_follow_up)
@@ -273,7 +293,7 @@ class SpeechRecognizer:
     def _recognize_with_google(self, audio):
         """Recognize audio using Google Speech Recognition"""
         try:
-            command = self.recognizer.recognize_google(audio, language='en-US')
+            command = self.recognizer.recognize_google(audio, language='en-IN')
             print(f"[ASSISTANT] You said: {command}")
             cleaned_command = command.lower().strip()
             if len(cleaned_command) < 2:

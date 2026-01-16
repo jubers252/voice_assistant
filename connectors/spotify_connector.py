@@ -19,6 +19,20 @@ class SpotifyConnector:
     def __init__(self, spotify: Spotify):
         self.spotify = spotify
         self.device_id = None
+        self.speech_recognizer = None  # Reference to speech recognizer for music flag updates
+    
+    def set_speech_recognizer(self, recognizer):
+        """Set reference to speech recognizer for updating music playing flag"""
+        self.speech_recognizer = recognizer
+    
+    def _update_music_flag(self, is_playing: bool):
+        """Update the music playing flag in speech recognizer"""
+        print(f"[SPOTIFY] Updating music flag: is_playing={is_playing}, speech_recognizer={self.speech_recognizer is not None}")
+        if self.speech_recognizer:
+            self.speech_recognizer.set_music_playing(is_playing)
+            print(f"[SPOTIFY] Music flag updated successfully")
+        else:
+            print(f"[SPOTIFY] WARNING: speech_recognizer is None, cannot update music flag")
         
 
     def _find_device(self, preferred_device_name=None):
@@ -212,6 +226,10 @@ class SpotifyConnector:
             bool: True if music is playing on the Raspberry Pi device, False otherwise
         """
         try:
+            # Check if Spotify client is initialized
+            if self.spotify is None:
+                return False
+            
             # Get current playback across all devices
             playback = self.spotify.current_playback()
             
@@ -341,6 +359,7 @@ class SpotifyConnector:
                     result = self.smart_play_by_keyword(name, device_id=device_id)
                     
                     if result['success']:
+                        self._update_music_flag(True)  # Music started playing
                         message = result['message']
                         # Add alternatives if available
                         if result.get('alternatives'):
@@ -385,9 +404,11 @@ class SpotifyConnector:
                     
             elif tool_info.get("action") == "stop":
                 self.stop_playback(device_id=device_id)
+                self._update_music_flag(False)  # Music stopped
                 return "Playback stopped"
             elif tool_info.get("action") == "resume":
                 self.resume_playback(device_id=device_id)
+                self._update_music_flag(True)  # Music resumed
                 return "Playback resumed"
             elif tool_info.get("action") == "next":
                 self.play_next(device_id=device_id)
@@ -433,21 +454,23 @@ class SpotifyConnector:
                 cache_path=cache_path
             )
             spotify = sp.Spotify(auth_manager=auth_manager)
-            connector = SpotifyConnector(spotify)
+            
+            # Update the existing instance's spotify client instead of creating a new connector
+            self.spotify = spotify
             
             # Get preferred device name from setup.txt
             preferred_device = setup.get('device_name', None)
-            device_info = connector._find_device(preferred_device_name=preferred_device)
+            device_info = self._find_device(preferred_device_name=preferred_device)
             
             if not device_info:
                 print("No active device found, opening Spotify in Edge...")
-                connector.open_spotify_in_edge()
+                self.open_spotify_in_edge()
                 time.sleep(12)
-                device_info = connector._find_device(preferred_device_name=preferred_device)
+                device_info = self._find_device(preferred_device_name=preferred_device)
             if not device_info:
                 return "No active device found after opening Spotify."
             print(f"Using active device: {device_info['device_name']} ({device_info['device_id']})")
-            result = connector.handle_action(tools_data, device_id=device_info['device_id'])
+            result = self.handle_action(tools_data, device_id=device_info['device_id'])
             return result
         except Exception as e:
             return f"Error: {e}"

@@ -1328,7 +1328,7 @@ Handle: Weather, Spotify, Volume, Home Automation.
 - For ANY Spotify or volume control request (play, pause, next, previous, volume up/down/mute), you MUST use the provided tool. Do NOT just describe the action—ALWAYS call the tool.
 - For weather and home automation, also use the tool if available.
 - Use ask_follow_up_question tool when clarification needed.
-- NEVER ask questions in your response text."
+- NEVER ask questions in your response text."""
             
             # Create agent using LangGraph's prebuilt agent
             agent_executor = create_agent(self.fast_llm, tools)
@@ -1377,16 +1377,24 @@ Handle: Amazon searches, Zepto ordering, Product purchases.
 - Hindi input → respond in हिंदी देवनागरी only
 - English input → respond in English only
 
-**CRITICAL - URL REQUIREMENT:**
-When presenting product results, ALWAYS include the full URL for each product.
-Format: "Product name – details, ₹Price. URL: https://www.amazon.in/..."
-
-**RULES:**
+**AMAZON RULES:**
+- When presenting product results, ALWAYS include the full URL for each product.
+    Format: "Product name – details, ₹Price. URL: https://www.amazon.in/..."
 - Check conversation history first - if user asks for same product recently searched, reuse those results
 - ALWAYS include product URLs in your responses (user might want to send them later)
 - ALWAYS get confirmation before placing orders (use ask_follow_up_question tool)
-- For Zepto: login → clear_cart → search → show result to user → add_product → checkout → get user confirmation → place_order → cleanup
-- NEVER ask questions in your response text, use the tool
+
+**ZEPTO RULES:**
+- Workflow: login → clear_cart → search → ALWAYS show search results to the user → ask user to select a product and quantity → add_product → show cart summary → checkout → get user confirmation → place_order → cleanup
+- After every Zepto search, ALWAYS present the search results to the user and ask which product and quantity to add to cart (use ask_follow_up_question tool). Do NOT proceed to add_product or checkout without explicit user choice/confirmation.
+After after adding proudct to cart, ALWAYS ask user if any other proudct needs to be added.
+- NEVER skip showing search results or asking for user input before adding or ordering.
+- for wrong order or changes, use fresh order since there is not back button on payment page.
+- for reordering, use zepto_order_again tool after showing order history to user.
+
+
+**GENERAL RULES:**
+- NEVER ask questions in your response text, use the tool for clarifications.
 
 **HISTORY REUSE:**
 If conversation history shows a recent search for the same/similar product, reuse that information instead of searching again. Only search if it's a new/different product."""
