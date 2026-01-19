@@ -146,21 +146,21 @@ class SpeechRecognizer:
                             stop_event.set()
                             break
                     else:
-                        consecutive_silence = 0.0  # Reset on voice detection
+                        consecutive_silence = 0.0 
                 else:
                     time.sleep(0.05)
             except Exception as e:
                 time.sleep(0.05)
     
     def _setup_recognizer(self):
-        # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 50  # Lowered to detect quiet speech
+
+        self.recognizer.energy_threshold = 20 
         self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
-        self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
-        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
-        self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
-        self.recognizer.non_speaking_duration = 0.7  # Max 1.0 seconds pause mid-phrase
+        self.recognizer.dynamic_energy_adjustment_damping = 0.10  
+        self.recognizer.dynamic_energy_ratio = 1.3  
+        self.recognizer.pause_threshold = 1.5  
+        self.recognizer.phrase_threshold = 0.2  
+        self.recognizer.non_speaking_duration = 0.7  
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
