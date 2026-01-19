@@ -83,7 +83,6 @@ class SpeechRecognizer:
             print("[RECOGNIZER] Music playback started - will use optimized settings")
         else:
             print("[RECOGNIZER] Music playback stopped - reverting to normal settings")
-            self.is_music_playing = False
 
     def _warmup_microphone(self):
         """Pre-open and close microphone to prime the device driver"""
@@ -155,13 +154,13 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 20  # Lowered to detect quiet speech
+        self.recognizer.energy_threshold = 50  # Lowered to detect quiet speech
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
         self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
         self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
         self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
-        self.recognizer.non_speaking_duration = 1.0  # Max 1.0 seconds pause mid-phrase
+        self.recognizer.non_speaking_duration = 0.7  # Max 1.0 seconds pause mid-phrase
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -203,7 +202,7 @@ class SpeechRecognizer:
         
         phrase_time_limit = 5 if timeout == 5 else 15
         
-
+        print(f"timeout={timeout}, phrase_time_limit={phrase_time_limit}")
         msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
         print(f"[ASSISTANT] {msg}")
         self._print_attempt(0, is_follow_up)
@@ -222,7 +221,7 @@ class SpeechRecognizer:
                     with microphone as source:
                         print("Listening...")
                         try:
-                            audio = self.recognizer.listen(source, timeout=20, phrase_time_limit=20)
+                            audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
                         except sr.WaitTimeoutError:
                             print(f"[ASSISTANT] No speech detected. Attempt {attempt + 1}/{max_retries + 1}")
                             if self.pixel_led:

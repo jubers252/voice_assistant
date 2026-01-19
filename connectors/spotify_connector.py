@@ -27,12 +27,8 @@ class SpotifyConnector:
     
     def _update_music_flag(self, is_playing: bool):
         """Update the music playing flag in speech recognizer"""
-        print(f"[SPOTIFY] Updating music flag: is_playing={is_playing}, speech_recognizer={self.speech_recognizer is not None}")
         if self.speech_recognizer:
             self.speech_recognizer.set_music_playing(is_playing)
-            print(f"[SPOTIFY] Music flag updated successfully")
-        else:
-            print(f"[SPOTIFY] WARNING: speech_recognizer is None, cannot update music flag")
         
 
     def _find_device(self, preferred_device_name=None):
@@ -372,12 +368,14 @@ class SpotifyConnector:
                             print(f"Track search failed, trying album search for: {name}")
                             uri = self.get_album_uri(name)
                             self.play_album(device_id=device_id, uri=uri)
+                            self._update_music_flag(True)  # Music started playing from album fallback
                             return f"Couldn't find the exact song, but playing album: {name}"
                         except:
                             try:
                                 print(f"Album search failed, trying artist search for: {name}")
                                 uri = self.get_artist_uri(name)
                                 self.play_artist(device_id=device_id, uri=uri)
+                                self._update_music_flag(True)  # Music started playing from artist fallback
                                 return f"Couldn't find the song or album, but playing music by artist: {name}"
                             except:
                                 return result['message'] + " " + result.get('suggestion', '')
@@ -454,23 +452,21 @@ class SpotifyConnector:
                 cache_path=cache_path
             )
             spotify = sp.Spotify(auth_manager=auth_manager)
-            
-            # Update the existing instance's spotify client instead of creating a new connector
-            self.spotify = spotify
+            connector = SpotifyConnector(spotify)
             
             # Get preferred device name from setup.txt
             preferred_device = setup.get('device_name', None)
-            device_info = self._find_device(preferred_device_name=preferred_device)
+            device_info = connector._find_device(preferred_device_name=preferred_device)
             
             if not device_info:
                 print("No active device found, opening Spotify in Edge...")
-                self.open_spotify_in_edge()
+                connector.open_spotify_in_edge()
                 time.sleep(12)
-                device_info = self._find_device(preferred_device_name=preferred_device)
+                device_info = connector._find_device(preferred_device_name=preferred_device)
             if not device_info:
                 return "No active device found after opening Spotify."
             print(f"Using active device: {device_info['device_name']} ({device_info['device_id']})")
-            result = self.handle_action(tools_data, device_id=device_info['device_id'])
+            result = connector.handle_action(tools_data, device_id=device_info['device_id'])
             return result
         except Exception as e:
             return f"Error: {e}"

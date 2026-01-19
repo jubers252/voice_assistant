@@ -103,6 +103,9 @@ class LangChainAgentProcessor:
         self.volume_controller = VolumeController()
         # Initialize connectors (same as original)
         self.spotify_connector = SpotifyConnector(None)
+        # Connect recognizer to Spotify for music flag updates
+        if recognizer:
+            self.spotify_connector.set_speech_recognizer(recognizer)
         self.search_connector = GeminiSearch()
         self.telegram_bot = TelegramBot()
         self.big_basket_connector = BigBasketTools()
@@ -282,6 +285,10 @@ class LangChainAgentProcessor:
         """Play a specific track on Spotify"""
         def play_track_function(track_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -311,6 +318,10 @@ class LangChainAgentProcessor:
         """Play a specific album on Spotify"""
         def play_album_function(album_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -340,6 +351,10 @@ class LangChainAgentProcessor:
         """Play music by a specific artist on Spotify"""
         def play_artist_function(artist_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -373,10 +388,17 @@ class LangChainAgentProcessor:
                 
                 if action_lower in ['pause', 'stop']:
                     spotify_action = "stop"
+                    # Set music flag to False immediately
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(False)
                 elif action_lower in ['resume', 'continue', 'play']:
                     spotify_action = "resume"
+                    # Set music flag to True immediately
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(True)
                 elif action_lower in ['next', 'skip']:
                     spotify_action = "next"
+                    # Music keeps playing, flag stays True
                 else:
                     return "Use: pause, resume, or next"
                 
