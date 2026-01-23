@@ -259,7 +259,13 @@ class ReminderManager:
                         
                         # Check if TTS is not currently speaking
                         if not getattr(self.audio_processors, 'is_speaking', False) and reminder["notified"] == False:
-                            # Play alarm sound (3 beeps) to get attention
+                           
+                            time_diff = (datetime.now() - datetime.fromisoformat(reminder['remind_time'])).total_seconds()
+                            if time_diff > 600: 
+                                print("Skipping reminder - more than 10 minutes late")
+                                self.mark_reminded(reminder["id"])
+                                continue
+
                             for _ in range(3):
                                 self.audio_processors.play_beep_sound(beep_file ="beep/japan-eas-alarm-277877.mp3")
                                 time.sleep(0.2)

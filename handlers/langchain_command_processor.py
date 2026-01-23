@@ -6,9 +6,8 @@ This replaces your current CommandProcessor with an intelligent agent
 
 import os
 import threading
-import json
+
 import time
-import speech_recognition as sr
 from typing import Dict, Any
 from dotenv import load_dotenv
 from audio.audio_processor import clean_text_for_speech
@@ -20,13 +19,19 @@ import gc
 # Suppress urllib3 warnings from Selenium WebDriver connections
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
-# LangChain imports (install with: pip install langchain langchain-openai)
-from langchain.agents import AgentExecutor, create_openai_tools_agent
-from langchain.memory import ConversationBufferWindowMemory
+# LangChain imports (install with: pip install langchain langchain-openai langchain-community langgraph)
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.tools import Tool, StructuredTool
-from pydantic import BaseModel, Field
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import Tool, StructuredTool, BaseTool
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from typing import TypedDict, Annotated
+import operator
+
+# Import system prompt
+from handlers.system_prompt import SOFI_SYSTEM_PROMPT
 
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
@@ -76,16 +81,24 @@ class LangChainAgentProcessor:
         """
         
         # Store the handlers that are actually used
-        self.conversation_history = conversation_history
         self.audio_processors = audio_processors
         self.pixel_led = pixel_led
         self.recognizer = recognizer  # Store recognizer for follow-up questions
         self.reminder_manager = ReminderManager()
         # Optional ConversationManager instance to persist history
         self.conversation_manager = conversation_manager
+        
+        # Load conversation history from manager if provided, otherwise use provided history
+        if conversation_manager:
+            self.conversation_history = conversation_manager.conversation_history
+        else:
+            self.conversation_history = conversation_history if conversation_history else []
         self.volume_controller = VolumeController()
         # Initialize connectors (same as original)
         self.spotify_connector = SpotifyConnector(None)
+        if recognizer:
+            self.spotify_connector.set_speech_recognizer(recognizer)
+
         self.search_connector = GeminiSearch()
         self.telegram_bot = TelegramBot()
         self.big_basket_connector = BigBasketTools()
@@ -262,6 +275,10 @@ class LangChainAgentProcessor:
         """Play a specific track on Spotify"""
         def play_track_function(track_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -291,6 +308,10 @@ class LangChainAgentProcessor:
         """Play a specific album on Spotify"""
         def play_album_function(album_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -320,6 +341,10 @@ class LangChainAgentProcessor:
         """Play music by a specific artist on Spotify"""
         def play_artist_function(artist_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -353,10 +378,17 @@ class LangChainAgentProcessor:
                 
                 if action_lower in ['pause', 'stop']:
                     spotify_action = "stop"
+                    # Set music flag to False immediately
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(False)
                 elif action_lower in ['resume', 'continue', 'play']:
                     spotify_action = "resume"
+                    # Set music flag to True immediately
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(True)
                 elif action_lower in ['next', 'skip']:
                     spotify_action = "next"
+                    # Music keeps playing, flag stays True
                 else:
                     return "Use: pause, resume, or next"
                 
@@ -1129,98 +1161,77 @@ class LangChainAgentProcessor:
         # Initialize LLM
         llm = ChatOpenAI(
             model="gpt-4.1-mini",
-            temperature=1,  # o4-mini supports temperature values between 0 and 1
+            temperature=1,  
             openai_api_key=os.getenv('OPENAI_API_KEY'),
         )
         
-        # Setup memory for conversation context
-        memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            k=10  # Remember last 10 exchanges
-        )
+        # Setup memory for conversation context using simple message list
+        class WindowedChatHistory(BaseChatMessageHistory):
+            """Simple in-memory chat history with windowing (keeps last k exchanges)"""
+            def __init__(self, k: int = 10):
+                self.messages: list[BaseMessage] = []
+                self.k = k
+            
+            @property
+            def messages_windowed(self):
+                """Return only last k*2 messages (k exchanges = k*2 messages)"""
+                return self.messages[-self.k*2:] if len(self.messages) > self.k*2 else self.messages
+            
+            def add_message(self, message: BaseMessage) -> None:
+                self.messages.append(message)
+            
+            def clear(self) -> None:
+                self.messages = []
         
-        # Create system prompt
-        system_prompt = """You are Sofi, a female voice assistant in Pune, India.
-
-**LANGUAGE:**
-- Hindi input → respond in हिंदी देवनागरी only (never roman transliteration)
-- English input → respond in English only
-
-**RULES:**
-- Keep responses SHORT and conversational
-- Use ask_follow_up_question tool when clarification needed
-- No special characters, simple spoken language
-
-**SPOTIFY PLAYBACK CONTROL - MUST USE TOOL:**
-When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
-→ ALWAYS call control_spotify_playback tool with: pause|resume|next|skip
-→ Examples: 
-  - "play song" or "resume" → use control_spotify_playback with "resume"
-  - "pause" → use control_spotify_playback with "pause"
-  - "next song" or "skip" → use control_spotify_playback with "next"
-  - "pause music" → use control_spotify_playback with "pause"
-
-**KEY TOOLS:**
-- HOME AUTOMATION: control|device:true/false (e.g., control|light:true)
-- VOLUME: increase/decrease/mute/set
-- SEARCH: news, prices, weather, web queries
-- SPOTIFY CONTROL: pause, resume, next, skip (use control_spotify_playback tool)
-- SPOTIFY PLAY: play specific track/album/artist (use play_spotify_track/album/artist tools)
-- TELEGRAM: send message, photo, document, video
-- ZEPTO: login, search, add_product, checkout, place_order
-- REMINDERS: set, list, cancel, check
-
-**QUESTION RULE:**
-- NEVER ask questions in your response text
-- If you need to ask anything, always use ask_follow_up_question tool for clarification
-- Any response with "?" must use the tool instead
-
-**Zepto ORDERING (IMPORTANT):**
- For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
-        Zepto Shopping:
-        - Workflow: login -> clear_cart -> search|product_name -> add_product|product_name|quantity|index -> order_details -> checkout -> ask user confirmation -> place_order → cleanup
-        - For 'search': pass action|product_name format
-        - explain search results to user and ask which product to add
-        - For 'add_product': pass action|product_name|quantity|product_index format (index from search results)
-        - checkout action automatically selects COD payment method
-        - ALWAYS get confirmation from user before calling 'place_order' using ask_follow_up_question tool
-        - After order placed, call cleanup to close browser
-        - Always clean the browser session after processing order or failed attempts to avoid multiple logins.
-
-**WEB SEARCH FOR LATEST UPDATES (MANDATORY):**
-- ALWAYS use search_web tool when user asks for: latest news, current prices, today's information, recent updates, live info, what's trending, current status
-- Use when: "what's the latest", "current", "today", "right now", "latest news about", "what's new", "latest updates", "current price of"
-- NEVER answer from knowledge cutoff - always search for current information
-- Format: Just the search query (e.g., "latest Bitcoin price", "current weather in Mumbai", "trending news today")
-- Examples: "latest iPhone price", "today's stock market updates", "current COVID cases in India"
-
-**CAPABILITIES:** Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation"""
-        # Create prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
+        memory_interface = WindowedChatHistory(k=10)
         
-        # Create agent
-        agent = create_openai_tools_agent(
-            llm=llm,
-            tools=self.tools,
-            prompt=prompt
-        )
+        # Use the system prompt from system_prompt.py
+        system_prompt = SOFI_SYSTEM_PROMPT
         
-        # Create agent executor
-        self.agent_executor = AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            memory=memory,
-            verbose=True,  # Disabled to prevent double response output
-            handle_parsing_errors=True,
-            max_iterations=25  # Increased for complex workflows like BigBasket ordering
-            # Removed early_stopping_method as it's deprecated in newer versions
-        )
+        # Setup LangGraph agent (modern approach for LangChain v1.2.7+)
+        # Define the agent state
+        class AgentState(TypedDict):
+            messages: Annotated[list[BaseMessage], operator.add]
+        
+        # Create the LLM with tool binding
+        tool_list = self.tools
+        
+        # Build the agent graph
+        workflow = StateGraph(AgentState)
+        
+        # Define the agent node
+        def agent_node(state: AgentState):
+            # Create prompt with system message
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                MessagesPlaceholder(variable_name="messages"),
+            ])
+            
+            chain = prompt | llm.bind_tools(tool_list)
+            result = chain.invoke({"messages": state["messages"]})
+            return {"messages": [result]}
+        
+        # Add nodes to graph
+        workflow.add_node("agent", agent_node)
+        
+        # Add tool node for tool calls
+        tools_node = ToolNode(tool_list)
+        workflow.add_node("tools", tools_node)
+        
+        # Define routing logic
+        def route_tools(state: AgentState):
+            if isinstance(state["messages"][-1], AIMessage):
+                if hasattr(state["messages"][-1], "tool_calls") and state["messages"][-1].tool_calls:
+                    return "tools"
+            return END
+        
+        # Add edges
+        workflow.add_conditional_edges("agent", route_tools, {"tools": "tools", END: END})
+        workflow.add_edge("tools", "agent")
+        workflow.set_entry_point("agent")
+        
+        # Compile the graph
+        self.agent_executor = workflow.compile()
         
         print("LangChain agent initialized with tools:", [tool.name for tool in self.tools])
     
@@ -1230,7 +1241,7 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
         """
         Main method that replaces your original process_user_command
         Now uses intelligent agent instead of manual tool selection
-        Includes follow-up conversation support
+        Includes follow-up conversation support and conversation history awareness
         """
         
         # Check for exit commands (same as original)
@@ -1244,58 +1255,80 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
             if self.pixel_led:
                 self.pixel_led.set_processing()
             
-            # Define the agent processing function
-            def agent_processing():
-                result = self.agent_executor.invoke({"input": user_command})
-                response = result["output"]
-                print(response)
-                
-                # Add to conversation history (store original response). Also extract any product/tool links
-                self.conversation_history.append({"role": "user", "content": user_command})
-                # Collect URLs from assistant response and from intermediate tool outputs
-                try:
-                    intermediate = result.get("intermediate_steps", [])
-                    combined = response + '\n' + str(intermediate)
-                    links = re.findall(r'(https?://\S+)', combined)
-                    # de-duplicate while preserving order
-                    seen_links = []
-                    for l in links:
-                        if l not in seen_links:
-                            seen_links.append(l)
-                except Exception:
-                    seen_links = []
-
-                assistant_entry = {"role": "assistant", "content": response}
-                if seen_links:
-                    assistant_entry["links"] = seen_links
-                self.conversation_history.append(assistant_entry)
-
-                # Persist conversation history if a ConversationManager is provided
-                try:
-                    if getattr(self, 'conversation_manager', None):
-                        self.conversation_manager.save_conversation_history()
-                except Exception as save_err:
-                    print(f"Warning: failed to save conversation history: {save_err}")
-
-                # Only speak if this wasn't a follow-up question (which already spoke)
-                # Check if ask_follow_up_question was used by looking at agent_scratchpad
-                if "ask_follow_up_question" not in str(result.get("intermediate_steps", [])):
-                    # Keep original response in history, but sanitize links/URLs for speech
-                    try:
-                        tts_text = clean_text_for_speech(response)
-                    except Exception:
-                        tts_text = response
-                    self.audio_processors.speak(tts_text)
-                
-                return response
+            # Build message history for agent context (keep last 10 user-assistant exchanges)
+            messages = []
             
-            # Process directly without delayed feedback
-            response = agent_processing()
+            # Add previous conversation context (last 20 messages = 10 exchanges)
+            for hist_entry in self.conversation_history[-20:]:
+                if hist_entry["role"] == "user":
+                    messages.append(HumanMessage(content=hist_entry["content"]))
+                elif hist_entry["role"] == "assistant":
+                    messages.append(AIMessage(content=hist_entry["content"]))
+            
+            # Add current user message
+            user_message = HumanMessage(content=user_command)
+            messages.append(user_message)
+            
+            # Invoke the agent with full context
+            result = self.agent_executor.invoke({"messages": messages})
+            
+            # Extract the response from the final message
+            final_message = result["messages"][-1]
+            if isinstance(final_message, AIMessage):
+                response = final_message.content
+            else:
+                response = str(final_message)
+            
+            print(response)
+            
+            # Extract URLs from response (especially for Amazon products)
+            urls = re.findall(r'https?://\S+', response)
+            # Remove duplicates while preserving order and clean up URLs
+            seen_urls = set()
+            unique_urls = []
+            for url in urls:
+                # Clean up URLs (remove trailing punctuation)
+                clean_url = url.rstrip('.,;:)}"\'')
+                if clean_url not in seen_urls:
+                    seen_urls.add(clean_url)
+                    unique_urls.append(clean_url)
+            
+            # Add to conversation history with URLs if found
+            self.conversation_history.append({"role": "user", "content": user_command})
+            assistant_entry = {"role": "assistant", "content": response}
+            if unique_urls:
+                assistant_entry["urls"] = unique_urls
+                print(f"✓ URLs saved to history: {unique_urls}")
+            self.conversation_history.append(assistant_entry)
+            
+            # Persist conversation history if a ConversationManager is provided
+            try:
+                if getattr(self, 'conversation_manager', None):
+                    # Sync in-memory history to manager before saving
+                    self.conversation_manager.conversation_history = self.conversation_history
+                    self.conversation_manager.save_conversation_history()
+            except Exception as save_err:
+                print(f"Warning: failed to save conversation history: {save_err}")
+            
+
+            used_follow_up = False
+            for msg in result.get("messages", []):
+                if hasattr(msg, 'tool_calls'):
+                    for tool_call in getattr(msg, 'tool_calls', []):
+                        if hasattr(tool_call, 'name') and tool_call.name == 'ask_follow_up_question':
+                            used_follow_up = True
+                            break
+            
+            # Only speak if ask_follow_up_question wasn't used
+            if not used_follow_up:
+                try:
+                    tts_text = clean_text_for_speech(response)
+                except Exception:
+                    tts_text = response
+                self.audio_processors.speak(tts_text)
             
             # Explicitly clean up memory after agent processing
             gc.collect()
-            
-            # No need to check for follow-up questions - the LLM will use the ask_follow_up_question tool when needed
             
             print("Agent processing completed. Ready for next command.")
             return False
@@ -1320,59 +1353,4 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
 
 
 if __name__ == "__main__":
-    # Test the LangChain processor functionality
-    print("Testing LangChainAgentProcessor...")
-    
-    # Mock handlers for testing
-    class MockHandler:
-        def speak(self, text, lang='en'):
-            print(f"[SPEAK]: {text}")
-        
-        def get_tool_action(self, command):
-            return {"tool": "none", "message": "test"}
-        
-        def handle_reminder_action(self, request):
-            return "Mock reminder created"
-        
-        def telegram_handler(self, request):
-            return "Mock telegram message sent"
-    
-    # Create mock conversation history
-    conversation_history = []
-    
-    try:
-        # Test initialization - only required parameters
-        processor = LangChainAgentProcessor(
-            conversation_history=conversation_history,
-            audio_processors=MockHandler()
-        )
-        
-        print("✓ LangChainAgentProcessor initialized successfully")
-        agent_info = processor.get_agent_info()
-        print(f"✓ Agent info: {agent_info}")
-        print(f"✓ Available tools: {', '.join(agent_info['tool_names'])}")
-        
-        # Test individual tool creation
-        current_weather_tool = processor._create_current_weather_tool()
-        forecast_tool = processor._create_weather_forecast_tool()
-        timezone_tool = processor._create_timezone_tool()
-        single_amazon_tool = processor._create_amazon_single_product_tool()
-        multi_amazon_tool = processor._create_amazon_multi_product_tool()
-        order_tracking_tool = processor._create_amazon_order_tracking_tool()
-        telegram_message_tool = processor._create_telegram_message_tool()
-        telegram_photo_tool = processor._create_telegram_photo_tool()
-        telegram_document_tool = processor._create_telegram_document_tool()
-        telegram_video_tool = processor._create_telegram_video_tool()
-        
-        print("All weather tool creation methods work")
-        print("All Amazon tool creation methods work")
-        print("Amazon order tracking tool created successfully")
-        print("All Telegram tool creation methods work")
-        print("LangChain processor is ready for use!")
-        print(f"Total tools available: {len(processor.tools)}")
-        print("process_user_command method ready for voice assistant integration")
-        
-    except Exception as e:
-        print(f" Error during testing: {e}")
-        import traceback
-        traceback.print_exc()
+    pass

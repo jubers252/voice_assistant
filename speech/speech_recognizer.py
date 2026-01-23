@@ -48,7 +48,8 @@ class SpeechRecognizer:
         self.audio_processor = audio_processor
         self.pixel_led = pixel_led
         self.use_whisper = use_whisper
-        
+        self.is_music_playing = False
+        self.spotify_connector = None
         # Set Whisper language from environment variable (default: English)
         self.whisper_language = os.getenv('WHISPER_LANGUAGE', 'en')
         
@@ -87,6 +88,19 @@ class SpeechRecognizer:
         except Exception as e:
             print(f"[RECOGNIZER] Microphone warm-up failed (non-critical): {e}")
 
+
+    def set_spotify_connector(self, spotify_connector):
+        """Set Spotify connector to check music playback status"""
+        self.spotify_connector = spotify_connector
+    
+    def set_music_playing(self, is_playing: bool):
+        """Set the music playing state flag"""
+        self.is_music_playing = is_playing
+        if is_playing:
+            print("[RECOGNIZER] Music playback started - will use optimized settings")
+        else:
+            print("[RECOGNIZER] Music playback stopped - reverting to normal settings")
+
     def _check_voice_activity(self, audio_data, sample_rate, silence_duration=1.5):
         """
         Check if there's voice activity in audio using energy detection.
@@ -106,7 +120,7 @@ class SpeechRecognizer:
             energy = np.sqrt(np.mean(audio_data ** 2))
             
             # If energy is low, likely silence
-            if energy < 0.005:  # Very low energy = silence
+            if energy < 0.0005:  # Very low energy = silence
                 return False
             
             return True
@@ -143,7 +157,7 @@ class SpeechRecognizer:
     
     def _setup_recognizer(self):
         # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 50  # Lowered to detect quiet speech
+        self.recognizer.energy_threshold = 20  # Lowered to detect quiet speech
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
         self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
@@ -184,10 +198,17 @@ class SpeechRecognizer:
 
     def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
         """Listen for user command with retry logic (retries once, then returns error)."""
+       
+        if self.is_music_playing:
+            timeout = 5
+            print("[ASSISTANT] Music is playing - using 5s timeout")
+        phrase_time_limit = 5 if timeout == 5 else 15
+
+        print(f"timeout={timeout}, phrase_time_limit={phrase_time_limit}")
         msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
         print(f"[ASSISTANT] {msg}")
         self._print_attempt(0, is_follow_up)
-        
+
         for attempt in range(max_retries + 1):
             microphone = None
             audio = None
@@ -202,7 +223,7 @@ class SpeechRecognizer:
                     with microphone as source:
                         print("Listening...")
                         try:
-                            audio = self.recognizer.listen(source, timeout=15, phrase_time_limit=20)
+                            audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
                         except sr.WaitTimeoutError:
                             print(f"[ASSISTANT] No speech detected. Attempt {attempt + 1}/{max_retries + 1}")
                             if self.pixel_led:
