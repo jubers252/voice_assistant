@@ -103,7 +103,7 @@ class AudioProcessors:
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
         self.mic_device_id = 2   # Google voiceHAT with stereo INMP mics (hw:3,0)
         self.mic_gain_factor = 1.0  # Increased for voiceHAT stereo INMP mics
-        self.digital_gain = 5.0     # BOOSTED 5x: for quieter speech detection with music playing
+        self.digital_gain = 8.0     # BOOSTED 5x: for quieter speech detection with music playing
 
         # Audio processing
         self.sample_rate = 22050
