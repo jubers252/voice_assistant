@@ -1,15 +1,15 @@
 
 import librosa
 import numpy as np
-from keras.models import load_model
 from sklearn.preprocessing import StandardScaler
+import tensorflow as tf
 
 
 
 # Function to extract MFCC features (from test_cnn_model.py)
 class WakeWordDetector:
     def __init__(self, model_path, sample_rate=22050, n_mfcc=40, n_fft=2048, hop_length=512):
-        self.model = load_model(model_path)
+        self.model = self._load_model_safe(model_path)
         self.sample_rate = sample_rate
         self.n_mfcc = n_mfcc    
         self.n_fft = n_fft
@@ -24,6 +24,22 @@ class WakeWordDetector:
         print("Warming up wake word detector...")
         self._warmup_model()
         print("Wake word detector ready!")
+    
+    def _load_model_safe(self, model_path):
+        """Load model with handling for optimizer compatibility issues"""
+        try:
+            # Try standard loading first
+            return tf.keras.models.load_model(model_path)
+        except Exception as e:
+            if "weight_decay" in str(e) or "keyword argument" in str(e):
+                # Load without compiling if there are optimizer issues
+                try:
+                    return tf.keras.models.load_model(model_path, compile=False)
+                except Exception as e2:
+                    print(f"Warning: Model loaded with limited functionality: {e2}")
+                    raise
+            else:
+                raise
     
     def _warmup_model(self):
         """Run a dummy prediction to initialize the model and avoid first-time delay"""

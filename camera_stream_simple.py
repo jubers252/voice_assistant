@@ -1,20 +1,49 @@
 """
-Simple Camera Streaming for Raspberry Pi
-Uses rpicam-vid with TCP streaming
+Raspberry Pi Camera Streaming with Hand Detection + Swipe Detection
+Swipe Left / Swipe Right using MediaPipe
 """
 
 import subprocess
 import time
 import socket
-import threading
+from collections import deque
 from flask import Flask, Response, render_template_string
+import cv2
+import numpy as np
+import mediapipe as mp
 
 app = Flask(__name__)
 
-# Global variables
-camera_process = None
-stream_socket = None
 STREAM_PORT = 8001
+
+# =========================
+# MediaPipe setup
+# =========================
+mp_hands = mp.solutions.hands
+mp_draw = mp.solutions.drawing_utils
+
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.6,  # Balanced for continuous detection
+    min_tracking_confidence=0.6    # Balanced for continuous detection
+)
+
+# =========================
+# Gray color detection setup (HSV range)
+# =========================
+# Gray in HSV: Strict range for true gray only (low saturation)
+GRAY_LOWER = np.array([0, 0, 80])
+GRAY_UPPER = np.array([180, 30, 200])
+
+# =========================
+# Swipe detection config
+# =========================
+hand_x_history = deque(maxlen=10)
+hand_time_history = deque(maxlen=10)
+
+SWIPE_DISTANCE = 0.20   # normalized (20% of screen width)
+SWIPE_TIME = 0.6        # seconds
 
 
 class CameraStreamer:
@@ -22,209 +51,196 @@ class CameraStreamer:
         self.width = width
         self.height = height
         self.fps = fps
-        self.camera_process = None
         self.running = False
-        
+        self.camera_process = None
+
     def start_camera(self):
-        """Start camera with TCP streaming"""
-        print(f"Starting camera stream {self.width}x{self.height}...")
-        
-        # Use rpicam-vid with inline MJPEG output
         cmd = [
             'rpicam-vid',
-            '-t', '0',  # Run indefinitely
+            '-t', '0',
             '--width', str(self.width),
             '--height', str(self.height),
             '--framerate', str(self.fps),
             '--codec', 'mjpeg',
             '--inline',
-            '--listen',  # TCP listen mode
+            '--listen',
             '-o', f'tcp://0.0.0.0:{STREAM_PORT}',
-            '-n'  # No preview window
+            '-n',
+            '--gain', '4.0',  # Optimized for indoor light (not too high to avoid noise)
+            '--exposure', 'normal',  # Normal exposure for typical indoor lighting
+            '--brightness', '0.3',  # Moderate brightness boost
+            '--contrast', '0.6',  # Slight contrast increase for better clarity
+            '--saturation', '1.0',  # Normal saturation
+            '--sharpness', '1.5',  # Slight sharpness for better hand detection
+            '--awb', 'indoor'  # Auto white balance optimized for indoor
         ]
-        
-        try:
-            self.camera_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT
-            )
-            self.running = True
-            print(f"Camera process started (PID: {self.camera_process.pid})")
-            time.sleep(3)  # Give camera time to initialize
-            
-            # Check if process is still running
-            if self.camera_process.poll() is not None:
-                output, _ = self.camera_process.communicate()
-                print(f"Camera process failed: {output.decode()}")
-                return False
-            
-            print(f"Camera is streaming on TCP port {STREAM_PORT}")
-            return True
-        except Exception as e:
-            print(f"Error starting camera: {e}")
-            return False
-    
+
+        self.camera_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT
+        )
+
+        time.sleep(3)
+        self.running = True
+        print("📸 Camera started")
+        return True
+
     def stop_camera(self):
-        """Stop the camera process"""
         if self.camera_process:
             self.camera_process.terminate()
-            try:
-                self.camera_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.camera_process.kill()
+            self.camera_process.wait()
             self.running = False
-            print("Camera stopped")
-    
+            print("🛑 Camera stopped")
+
     def generate_frames(self):
-        """Connect to camera TCP stream and yield frames"""
-        retry_count = 0
-        max_retries = 15
-        
-        print("Attempting to connect to camera stream...")
-        
-        while retry_count < max_retries:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+        sock.connect(('127.0.0.1', STREAM_PORT))
+        sock.settimeout(2.0)
+
+        buffer = b''
+        frame_count = 0
+        max_buffer_size = 2097152  # 2MB limit to prevent memory issues
+
+        while self.running:
             try:
-                # Connect to the TCP stream
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(15)
-                print(f"Connecting to 127.0.0.1:{STREAM_PORT}...")
-                sock.connect(('127.0.0.1', STREAM_PORT))
-                print("✓ Connected to camera stream successfully")
+                data = sock.recv(8192)
+                if not data:
+                    break
                 
-                buffer = b''
-                frame_count = 0
-                
-                while self.running:
-                    try:
-                        # Read data from socket
-                        data = sock.recv(8192)
-                        if not data:
-                            print("No more data from camera")
-                            break
-                        
-                        buffer += data
-                        
-                        # Look for JPEG boundaries
-                        while True:
-                            a = buffer.find(b'\xff\xd8')  # JPEG start
-                            b = buffer.find(b'\xff\xd9')  # JPEG end
-                            
-                            if a != -1 and b != -1 and b > a:
-                                jpg = buffer[a:b+2]
-                                buffer = buffer[b+2:]
-                                
-                                frame_count += 1
-                                if frame_count % 30 == 0:
-                                    print(f"Streamed {frame_count} frames")
-                                
-                                # Yield the frame
-                                yield (b'--frame\r\n'
-                                       b'Content-Type: image/jpeg\r\n\r\n' + jpg + b'\r\n')
-                            else:
-                                break
-                    
-                    except socket.timeout:
-                        print("Socket timeout, continuing...")
-                        continue
-                    except Exception as e:
-                        print(f"Error reading frame: {e}")
-                        break
-                
-                sock.close()
-                break
-                
-            except ConnectionRefusedError:
-                retry_count += 1
-                print(f"Connection refused, attempt {retry_count}/{max_retries}")
-                time.sleep(1)
-            except socket.timeout as e:
-                retry_count += 1
-                print(f"Connection timeout, attempt {retry_count}/{max_retries}: {e}")
-                time.sleep(1)
+                buffer += data
+                if len(buffer) > max_buffer_size:
+                    buffer = buffer[-max_buffer_size:]
+            except socket.timeout:
+                continue
             except Exception as e:
-                print(f"Streaming error: {e}")
-                import traceback
-                traceback.print_exc()
+                print(f"Socket error: {e}")
                 break
-        
-        if retry_count >= max_retries:
-            print("Failed to connect to camera stream after all retries")
+
+            while True:
+                a = buffer.find(b'\xff\xd8')
+                b = buffer.find(b'\xff\xd9')
+
+                if a != -1 and b != -1 and b > a:
+                    jpg = buffer[a:b+2]
+                    buffer = buffer[b+2:]
+
+                    frame = cv2.imdecode(
+                        np.frombuffer(jpg, np.uint8),
+                        cv2.IMREAD_COLOR
+                    )
+
+                    if frame is None:
+                        continue
+
+                    frame_count += 1
+
+                    # Process every 3rd frame for continuous hand detection
+                    if frame_count % 3 == 0:
+                        # Light-weight enhancement (skip CLAHE in good light)
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        result = hands.process(rgb)
+
+                        if result.multi_hand_landmarks:
+                            for hand_landmarks in result.multi_hand_landmarks:
+                                mp_draw.draw_landmarks(
+                                    frame,
+                                    hand_landmarks,
+                                    mp_hands.HAND_CONNECTIONS
+                                )
+
+                                # =========================
+                                # Swipe detection
+                                # =========================
+                                wrist = hand_landmarks.landmark[
+                                    mp_hands.HandLandmark.WRIST
+                                ]
+
+                                hand_x_history.append(wrist.x)
+                                hand_time_history.append(time.time())
+
+                                if len(hand_x_history) >= 6:
+                                    dx = hand_x_history[-1] - hand_x_history[0]
+                                    dt = hand_time_history[-1] - hand_time_history[0]
+
+                                    if dt < SWIPE_TIME:
+                                        if dx > SWIPE_DISTANCE:
+                                            print("➡️ Swipe Right")
+                                            hand_x_history.clear()
+                                            hand_time_history.clear()
+
+                                        elif dx < -SWIPE_DISTANCE:
+                                            print("⬅️ Swipe Left")
+                                            hand_x_history.clear()
+                                            hand_time_history.clear()
+                        
+                        # =========================
+                        # Gray color detection (lightweight, skip if hands found)
+                        # =========================
+                        if not result.multi_hand_landmarks:
+                            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                            gray_mask = cv2.inRange(hsv, GRAY_LOWER, GRAY_UPPER)
+                            
+                            # Strong morphological cleanup
+                            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+                            gray_mask = cv2.morphologyEx(gray_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+                            gray_mask = cv2.morphologyEx(gray_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+                            
+                            # Find contours
+                            contours, _ = cv2.findContours(gray_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            
+                            gray_count = 0
+                            for contour in contours:
+                                area = cv2.contourArea(contour)
+                                if area > 2000:  # Very high threshold to eliminate noise
+                                    cv2.drawContours(frame, [contour], 0, (0, 255, 255), 2)
+                                    gray_count += 1
+                                    if gray_count > 3:  # Max 3 detections
+                                        break
+                            
+                            if gray_count > 0:
+                                cv2.putText(frame, f"Gray: {gray_count}", (10, 30),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+                    success, jpg_encoded = cv2.imencode(
+                        '.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70]
+                    )
+
+                    if not success:
+                        continue
+
+                    yield (
+                        b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n\r\n' +
+                        jpg_encoded.tobytes() +
+                        b'\r\n'
+                    )
+                else:
+                    break
 
 
-# Global streamer instance
 streamer = None
 
 
 @app.route('/')
 def index():
-    """Video streaming home page"""
-    return render_template_string('''
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Raspberry Pi Camera Stream</title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    text-align: center;
-                    background-color: #1a1a1a;
-                    color: #fff;
-                    margin: 0;
-                    padding: 20px;
-                }
-                h1 {
-                    color: #4CAF50;
-                    margin-bottom: 10px;
-                }
-                .video-container {
-                    display: inline-block;
-                    background-color: #000;
-                    padding: 10px;
-                    border-radius: 8px;
-                    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
-                    margin: 20px auto;
-                }
-                img {
-                    display: block;
-                    max-width: 100%;
-                    height: auto;
-                    border-radius: 4px;
-                }
-                .info {
-                    margin-top: 20px;
-                    color: #999;
-                    font-size: 14px;
-                }
-                .status {
-                    display: inline-block;
-                    background: #4CAF50;
-                    color: white;
-                    padding: 5px 15px;
-                    border-radius: 20px;
-                    font-size: 12px;
-                    margin: 10px 0;
-                }
-            </style>
-        </head>
-        <body>
-            <h1>📷 Raspberry Pi Camera Stream</h1>
-            <div class="status">🟢 LIVE</div>
-            <div class="video-container">
-                <img src="{{ url_for('video_feed') }}" alt="Camera Stream" />
-            </div>
-            <div class="info">
-                <p>Resolution: ''' + f'{streamer.width}x{streamer.height}' + ''' @ ''' + f'{streamer.fps} fps' + '''</p>
-                <p>Codec: MJPEG | Protocol: TCP</p>
-            </div>
-        </body>
-        </html>
-    ''')
+    return render_template_string("""
+    <html>
+    <head>
+        <title>Hand Swipe Detection</title>
+    </head>
+    <body style="background:#111;color:white;text-align:center">
+        <h1>✋ Hand Swipe Detection</h1>
+        <img src="/video_feed">
+        <p>Swipe Left ⬅️ or Right ➡️</p>
+    </body>
+    </html>
+    """)
 
 
 @app.route('/video_feed')
 def video_feed():
-    """Video streaming route"""
     return Response(
         streamer.generate_frames(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
@@ -232,37 +248,19 @@ def video_feed():
 
 
 def main():
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Raspberry Pi Camera HTTP Streaming')
-    parser.add_argument('--width', type=int, default=640, help='Video width')
-    parser.add_argument('--height', type=int, default=480, help='Video height')
-    parser.add_argument('--fps', type=int, default=30, help='Frames per second')
-    parser.add_argument('--port', type=int, default=8000, help='HTTP server port')
-    
-    args = parser.parse_args()
-    
     global streamer
-    streamer = CameraStreamer(width=args.width, height=args.height, fps=args.fps)
-    
+    streamer = CameraStreamer(640, 480, 30)
+
+    if not streamer.start_camera():
+        return
+
     try:
-        if not streamer.start_camera():
-            print("Failed to start camera")
-            return
-        
-        print(f"\n🎥 Camera stream available at:")
-        print(f"   http://localhost:{args.port}")
-        print(f"   http://<raspberry-pi-ip>:{args.port}")
-        print(f"\n📡 Streaming at {args.width}x{args.height} @ {args.fps}fps")
-        print("\nPress Ctrl+C to stop\n")
-        
-        app.run(host='0.0.0.0', port=args.port, threaded=True, debug=False)
-        
+        app.run(host='0.0.0.0', port=8000, threaded=True)
     except KeyboardInterrupt:
-        print("\nShutting down...")
+        pass
     finally:
         streamer.stop_camera()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
