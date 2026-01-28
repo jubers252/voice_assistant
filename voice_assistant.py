@@ -23,9 +23,6 @@ from gpio_setup import PixelLEDController
 
 load_dotenv()
 
-# Configuration from environment variables
-MIC_GAIN = float(os.environ.get('MIC_GAIN', '2.5')) 
-
 current_dir = os.path.dirname(os.path.abspath(__file__))
 model_dir = os.path.join(current_dir, 'model')
 
@@ -41,10 +38,6 @@ class VoiceAssistantRefactored:
         self.pixel_led = PixelLEDController(led_count=6, brightness=1.0, simulate=False)
         self.audio_processors = AudioProcessors()
         self.audio_processors.set_pixel_led(self.pixel_led)  # Connect LED to audio processor
-        
-    
-        self.audio_processors.set_digital_gain(MIC_GAIN)
-        print(f"Microphone digital gain set to {MIC_GAIN}x")
         
         # Check speech recognition service to use
         use_azure = os.getenv('USE_AZURE', 'false').lower() == 'true'
@@ -66,7 +59,7 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
 
-        ww_model_path = f"{model_dir}/WWD_mems_new_model_v2.h5"
+        ww_model_path = f"{model_dir}/WWD_respeaker_model.h5"
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         

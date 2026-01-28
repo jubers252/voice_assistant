@@ -12,6 +12,7 @@ from keras.utils import to_categorical
 from keras.models import Sequential
 from keras.layers import Conv1D, MaxPooling1D, Flatten, Dense, Dropout
 from keras.callbacks import EarlyStopping
+from keras.metrics import Precision, Recall
 from sklearn.metrics import confusion_matrix, classification_report
 from plot_cm import plot_confusion_matrix
 import librosa
@@ -74,7 +75,7 @@ from keras.optimizers import Adam
 model.compile(
     loss="binary_crossentropy",  # Binary classification loss
     optimizer=Adam(learning_rate=0.001),  # Lower learning rate for better convergence
-    metrics=['accuracy', 'precision', 'recall']  # Track multiple metrics
+    metrics=['accuracy', Precision(), Recall()]  # Track multiple metrics
 )
 
 # Enhanced callbacks for better training control
@@ -100,7 +101,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_mems_new_model.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")
@@ -140,7 +141,7 @@ print(f"Suggested optimal threshold: {optimal_threshold:.3f}")
 plot_confusion_matrix(cm, classes=["Background", "Wake Word"])
 
 print("\n=== Model Training Complete ===")
-print("Improved model saved as 'WWD_improved.h5'")
+print("Improved model saved as 'WWD_respeaker_model.h5'")
 print("Use this model with the suggested threshold for better performance!")
 
 # --- End of script ---
@@ -148,7 +149,13 @@ print("Use this model with the suggested threshold for better performance!")
 # YAMNet Wake Word Detection Pipeline
 
 # Load YAMNet model from TensorFlow Hub
-yamnet_model = hub.load('https://tfhub.dev/google/yamnet/1')
+try:
+    yamnet_model = hub.load('https://tfhub.dev/google/yamnet/1')
+    print("YAMNet model loaded successfully")
+except Exception as e:
+    print(f"Warning: Could not load YAMNet from TensorFlow Hub: {e}")
+    print("Using alternative approach...")
+    yamnet_model = None
 
 # Function to preprocess audio
 def preprocess_audio(file_path):
@@ -157,6 +164,12 @@ def preprocess_audio(file_path):
 
 # Function to extract embeddings using YAMNet
 def extract_embeddings(audio_tensor, sample_rate):
+    if yamnet_model is None:
+        # Fallback: use MFCC features as embedding
+        mfcc = librosa.feature.mfcc(y=audio_tensor, sr=sample_rate, n_mfcc=40)
+        mean_embedding = np.mean(mfcc, axis=1)
+        return tf.constant(mean_embedding, dtype=tf.float32)
+    
     audio_tensor = tf.constant(audio_tensor, dtype=tf.float32)
     scores, embeddings, spectrogram = yamnet_model(audio_tensor)
     # Average embeddings over time to get a single vector per audio clip

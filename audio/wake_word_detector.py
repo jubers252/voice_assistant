@@ -8,7 +8,7 @@ import tensorflow as tf
 
 # Function to extract MFCC features (from test_cnn_model.py)
 class WakeWordDetector:
-    def __init__(self, model_path, sample_rate=22050, n_mfcc=40, n_fft=2048, hop_length=512):
+    def __init__(self, model_path, sample_rate=16000, n_mfcc=40, n_fft=2048, hop_length=512):
         self.model = self._load_model_safe(model_path)
         self.sample_rate = sample_rate
         self.n_mfcc = n_mfcc    
@@ -18,7 +18,7 @@ class WakeWordDetector:
         # Model configuration (matches training)
         self.desired_length = 44
         self.feature_dim = 120
-        self.optimal_threshold = 0.868  # Updated from retraining (suggested threshold for optimal detection)
+        self.optimal_threshold = 0.95  # Higher threshold to reduce false positives
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")

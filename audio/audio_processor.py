@@ -103,7 +103,6 @@ class AudioProcessors:
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
         self.mic_device_id = 2   # Google voiceHAT with stereo INMP mics (hw:3,0)
         self.mic_gain_factor = 1.0  # Increased for voiceHAT stereo INMP mics
-        self.digital_gain = 8.0     # BOOSTED 5x: for quieter speech detection with music playing
 
         # Audio processing
         self.sample_rate = 22050
@@ -200,17 +199,6 @@ class AudioProcessors:
                     print(f"Balanced stereo gain - Left gain: {gain_left:.3f}, Right gain: {gain_right:.3f}")
             
             audio_flat = audio.flatten()
-            
-            # Apply fixed digital gain
-            if self.digital_gain != 1.0:
-                audio_flat = audio_flat * self.digital_gain
-                # Prevent clipping by normalizing if needed
-                max_val = np.max(np.abs(audio_flat))
-                if max_val > 1.0:
-                    audio_flat = audio_flat / max_val
-                    print(f"Applied digital gain {self.digital_gain}x (normalized to prevent clipping)")
-                else:
-                    print(f"Applied digital gain {self.digital_gain}x")
             
             if save_path:
                 sf.write(save_path, audio_flat, sample_rate)
@@ -453,22 +441,6 @@ class AudioProcessors:
         print(f"Pausing listening for {seconds} seconds...")
         time.sleep(seconds)
     
-    def set_digital_gain(self, gain_value):
-        """Set digital gain for MEMS microphone
-        
-        Args:
-            gain_value (float): Gain multiplier (1.0 = no gain, 2.0 = double volume, 0.5 = half volume)
-        """
-        self.digital_gain = max(0.1, min(10.0, gain_value))  # Clamp between 0.1x and 10x
-        print(f"Digital gain set to {self.digital_gain}x")
-    
-    def get_digital_gain(self):
-        """Get current digital gain value
-        
-        Returns:
-            float: Current gain multiplier
-        """
-        return getattr(self, 'digital_gain', 1.0)
     
     def check_microphones(self):
         """Check available microphones and their indices"""
@@ -565,11 +537,6 @@ class AudioProcessors:
         except Exception:
             audio_samples = indata.flatten()
         
-        # Apply digital gain
-        if hasattr(self, 'digital_gain') and self.digital_gain != 1.0:
-            audio_samples = audio_samples * self.digital_gain
-            audio_samples = np.clip(audio_samples, -1.0, 1.0)
-
         # Store raw audio in buffer
         if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
             try:
