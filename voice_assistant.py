@@ -25,7 +25,7 @@ load_dotenv()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 model_dir = os.path.join(current_dir, 'model')
-
+yamnet_model_path = os.getenv('YAMNET_MODEL_PATH')
 
 class VoiceAssistantRefactored:
     """Refactored Voice Assistant with modular handlers"""
@@ -49,6 +49,7 @@ class VoiceAssistantRefactored:
             
         self.recognizer = SpeechRecognizer(
             self.audio_processors, 
+            device_index=0,  # ReSpeaker Lite (from diagnostic)
             pixel_led=self.pixel_led, 
         )
         self.conversation_manager = ConversationManager()
@@ -59,7 +60,8 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
 
-        ww_model_path = f"{model_dir}/WWD_respeaker_model.h5"
+        ww_model_path = f"{model_dir}/WWD_respeaker_model_v2.h5"
+       
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
         

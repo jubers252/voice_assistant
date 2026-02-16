@@ -6,7 +6,7 @@ import threading
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.001, confidence_threshold=0.95
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.80
 ):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
@@ -56,7 +56,7 @@ class WakeWordManager:
         # Set LED to red for wake word detected
         if self.pixel_led:
             self.pixel_led.set_error()  # Red color
-        time.sleep(0.2)  # Brief pause to show detection
+        time.sleep(0.1)  # Brief pause to show detection
         try:
             # Play beep sound asynchronously (non-blocking) to indicate readiness
             import threading
@@ -127,7 +127,7 @@ class WakeWordManager:
             )
             
             # Show detection attempts with energy > 0.010 for debugging
-            if energy and energy > 0.010 and self.debug_mode:
+            if energy and energy > 0.0001 and self.debug_mode:
                 print(f"Wakeword check: Detected={detected}, Energy={energy:.4f}, Confidence={confidence}")
             
             # Handle wake word detection

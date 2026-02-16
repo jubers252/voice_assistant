@@ -90,7 +90,7 @@ checkpoint = ModelCheckpoint(os.path.join("model_training", "saved_model", "best
 print("Training Model with Enhanced Regularization: \n")
 history = model.fit(
     X_train, y_train,
-    epochs=50,  # Reduced epochs
+    epochs=35,  # Reduced epochs
     batch_size=16,                 # Smaller batch size for better generalization
     validation_data=(X_val, y_val), # Use separate validation set
     callbacks=[early_stop, reduce_lr, checkpoint],  # Multiple callbacks
@@ -101,7 +101,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v4.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")
@@ -144,81 +144,5 @@ print("\n=== Model Training Complete ===")
 print("Improved model saved as 'WWD_respeaker_model.h5'")
 print("Use this model with the suggested threshold for better performance!")
 
-# --- End of script ---
-
-# YAMNet Wake Word Detection Pipeline
-
-# Load YAMNet model from TensorFlow Hub
-try:
-    yamnet_model = hub.load('https://tfhub.dev/google/yamnet/1')
-    print("YAMNet model loaded successfully")
-except Exception as e:
-    print(f"Warning: Could not load YAMNet from TensorFlow Hub: {e}")
-    print("Using alternative approach...")
-    yamnet_model = None
-
-# Function to preprocess audio
-def preprocess_audio(file_path):
-    audio_tensor, sample_rate = librosa.load(file_path, sr=16000)
-    return audio_tensor, sample_rate
-
-# Function to extract embeddings using YAMNet
-def extract_embeddings(audio_tensor, sample_rate):
-    if yamnet_model is None:
-        # Fallback: use MFCC features as embedding
-        mfcc = librosa.feature.mfcc(y=audio_tensor, sr=sample_rate, n_mfcc=40)
-        mean_embedding = np.mean(mfcc, axis=1)
-        return tf.constant(mean_embedding, dtype=tf.float32)
-    
-    audio_tensor = tf.constant(audio_tensor, dtype=tf.float32)
-    scores, embeddings, spectrogram = yamnet_model(audio_tensor)
-    # Average embeddings over time to get a single vector per audio clip
-    mean_embedding = tf.reduce_mean(embeddings, axis=0)
-    return mean_embedding
-
-# Example pipeline for fine-tuning
-def fine_tune_yamnet(wakeword_data, background_data):
-    # Prepare dataset
-    X = []
-    y = []
-
-    for audio_path in wakeword_data:
-        audio_tensor, sample_rate = preprocess_audio(audio_path)
-        embedding = extract_embeddings(audio_tensor, sample_rate)
-        X.append(embedding.numpy())
-        y.append(1)  # Label for wake word
-
-    for audio_path in background_data:
-        audio_tensor, sample_rate = preprocess_audio(audio_path)
-        embedding = extract_embeddings(audio_tensor, sample_rate)
-        X.append(embedding.numpy())
-        y.append(0)  # Label for background noise
-
-    X = np.array(X)
-    y = np.array(y)
-
-    # Define a simple classifier
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(X.shape[1],)),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(1, activation='sigmoid')
-    ])
-
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-
-    # Train the model
-    model.fit(X, y, epochs=10, batch_size=32, validation_split=0.2)
-
-    return model
-
-
-# Dynamically load all wake word and background audio files
-wakeword_data = glob.glob('model_training/audio_data/*.wav')  # Wake word directory
-background_data = glob.glob('model_training/background_sound/*.wav')  # Background directory
-
-# Fine-tune YAMNet
-fine_tuned_model = fine_tune_yamnet(wakeword_data, background_data)
-
-# Save the fine-tuned model
-fine_tuned_model.save('model_training/saved_model/fine_tuned_yamnet_model.keras')
+print("\n=== Model Training Complete ===")
+print("CNN model saved as 'WWD_respeaker_model.h5'")

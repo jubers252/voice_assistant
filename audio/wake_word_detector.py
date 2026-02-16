@@ -18,7 +18,7 @@ class WakeWordDetector:
         # Model configuration (matches training)
         self.desired_length = 44
         self.feature_dim = 120
-        self.optimal_threshold = 0.95  # Higher threshold to reduce false positives
+        self.optimal_threshold = 0.40 # Based on training: background mean 0.003, wake word mean 0.890
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")
@@ -44,8 +44,8 @@ class WakeWordDetector:
     def _warmup_model(self):
         """Run a dummy prediction to initialize the model and avoid first-time delay"""
         try:
-            # Create dummy audio (1 second of silence)
-            dummy_audio = np.zeros(int(self.sample_rate * 1.0))
+            # Create dummy audio (2 seconds of silence)
+            dummy_audio = np.zeros(int(self.sample_rate * 2.0))
             
             # Extract features from dummy audio
             features = self.extract_features(dummy_audio, self.sample_rate)

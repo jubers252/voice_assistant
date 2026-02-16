@@ -11,7 +11,7 @@ import openai
 from openai import OpenAI
 import time as timing_module
 import gc
-        
+
 # Load environment variables
 load_dotenv()
 
@@ -80,11 +80,12 @@ class SpeechRecognizer:
             mic_kwargs = {}
             if self.device_index is not None:
                 mic_kwargs['device_index'] = self.device_index
+            mic_kwargs['sample_rate'] = 16000  # Force 16kHz sample rate
             with suppress_alsa_errors():
                 microphone = sr.Microphone(**mic_kwargs)
                 with microphone as source:
                     pass  # Just open and close to warm up
-            print("[RECOGNIZER] Microphone warmed up")
+            print("[RECOGNIZER] Microphone warmed up at 16kHz")
         except Exception as e:
             print(f"[RECOGNIZER] Microphone warm-up failed (non-critical): {e}")
 
@@ -101,69 +102,19 @@ class SpeechRecognizer:
         else:
             print("[RECOGNIZER] Music playback stopped - reverting to normal settings")
 
-    def _check_voice_activity(self, audio_data, sample_rate, silence_duration=1.5):
-        """
-        Check if there's voice activity in audio using energy detection.
-        Returns True if voice is detected, False if only silence.
-        
-        Args:
-            audio_data: audio samples as numpy array
-            sample_rate: sample rate of audio
-            silence_duration: seconds of silence threshold
-        """
-        try:
-            # Convert bytes to numpy array if needed
-            if isinstance(audio_data, bytes):
-                audio_data = np.frombuffer(audio_data, dtype=np.int16).astype(float) / 32768.0
-            
-            # Energy threshold
-            energy = np.sqrt(np.mean(audio_data ** 2))
-            
-            # If energy is low, likely silence
-            if energy < 0.0005:  # Very low energy = silence
-                return False
-            
-            return True
-        except Exception as e:
-            return True  # Default to True if detection fails
-    
-    def _vad_monitor_thread(self, stop_event, audio_queue, silence_threshold=1.5):
-        """
-        Monitor audio in background and detect silence.
-        Signals to stop listening if silence detected for threshold seconds.
-        """
-        consecutive_silence = 0.0
-        silent_frame_duration = 0.1  # Each frame is ~100ms
-        
-        while not stop_event.is_set():
-            try:
-                # Get audio frames from queue (non-blocking)
-                if not audio_queue.empty():
-                    frame = audio_queue.get(timeout=0.1)
-                    is_speaking = self._check_voice_activity(frame, self.recognizer.sample_rate)
-                    
-                    if not is_speaking:
-                        consecutive_silence += silent_frame_duration
-                        if consecutive_silence >= silence_threshold:
-                            print(f"[VAD] Silence detected for {silence_threshold}s, stopping...")
-                            stop_event.set()
-                            break
-                    else:
-                        consecutive_silence = 0.0  # Reset on voice detection
-                else:
-                    time.sleep(0.05)
-            except Exception as e:
-                time.sleep(0.05)
-    
+
+   
     def _setup_recognizer(self):
-        # INMP441 is very sensitive - use balanced thresholds for natural speech
-        self.recognizer.energy_threshold = 20  # Lowered to detect quiet speech
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.dynamic_energy_adjustment_damping = 0.10  # Smoother adjustment to avoid oscillation
-        self.recognizer.dynamic_energy_ratio = 1.3  # Conservative ratio for stable speech detection
-        self.recognizer.pause_threshold = 1.0  # 1.0 seconds of silence before stopping
+        # Fixed energy threshold optimized for quiet speech
+        self.recognizer.energy_threshold = 300  # Fixed threshold for consistent detection
+        self.recognizer.dynamic_energy_threshold = True  # Fixed mode (more reliable for quiet rooms)
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15  # Not used when dynamic is disabled
+        self.recognizer.dynamic_energy_ratio = 1.5  # Not used when dynamic is disabled
+        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping (allow natural pauses)
         self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
-        self.recognizer.non_speaking_duration = 0.7  # Max 0.7 seconds pause mid-phrase
+        self.recognizer.non_speaking_duration = 1.2  # Allow up to 1.2 seconds pause mid-phrase for natural speech
+        
+        print(f"[RECOGNIZER] Fixed Energy Mode - Threshold: {self.recognizer.energy_threshold}, pause: {self.recognizer.pause_threshold}s")
 
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
@@ -202,7 +153,7 @@ class SpeechRecognizer:
         if self.is_music_playing:
             timeout = 5
             print("[ASSISTANT] Music is playing - using 5s timeout")
-        phrase_time_limit = 5 if timeout == 5 else 15
+        phrase_time_limit = 5 if timeout == 5 else 20  # Increased from 15 to 20 seconds for more speaking time
 
         print(f"timeout={timeout}, phrase_time_limit={phrase_time_limit}")
         msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
@@ -214,6 +165,7 @@ class SpeechRecognizer:
             audio = None
             try:
                 mic_kwargs = {"device_index": self.device_index} if self.device_index is not None else {}
+                mic_kwargs['sample_rate'] = 16000  # Force 16kHz sample rate
                 if self.pixel_led:
                     self.pixel_led.set_listening()
                 with suppress_alsa_errors():
@@ -233,12 +185,13 @@ class SpeechRecognizer:
                             continue
 
                 if not audio or len(audio.frame_data) < 400:
-                    print("[ASSISTANT] Audio too short, retrying...")
+                    print(f"[ASSISTANT] Audio too short: {len(audio.frame_data) if audio else 0} bytes, minimum required: 400 bytes")
                     if attempt < max_retries:
                         self._print_attempt(attempt + 1, is_follow_up)
                     continue
 
-                print("Recognizing...")
+                print(f"[ASSISTANT] Audio captured: {len(audio.frame_data)} bytes")
+    
                 command = self._recognize_audio(audio)
                 if command:
                     return command
@@ -294,6 +247,7 @@ class SpeechRecognizer:
     def _recognize_with_google(self, audio):
         """Recognize audio using Google Speech Recognition"""
         try:
+            print(f"[ASSISTANT] Audio received - Sample rate: {audio.sample_rate}, Frames: {len(audio.frame_data)} bytes")
             command = self.recognizer.recognize_google(audio, language='en-US')
             print(f"[ASSISTANT] You said: {command}")
             cleaned_command = command.lower().strip()
@@ -302,9 +256,14 @@ class SpeechRecognizer:
                 # Don't speak here - let it retry silently
                 return None
             return cleaned_command
-        except (sr.RequestError, sr.UnknownValueError) as e:
-            print(f"[ASSISTANT] Google Recognition error: {e}.")
-            # Don't speak here - let the caller handle it to avoid self-listening
+        except sr.RequestError as e:
+            print(f"[ASSISTANT] Google API request error: {e}")
+            return None
+        except sr.UnknownValueError as e:
+            print(f"[ASSISTANT] Google couldn't understand audio (speech too quiet or unclear)")
+            return None
+        except Exception as e:
+            print(f"[ASSISTANT] Google Recognition unexpected error: {type(e).__name__}: {e}")
             return None
 
     def _recognize_with_whisper(self, audio):
@@ -367,9 +326,10 @@ class SpeechRecognizer:
         """Choose a working device index with priority for known good devices.
 
         Priority order:
-        1. Google VoiceHAT (device 1)
-        2. USB microphone (device 2)
-        3. Test all other devices
+        1. ReSpeaker device (for ReSpeaker Lite)
+        2. Google VoiceHAT (device 1)
+        3. USB microphone (device 2)
+        4. Test all other devices
         
         Returns True if a device was selected.
         """
@@ -389,8 +349,17 @@ class SpeechRecognizer:
             self.device_index = None
             return True
 
-        # Force search: try preferred devices first
-        preferred_devices = [1, 2]  # Google VoiceHAT, then USB mic
+        # Force search: try preferred devices first, starting with ReSpeaker
+        preferred_devices = []
+        
+        # First, look for ReSpeaker device
+        for idx, name in enumerate(names):
+            if any(key in name.lower() for key in ['respeaker', 'seeed', 'ac108', 'wm8', 'rv']):
+                preferred_devices.append(idx)
+                break
+        
+        # Then add standard devices
+        preferred_devices.extend([1, 2])  # Google VoiceHAT, then USB mic
         print(f"[MIC] Available devices: {len(names)}")
         
         # Try preferred devices first
@@ -399,11 +368,11 @@ class SpeechRecognizer:
                 try:
                     print(f"[MIC] Testing device {idx}: {names[idx]}")
                     with suppress_alsa_errors():
-                        mic = sr.Microphone(device_index=idx)
+                        mic = sr.Microphone(device_index=idx, sample_rate=16000)
                         with mic as source:
                             # Try to actually listen to verify the device works
                             try:
-                                self.recognizer.listen(source, timeout=1.0, phrase_time_limit=1.0)
+                                self.recognizer.listen(source, timeout=2.0, phrase_time_limit=2.0)
                             except sr.WaitTimeoutError:
                                 # Timeout is ok - device is working, just no audio
                                 pass
@@ -421,10 +390,10 @@ class SpeechRecognizer:
             try:
                 print(f"[MIC] Testing device {idx}: {names[idx]}")
                 with suppress_alsa_errors():
-                    mic = sr.Microphone(device_index=idx)
+                    mic = sr.Microphone(device_index=idx, sample_rate=16000)
                     with mic as source:
                         try:
-                            self.recognizer.listen(source, timeout=1.0, phrase_time_limit=1.0)
+                            self.recognizer.listen(source, timeout=2.0, phrase_time_limit=2.0)
                         except sr.WaitTimeoutError:
                             pass
                     self.device_index = idx
