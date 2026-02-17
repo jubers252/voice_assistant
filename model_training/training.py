@@ -19,6 +19,15 @@ import librosa
 import tensorflow as tf
 import tensorflow_hub as hub
 import glob
+import random
+
+####### SET RANDOM SEEDS FOR REPRODUCIBILITY #############
+# This ensures the same results every time you run the training script
+RANDOM_SEED = 42
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+tf.random.set_seed(RANDOM_SEED)
+
 ##### 1. Load Preprocessed Data (MFCC features) #####
 # This file is created by your PreprocessingData.py script
 # Each sample is a matrix: (time_steps, 120 features - MFCC + deltas)
@@ -90,7 +99,7 @@ checkpoint = ModelCheckpoint(os.path.join("model_training", "saved_model", "best
 print("Training Model with Enhanced Regularization: \n")
 history = model.fit(
     X_train, y_train,
-    epochs=35,  # Reduced epochs
+    epochs=50,  # Increased epochs
     batch_size=16,                 # Smaller batch size for better generalization
     validation_data=(X_val, y_val), # Use separate validation set
     callbacks=[early_stop, reduce_lr, checkpoint],  # Multiple callbacks
@@ -101,7 +110,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v4.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v6.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")

@@ -111,7 +111,7 @@ class SpeechRecognizer:
         self.recognizer.dynamic_energy_adjustment_damping = 0.15  # Not used when dynamic is disabled
         self.recognizer.dynamic_energy_ratio = 1.5  # Not used when dynamic is disabled
         self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping (allow natural pauses)
-        self.recognizer.phrase_threshold = 0.2  # Minimum 200ms to catch speech start
+        self.recognizer.phrase_threshold = 0.3  # Minimum 200ms to catch speech start
         self.recognizer.non_speaking_duration = 1.2  # Allow up to 1.2 seconds pause mid-phrase for natural speech
         
         print(f"[RECOGNIZER] Fixed Energy Mode - Threshold: {self.recognizer.energy_threshold}, pause: {self.recognizer.pause_threshold}s")

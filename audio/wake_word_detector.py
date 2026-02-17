@@ -18,7 +18,7 @@ class WakeWordDetector:
         # Model configuration (matches training)
         self.desired_length = 44
         self.feature_dim = 120
-        self.optimal_threshold = 0.40 # Based on training: background mean 0.003, wake word mean 0.890
+        self.optimal_threshold = 0.40 # Based on latest training: background mean 0.009, wake word mean 0.920
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")

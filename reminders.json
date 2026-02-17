@@ -48,5 +48,15 @@
     "active": true,
     "notified": true,
     "recurring": "once"
+  },
+  {
+    "id": 6,
+    "text": "Morning wake up alarm",
+    "description": "",
+    "remind_time": "2026-02-17T09:00:00",
+    "created_time": "2026-02-17T00:04:34.292593",
+    "active": true,
+    "notified": true,
+    "recurring": "once"
   }
 ]
