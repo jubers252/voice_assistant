@@ -5,7 +5,7 @@
     "description": "",
     "remind_time": "2026-01-25T09:00:00",
     "created_time": "2026-01-07T23:49:04.439155",
-    "active": true,
+    "active": false,
     "notified": true,
     "recurring": "daily"
   },
@@ -58,5 +58,55 @@
     "active": true,
     "notified": true,
     "recurring": "once"
+  },
+  {
+    "id": 7,
+    "text": "Wake up",
+    "description": "",
+    "remind_time": "2026-02-18T09:00:00",
+    "created_time": "2026-02-17T23:37:07.983463",
+    "active": true,
+    "notified": true,
+    "recurring": "once"
+  },
+  {
+    "id": 8,
+    "text": "Reminder set for 3:45",
+    "description": "",
+    "remind_time": "2026-02-17T23:50:32.304358",
+    "created_time": "2026-02-17T23:45:32.304389",
+    "active": true,
+    "notified": true,
+    "recurring": "once"
+  },
+  {
+    "id": 9,
+    "text": "Wake up",
+    "description": "",
+    "remind_time": "2026-02-19T07:00:00",
+    "created_time": "2026-02-17T23:48:41.102090",
+    "active": true,
+    "notified": true,
+    "recurring": "daily"
+  },
+  {
+    "id": 10,
+    "text": "Wake up",
+    "description": "",
+    "remind_time": "2026-02-19T09:00:00",
+    "created_time": "2026-02-17T23:49:08.408049",
+    "active": true,
+    "notified": true,
+    "recurring": "daily"
+  },
+  {
+    "id": 11,
+    "text": "Wake up",
+    "description": "",
+    "remind_time": "2026-02-19T08:00:00",
+    "created_time": "2026-02-17T23:50:00.315114",
+    "active": true,
+    "notified": true,
+    "recurring": "daily"
   }
 ]

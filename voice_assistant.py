@@ -60,7 +60,7 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
 
-        ww_model_path = f"{model_dir}/WWD_respeaker_model_v6.h5"
+        ww_model_path = f"{model_dir}/WWD_respeaker_model_v9.h5"
        
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"

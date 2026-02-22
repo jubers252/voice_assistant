@@ -46,6 +46,7 @@ from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
 from connectors.zepto_order_automation import ZeptoScraper
 from connectors.home_automation import HomeAutomation
+from connectors.yt_music import MusicPlayer
 import asyncio
 
 load_dotenv()
@@ -110,6 +111,9 @@ class LangChainAgentProcessor:
         self._zepto_loop = None
         self._zepto_thread = None
         self._setup_zepto_loop()
+        
+        # Initialize YouTube Music player
+        self.youtube_music = MusicPlayer()
         
         # LangChain-specific setup
         self.agent_executor = None
@@ -1045,6 +1049,120 @@ class LangChainAgentProcessor:
             func=track_orders_function
         )
 
+    def _create_youtube_music_play_song_tool(self) -> Tool:
+        """Play a specific song on YouTube Music"""
+        def play_song_function(song_name: str) -> str:
+            try:
+                # Set music playing flag immediately
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
+                def yt_music_thread_func():
+                    self.youtube_music.play(song_name)
+                
+                # Run YouTube Music in separate thread to avoid audio conflicts
+                yt_thread = threading.Thread(target=yt_music_thread_func, daemon=True)
+                yt_thread.start()
+                
+                return f"Starting song playback: {song_name}"
+            except Exception as e:
+                return f"YouTube Music song error: {str(e)}"
+        
+        return Tool(
+            name="play_youtube_music_song",
+            description="Play a specific song on YouTube Music. Use when: 'play [song name]', 'put on [song]'. Input: song name (e.g., 'Bohemian Rhapsody')",
+            func=play_song_function
+        )
+    
+    def _create_youtube_music_play_playlist_tool(self) -> Tool:
+        """Play a YouTube Music playlist"""
+        def play_playlist_function(playlist_name: str) -> str:
+            try:
+                # Set music playing flag immediately
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
+                def yt_playlist_thread_func():
+                    self.youtube_music.play_playlist(playlist_name)
+                
+                # Run in separate thread
+                yt_thread = threading.Thread(target=yt_playlist_thread_func, daemon=True)
+                yt_thread.start()
+                
+                return f"Starting playlist: {playlist_name}"
+            except Exception as e:
+                return f"YouTube Music playlist error: {str(e)}"
+        
+        return Tool(
+            name="play_youtube_music_playlist",
+            description="Play a YouTube Music playlist. Use when: 'play playlist [name]', 'play [playlist theme]'. Input: playlist name or theme (e.g., 'romantic songs', 'workout', 'chill vibes')",
+            func=play_playlist_function
+        )
+    
+    def _create_youtube_music_play_artist_tool(self) -> Tool:
+        """Play all tracks by a specific artist on YouTube Music"""
+        def play_artist_function(artist_name: str) -> str:
+            try:
+                # Set music playing flag immediately
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
+                def yt_artist_thread_func():
+                    self.youtube_music.play_all_artist_tracks(artist_name)
+                
+                # Run in separate thread
+                yt_thread = threading.Thread(target=yt_artist_thread_func, daemon=True)
+                yt_thread.start()
+                
+                return f"Starting artist playlist: {artist_name}"
+            except Exception as e:
+                return f"YouTube Music artist error: {str(e)}"
+        
+        return Tool(
+            name="play_youtube_music_artist",
+            description="Play all available songs by an artist on YouTube Music. Use when: 'play [artist name]', 'put on [artist] music', 'play songs by [artist]'. Input: artist name (e.g., 'The Beatles', 'Taylor Swift')",
+            func=play_artist_function
+        )
+    
+    def _create_youtube_music_control_tool(self) -> Tool:
+        """Control YouTube Music playback"""
+        def control_function(action: str) -> str:
+            try:
+                action_lower = action.lower().strip()
+                
+                if action_lower in ['pause', 'stop']:
+                    self.youtube_music.pause()
+                    # Set music flag to False
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(False)
+                    return "YouTube Music paused"
+                
+                elif action_lower in ['resume', 'continue', 'play']:
+                    self.youtube_music.resume()
+                    # Set music flag to True
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(True)
+                    return "YouTube Music resumed"
+                
+                elif action_lower in ['next', 'skip']:
+                    self.youtube_music.next()
+                    return "Skipped to next track"
+                
+                elif action_lower in ['previous', 'prev', 'back']:
+                    self.youtube_music.previous()
+                    return "Skipped to previous track"
+                
+                else:
+                    return "Use: pause, stop, resume, next, previous"
+                
+            except Exception as e:
+                return f"YouTube Music control error: {str(e)}"
+        
+        return Tool(
+            name="control_youtube_music_playback",
+            description="Control YouTube Music playback. Actions: pause, stop, resume, next, previous. Use when: 'pause', 'stop', 'play', 'resume', 'next song', 'skip', 'previous'. Input: action name (e.g., 'pause', 'stop', 'next', 'resume')",
+            func=control_function
+        )
 
     def _create_follow_up_question_tool(self) -> Tool:
         """Tool for the AI to ask follow-up questions and continue listening"""
@@ -1104,7 +1222,7 @@ class LangChainAgentProcessor:
                 
                 # Listen with longer timeout for follow-up
                 # Music detection happens inside listen_for_command, which will reduce timeout to 5s if music is playing
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0)
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0, calibrate_ambient=True)
                 
                 if follow_up_command:
                     print(f"Received follow-up response: '{follow_up_command}'")
@@ -1151,6 +1269,10 @@ class LangChainAgentProcessor:
             self._create_telegram_document_tool(),
             self._create_telegram_video_tool(),
             self._create_volume_control_tool(),
+            self._create_youtube_music_play_song_tool(),
+            self._create_youtube_music_play_playlist_tool(),
+            self._create_youtube_music_play_artist_tool(),
+            self._create_youtube_music_control_tool(),
             self._create_follow_up_question_tool(),
             self._zepto_ordering_tool(),
             self._create_zepto_order_history_tool(),

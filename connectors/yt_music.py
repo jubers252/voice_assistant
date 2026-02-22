@@ -444,7 +444,7 @@ class MusicPlayer:
 
         time.sleep(0.5)  # give mpv time to start
 
-    def play_all_artist_tracks(self, artist_name: str, limit: int = None) -> None:
+    def play_all_artist_tracks(self, artist_name: str, limit: int = 10) -> None:
         """
         Retrieve and play all available songs from an artist.
         
@@ -678,7 +678,7 @@ if __name__ == "__main__":
     # Example usage:
     # music.play_all_artist_tracks("guru randhawa", limit=10)
     # music.play_playlist("romantic songs", limit=5)
-    # music.play("pagal hai badshah")  # Play a specific song by name
+    # music.play("meow meow kitten voice")  # Play a specific song by name
     # time.sleep(3)
     
     # Playback controls:
@@ -688,7 +688,7 @@ if __name__ == "__main__":
     # time.sleep(2)
     # music.next()           # Skip to next track
     # music.previous()       # Go to previous track
-    music.set_volume(50)   # Set volume to 60%
+    # music.set_volume(50)   # Set volume to 50%
     # music.toggle_pause()   # Toggle pause/play
     
     # Keep running to allow control

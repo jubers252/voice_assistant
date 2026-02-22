@@ -23,10 +23,10 @@ import random
 
 ####### SET RANDOM SEEDS FOR REPRODUCIBILITY #############
 # This ensures the same results every time you run the training script
-RANDOM_SEED = 42
-random.seed(RANDOM_SEED)
-np.random.seed(RANDOM_SEED)
-tf.random.set_seed(RANDOM_SEED)
+# RANDOM_SEED = 42
+# random.seed(RANDOM_SEED)
+# np.random.seed(RANDOM_SEED)
+# tf.random.set_seed(RANDOM_SEED)
 
 ##### 1. Load Preprocessed Data (MFCC features) #####
 # This file is created by your PreprocessingData.py script
@@ -110,7 +110,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v6.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v9.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")
@@ -154,4 +154,4 @@ print("Improved model saved as 'WWD_respeaker_model.h5'")
 print("Use this model with the suggested threshold for better performance!")
 
 print("\n=== Model Training Complete ===")
-print("CNN model saved as 'WWD_respeaker_model.h5'")
+print("CNN model saved as 'WWD_respeaker_model_v8.h5'")
