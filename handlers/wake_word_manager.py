@@ -6,7 +6,7 @@ import threading
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.75
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.65
 ):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
@@ -53,24 +53,17 @@ class WakeWordManager:
         t0 = timing_module.time()
         print("Wake word detected! Listening for command...")
         
-        # Set LED to red for wake word detected
-        if self.pixel_led:
-            self.pixel_led.set_error()  # Red color
-        time.sleep(0.1)  # Brief pause to show detection
         try:
             # Play beep sound asynchronously (non-blocking) to indicate readiness
-            import threading
-            beep_thread = threading.Thread(target=self._play_beep_async, daemon=True)
-            beep_thread.start()
+            # import threading
+            # beep_thread = threading.Thread(target=self._play_beep_async, daemon=True)
+            # beep_thread.start()
 
-            # Set LED to blue while listening for command
-            if self.pixel_led:
-                self.pixel_led.set_listening()  # Blue color
             
             # Start speech recognition immediately without waiting for beep
             print("Starting speech recognition...")
 
-            user_command = self.recognizer.listen_for_command()
+            user_command = self.recognizer.listen_for_command(calibrate_ambient=True)
 
             print(f"Speech recognition result: {user_command}")
             
