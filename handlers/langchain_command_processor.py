@@ -15,7 +15,7 @@ import re
 import warnings
 import urllib3
 import gc
-
+from connectors.zepto_order_database import ZeptoOrderDatabase
 # Suppress urllib3 warnings from Selenium WebDriver connections
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
@@ -105,7 +105,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -114,6 +114,9 @@ class LangChainAgentProcessor:
         
         # Initialize YouTube Music player
         self.youtube_music = MusicPlayer()
+        
+        # Initialize Zepto Order Database
+        self.zepto_db = ZeptoOrderDatabase()
         
         # LangChain-specific setup
         self.agent_executor = None
@@ -799,7 +802,7 @@ class LangChainAgentProcessor:
         )
     
     def _zepto_ordering_tool(self) -> Tool:
-        """Zepto grocery ordering tool (placeholder)"""
+        """Zepto grocery ordering tool with database tracking"""
         def zepto_function(input_str: str) -> str:
             try:
                 # Parse from RIGHT to handle product names with pipes
@@ -863,6 +866,8 @@ class LangChainAgentProcessor:
                 
                 if action == "login":
                     self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    # Save initial order state
+                    self.zepto_db.save_order(status="pending", current_task="login", items=[], total_price=0.0, error=False)
                     return "Zepto login initiated."
                 if action == "clear_cart":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
@@ -875,6 +880,10 @@ class LangChainAgentProcessor:
                         print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     product_list = self._run_in_zepto_loop(self.zepto_scraper.search_and_extract_products(product))
+                    # Update order task to searching
+                    latest_order = self.zepto_db.get_latest_order()
+                    if latest_order:
+                        self.zepto_db.update_task(latest_order['id'], "searching", f"Searched for: {product}")
                     return f"Zepto search results: {product_list}"
                 elif action == "add_product":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
@@ -882,6 +891,18 @@ class LangChainAgentProcessor:
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     print(f"[ZEPTO DEBUG] Calling add_product_to_cart with: product='{product}', quantity={quantity}, index={product_index}")
                     result = self._run_in_zepto_loop(self.zepto_scraper.add_product_to_cart(product, quantity, product_index))
+                    
+                    # Update order with new item
+                    latest_order = self.zepto_db.get_latest_order()
+                    if latest_order:
+                        items = latest_order.get('items', [])
+                        # Add or update item in list
+                        item_str = f"{product} x{quantity}"
+                        if item_str not in items:
+                            items.append(item_str)
+                        self.zepto_db.update_items(latest_order['id'], items)
+                        self.zepto_db.update_task(latest_order['id'], "item_added", f"Added: {product} x{quantity}")
+                    
                     return f"Zepto add product result: {result}"
                 elif action == "order_details":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
@@ -895,6 +916,12 @@ class LangChainAgentProcessor:
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     payment_result = self._run_in_zepto_loop(self.zepto_scraper.checkout())
                     
+                    # Update order status to payment
+                    latest_order = self.zepto_db.get_latest_order()
+                    if latest_order:
+                        self.zepto_db.update_status(latest_order['id'], "payment")
+                        self.zepto_db.update_task(latest_order['id'], "payment_confirmation", "Checkout initiated")
+                    
                     # Add confirmation prompt for COD payment
                     if payment_result.get('cod_available'):
                         methods_str = ', '.join(payment_result.get('payment_methods', ['Cash on Delivery']))
@@ -906,8 +933,18 @@ class LangChainAgentProcessor:
                 elif action == "place_order":
                     result = self._run_in_zepto_loop(self.zepto_scraper.click_proceed_final())
                     if result and result.get("status") == "clicked":
-                        print("Order placed successfully.") 
+                        print("Order placed successfully.")
+                        # Update order to completed
+                        latest_order = self.zepto_db.get_latest_order()
+                        if latest_order:
+                            self.zepto_db.update_status(latest_order['id'], "completed")
+                            self.zepto_db.update_task(latest_order['id'], "order_placed", "Order successfully placed")
                         return "Zepto order placed successfully."
+                    else:
+                        # Set error flag
+                        latest_order = self.zepto_db.get_latest_order()
+                        if latest_order:
+                            self.zepto_db.set_error(latest_order['id'], True, "Failed to place order")
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
                 elif action == "cleanup":
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
@@ -916,12 +953,35 @@ class LangChainAgentProcessor:
                     return f"Unknown action: {action}. Supported: login, search, add_product, order_details, checkout, place_order, cleanup"
             except Exception as e:
                 print(f"[ZEPTO ERROR] {str(e)}")
+                # Set error flag when exception occurs
+                latest_order = self.zepto_db.get_latest_order()
+                if latest_order:
+                    self.zepto_db.set_error(latest_order['id'], True, str(e))
                 return f"Zepto tool error: {str(e)}"
         
         return Tool(
             name="zepto_ordering_tool",
             description="Zepto grocery shopping. Workflow: 1) login 2)clear_cart 3)search|product_name 4) add_product|product_name|quantity|index 5) order_details 6) checkout (auto-selects COD) 7) ask confirmation 8) place_order 9) cleanup. Format: 'action|product|quantity|index'. ALWAYS ask user confirmation before place_order using ask_follow_up_question tool.",
             func=zepto_function
+        )
+
+    def _create_zepto_get_latest_order_tool(self) -> Tool:
+        """Get latest incomplete order from database"""
+        def get_latest_order_function(query: str = "") -> str:
+            try:
+                latest_order = self.zepto_db.get_latest_order()
+                
+                if not latest_order:
+                    return "No incomplete Zepto orders found in the database."
+                                               
+                return latest_order
+            except Exception as e:
+                return f"Error retrieving order from database: {str(e)}"
+        
+        return Tool(
+            name="zepto_get_latest_order_from_db",
+            description="Get the latest incomplete Zepto order from the database. Use when user wants to check if there's an incomplete order or continue previous order. Returns order ID, status, current task, items, and recent activity.",
+            func=get_latest_order_function
         )
 
     def _create_zepto_order_history_tool(self) -> Tool:
@@ -1275,6 +1335,7 @@ class LangChainAgentProcessor:
             self._create_youtube_music_control_tool(),
             self._create_follow_up_question_tool(),
             self._zepto_ordering_tool(),
+            self._create_zepto_get_latest_order_tool(),
             self._create_zepto_order_history_tool(),
             self._create_zepto_order_again_tool(),
             self._create_zepto_track_orders_tool()
@@ -1386,6 +1447,22 @@ class LangChainAgentProcessor:
                     messages.append(HumanMessage(content=hist_entry["content"]))
                 elif hist_entry["role"] == "assistant":
                     messages.append(AIMessage(content=hist_entry["content"]))
+            
+            # Check for incomplete Zepto orders and inject context
+            latest_order = self.zepto_db.get_latest_order()
+            if latest_order:
+                order_context = f"""
+🛒 INCOMPLETE ZEPTO ORDER FOUND:
+- Status: {latest_order['status']}
+- Current Task: {latest_order['current_task']}
+- Items: {len(latest_order['items'])} items
+- Total: ₹{latest_order['total_price']}
+- Items: {', '.join(latest_order['items'])}
+{'⚠️ Previous Error Occurred' if latest_order['error'] else ''}
+---
+Ask user if they want to continue this order or create a new one.
+"""
+                messages.append(AIMessage(content=order_context))
             
             # Add current user message
             user_message = HumanMessage(content=user_command)

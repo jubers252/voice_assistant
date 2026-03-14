@@ -126,7 +126,7 @@
     "remind_time": "2026-02-24T23:00:00",
     "created_time": "2026-02-23T23:48:50.648699",
     "active": true,
-    "notified": false,
+    "notified": true,
     "recurring": "daily"
   },
   {
@@ -136,7 +136,7 @@
     "remind_time": "2026-02-24T23:00:00",
     "created_time": "2026-02-24T00:20:01.164384",
     "active": true,
-    "notified": false,
+    "notified": true,
     "recurring": "daily"
   }
 ]

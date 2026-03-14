@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from audio.audio_processor import AudioProcessors
 from audio.wake_word_detector import WakeWordDetector
 from speech.speech_recognizer import SpeechRecognizer
+from speech.energy_calibrator import EnergyCalibrator
 from conversation.conversation_manager import ConversationManager
 from connectors.spotify_connector import SpotifyConnector
 from connectors.reminder_manager import ReminderManager
@@ -52,6 +53,15 @@ class VoiceAssistantRefactored:
             device_index=0,  # ReSpeaker Lite (from diagnostic)
             pixel_led=self.pixel_led, 
         )
+        
+        # Start energy calibration thread (updates every 30 seconds)
+        self.energy_calibrator = EnergyCalibrator(self.recognizer.recognizer, device_index=self.recognizer.device_index)
+        self.energy_calibrator.start_continuous_calibration(interval=5)
+        print("[ASSISTANT] Energy calibration thread started (continuous updates every 30s)")
+        
+        # Store reference to energy calibrator in recognizer so it can be controlled during listening
+        self.recognizer.energy_calibrator = self.energy_calibrator
+        
         self.conversation_manager = ConversationManager()
         self.conversation_history = self.conversation_manager.conversation_history
 

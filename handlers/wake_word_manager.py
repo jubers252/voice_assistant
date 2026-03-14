@@ -99,6 +99,7 @@ class WakeWordManager:
     def main_detection_loop(self, process_command_callback):
         """Main wake word detection loop"""
         print("Wake word detection loop started")
+        print("[WAKE_WORD] Using dynamically calibrated energy threshold from recognizer (updates every 30s)")
         
         while self.detection_running:
             # Ensure wake word detector and its model are available
@@ -111,17 +112,27 @@ class WakeWordManager:
                 time.sleep(self.step_duration)
                 continue
 
+            # Get dynamically calibrated energy threshold from recognizer (updates every 30s)
+            # This adapts wake word detection to changing background noise levels
+            if hasattr(self.recognizer, 'energy_threshold'):
+                # Use recognizer's calibrated threshold, scaled down for wake word detection
+                # (wake word is more critical, so use a slightly lower threshold for sensitivity)
+                calibrated_threshold = self.recognizer.energy_threshold / 10000.0
+                dynamic_energy_threshold = max(calibrated_threshold, 0.00005)  # Minimum threshold of 0.00005
+            else:
+                dynamic_energy_threshold = self.energy_threshold
+            
             # Wake word detection (now always active, even during speech)
             audio_window = np.array(self.audio_buffer)
             detected, energy, confidence = self.wake_word_detector.detect_wakeword(
                 audio_window, self.sample_rate, 
-                energy_threshold=self.energy_threshold, 
+                energy_threshold=dynamic_energy_threshold, 
                 confidence_threshold=self.confidence_threshold
             )
             
             # Show detection attempts with energy > 0.010 for debugging
             if energy and energy > 0.0001 and self.debug_mode:
-                print(f"Wakeword check: Detected={detected}, Energy={energy:.4f}, Confidence={confidence}")
+                print(f"Wakeword check: Detected={detected}, Energy={energy:.6f}, Confidence={confidence:.4f}, Threshold={dynamic_energy_threshold:.6f}")
             
             # Handle wake word detection
             if detected:

@@ -73,7 +73,10 @@ class SpeechRecognizer:
             self.device_index = None
         
         # Warm up microphone to avoid 100ms+ latency on first use
-        self._warmup_microphone()  
+        self._warmup_microphone()
+        
+        # Store reference to energy calibrator (will be set by voice_assistant.py)
+        self.energy_calibrator = None  
     
     def _warmup_microphone(self):
         """Pre-open and close microphone to prime the device driver"""
@@ -105,16 +108,17 @@ class SpeechRecognizer:
 
    
     def _setup_recognizer(self):
-        # Fixed energy threshold optimized for quiet speech
-        self.recognizer.energy_threshold = 300  
-        self.recognizer.dynamic_energy_threshold = True  # Fixed mode (more reliable for quiet rooms)
-        self.recognizer.dynamic_energy_adjustment_damping = 0.15  # Not used when dynamic is disabled
-        self.recognizer.dynamic_energy_ratio = 1.5  # Not used when dynamic is disabled
-        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping (allow natural pauses)
-        self.recognizer.phrase_threshold = 0.3  # Minimum 200ms to catch speech start
-        self.recognizer.non_speaking_duration = 1.3  # Allow up to 1.2 seconds pause mid-phrase for natural speech
+        # Minimal energy threshold - will be set by initial calibration
+        # This is just a temporary value until calibrate_initial() runs
+        self.recognizer.energy_threshold = 100  # Minimal value (will be updated immediately)
+        self.recognizer.dynamic_energy_threshold = False  # Keep fixed for consistency
+        self.recognizer.dynamic_energy_adjustment_damping = 0.15
+        self.recognizer.dynamic_energy_ratio = 1.5
+        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
+        self.recognizer.phrase_threshold = 0.3  # Minimum 300ms to catch speech start
+        self.recognizer.non_speaking_duration = 1.3  # Allow up to 1.3 seconds pause mid-phrase
         
-        print(f"[RECOGNIZER] Fixed Energy Mode - Threshold: {self.recognizer.energy_threshold}, pause: {self.recognizer.pause_threshold}s")
+        print(f"[RECOGNIZER] Setup complete - Energy threshold will be auto-calibrated on startup")
 
     def _calibrate_ambient_energy(self, duration=1.0, multiplier=1.5):
         """Calibrate ambient energy by recording and measuring raw microphone audio"""
@@ -192,12 +196,15 @@ class SpeechRecognizer:
         phrase_time_limit = 5 if timeout == 5 else 20  # Increased from 15 to 20 seconds for more speaking time
 
         # Calibrate ambient energy once before listening (longer duration to actually capture noise)
-        if calibrate_ambient:
-            self._calibrate_ambient_energy(duration=1.0, multiplier=1.5)
+        # if calibrate_ambient:
+        #     self._calibrate_ambient_energy(duration=1.0, multiplier=1.5)
         
         print(f"timeout={timeout}, phrase_time_limit={phrase_time_limit}")
         msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
         print(f"[ASSISTANT] {msg}")
+        
+       
+        
         self._print_attempt(0, is_follow_up)
 
         for attempt in range(max_retries + 1):
@@ -264,6 +271,11 @@ class SpeechRecognizer:
                         pass
                 gc.collect()
                 # self.recognizer.energy_threshold =300
+        
+        # Resume energy calibration after listening is done
+        if self.energy_calibrator:
+            self.energy_calibrator.pause_calibration = False
+        
         print("[ASSISTANT] No command detected after multiple attempts.")
         # self.audio_processor.speak("I didn't hear anything. Please call if you need me.")
         return None
