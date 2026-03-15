@@ -40,28 +40,33 @@ class EnergyCalibrator:
         self.recognizer = recognizer
         self.device_index = device_index
     
-    def start_continuous_calibration(self, interval=30):
+    def start_continuous_calibration(self, interval=5):
         """Start background thread for continuous energy calibration
         
         Args:
-            interval: Calibration interval in seconds (default 30s)
+            interval: Calibration interval in seconds (default 5s)
         """
         import threading
         
         # Do immediate calibration BEFORE starting background thread to ensure first listen has correct threshold
         try:
             initial_threshold = int(self.recognizer.energy_threshold)
-            self._calibrate_silent(duration=2.0)
+            self._calibrate_silent(duration=1.0)
             new_threshold = int(self.recognizer.energy_threshold)
             
-            # Cap maximum threshold at 3000 to prevent over-sensitivity
-            if new_threshold > 3000:
+            # Keep threshold within safe bounds to ensure speech quality
+            # Min: 1000 (avoid too-sensitive picks up everything)
+            # Max: 3000 (avoid too-strict misses quiet speech)
+            if new_threshold < 1000:
+                self.recognizer.energy_threshold = 1000
+                new_threshold = 1000
+            elif new_threshold > 3000:
                 self.recognizer.energy_threshold = 3000
                 new_threshold = 3000
             
-            print("[ENERGY_CALIBRATOR] Initial calibration: {} → {} (max cap: 3000)".format(initial_threshold, new_threshold))
+            print("[CALIBRATION] Initial calibration: {} → {} (range: 1000-3000)".format(initial_threshold, new_threshold))
         except Exception as e:
-            print("[ENERGY_CALIBRATOR] Initial calibration failed (non-critical): {}".format(e))
+            print("[CALIBRATION] Initial calibration failed (non-critical): {}".format(e))
         
         # Now start background thread for continuous updates
         calibration_thread = threading.Thread(
@@ -70,7 +75,7 @@ class EnergyCalibrator:
             daemon=True
         )
         calibration_thread.start()
-        print("[ENERGY_CALIBRATOR] Background calibration thread started (updates every {}s, pauses during active listening)".format(interval))
+        print("[CALIBRATION] Background calibration thread started (updates every {}s, pauses during active listening)".format(interval))
     
     def _calibration_loop(self, interval):
         """Continuously calibrate ambient energy at specified interval"""
@@ -87,12 +92,12 @@ class EnergyCalibrator:
                 # Skip if calibration is disabled globally
                 if EnergyCalibrator.enable_calibration:
                     # Calibrate ambient noise to adjust energy threshold
-                    self._calibrate_silent(duration=2.0)
+                    self._calibrate_silent(duration=1.0)
             except Exception as e:
-                print("[ENERGY_CALIBRATOR] Calibration loop error: {}".format(e))
+                print("[CALIBRATION] Calibration loop error: {}".format(e))
                 time.sleep(5)  # Wait before retrying
     
-    def _calibrate_silent(self, duration=2.0):
+    def _calibrate_silent(self, duration=1.0):
         """Silent calibration using recognizer's built-in ambient noise adjustment"""
         try:
             mic_kwargs = {"device_index": self.device_index} if self.device_index is not None else {}
@@ -108,15 +113,27 @@ class EnergyCalibrator:
                         # This automatically adjusts energy_threshold based on current ambient noise
                         self.recognizer.adjust_for_ambient_noise(source, duration=duration)
                         
-                        new_threshold = int(self.recognizer.energy_threshold)
+                        raw_threshold = int(self.recognizer.energy_threshold)
                         
-                        # Cap maximum threshold at 3000 to prevent over-sensitivity
-                        if new_threshold > 3000:
-                            self.recognizer.energy_threshold = 3000
-                            new_threshold = 3000
+                        # Apply damping/smoothing: don't let threshold jump too much between calibrations
+                        # 70% old threshold + 30% new threshold = gradual adjustment
+                        damping_factor = 0.7  # How much to keep old threshold (higher = less change)
+                        smoothed_threshold = int(old_threshold * damping_factor + raw_threshold * (1 - damping_factor))
                         
-                        print("[ENERGY_CALIBRATOR] Background calibration: Threshold updated: {} → {} (max cap: 3000)".format(
-                            old_threshold, new_threshold))
+                        # Keep threshold within safe bounds to ensure speech quality
+                        # Min: 1000 (avoid too-sensitive picks up everything)
+                        # Max: 3000 (avoid too-strict misses quiet speech)
+                        if smoothed_threshold < 1000:
+                            final_threshold = 1000
+                        elif smoothed_threshold > 3000:
+                            final_threshold = 3000
+                        else:
+                            final_threshold = smoothed_threshold
+                        
+                        self.recognizer.energy_threshold = final_threshold
+                        
+                        print("[CALIBRATION] Updated: {} → {} (raw: {}, smoothed: {}, range: 1000-3000)".format(
+                            old_threshold, final_threshold, raw_threshold, smoothed_threshold))
         except Exception as e:
-            print("[ENERGY_CALIBRATOR] Background calibration error: {}".format(e))
+            print("[CALIBRATION] Error: {}".format(e))
       

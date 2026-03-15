@@ -69,10 +69,7 @@ class SpeechRecognizer:
             self.device_index = None
         
         # Warm up microphone to avoid 100ms+ latency on first use
-        self._warmup_microphone()
-        
-        # Store reference to energy calibrator (will be set by voice_assistant.py)
-        self.energy_calibrator = None  
+        self._warmup_microphone()  
     
     def _warmup_microphone(self):
         """Pre-open and close microphone to prime the device driver"""
@@ -107,29 +104,33 @@ class SpeechRecognizer:
         else:
             print(f"I didn't catch that. Please try again... (attempt {retry_count + 1})")
 
-    def _handle_listen_error(self, attempt, error_message):
+    def _handle_listen_error(self, attempt, error_message, max_retries):
         """Handle listen/recognition error with LED feedback and retry logic.
         
         Args:
             attempt: Current attempt number (0 for first, 1 for second)
             error_message: Message to speak to user (only spoken on final failure)
+            max_retries: Maximum number of retries allowed
             
         Returns:
-            True if should retry, False if should return None
+            True if should retry, False if should stop (final failure)
         """
-        if attempt == 0:
+        # Check if we have more attempts left
+        if attempt < max_retries:
+            # Still have retries left - continue loop
             if self.pixel_led:
                 self.pixel_led.set_error()
-            print(f"[ERROR] {error_message}")
-            time.sleep(1.0)  # Give audio time to settle
+            print(f"[ERROR] {error_message} - Retrying...")
+            time.sleep(0.5)  # Give audio time to settle
             if self.pixel_led:
                 self.pixel_led.set_listening()
-            return True  
+            return True  # Continue to next retry
         else:
-
+            # No more retries - final failure
             if self.pixel_led:
                 self.pixel_led.set_error()
-            return False
+            print(f"[ERROR] {error_message} - No more retries.")
+            return False  # Stop trying
 
     def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
         """Listen for user command with retry logic (retries once, then returns error).
@@ -151,74 +152,80 @@ class SpeechRecognizer:
         
         self._print_attempt(0, is_follow_up)
 
-        for attempt in range(max_retries + 1):
-            microphone = None
-            audio = None
-            try:
-                # Just listen - energy threshold is continuously updated in background
-                mic_kwargs = {"device_index": self.device_index} if self.device_index is not None else {}
-                mic_kwargs['sample_rate'] = 16000  # Force 16kHz sample rate
-                if self.pixel_led:
-                    self.pixel_led.set_listening()
-                with suppress_alsa_errors():
-                    microphone = sr.Microphone(**mic_kwargs)
-                
-                with suppress_alsa_errors():
-                    with microphone as source:
-                        print(f"Listening... [Energy Threshold: {int(self.recognizer.energy_threshold)}]")
-                        try:
-                            audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
-                        except sr.WaitTimeoutError:
-                            print(f"[ASSISTANT] No speech detected. Attempt {attempt + 1}/{max_retries + 1}")
-                            if attempt < max_retries:
-                                self._print_attempt(attempt + 1, is_follow_up)
-                            continue
+        try:
+            for attempt in range(max_retries + 1):
+                microphone = None
+                audio = None
+                try:
+                    # Just listen
+                    mic_kwargs = {"device_index": self.device_index} if self.device_index is not None else {}
+                    mic_kwargs['sample_rate'] = 16000  # Force 16kHz sample rate
+                    if self.pixel_led:
+                        self.pixel_led.set_listening()
+                    with suppress_alsa_errors():
+                        microphone = sr.Microphone(**mic_kwargs)
+                    
+                    with suppress_alsa_errors():
+                        with microphone as source:
+                            print(f"Listening... [Energy Threshold: {int(self.recognizer.energy_threshold)}]")
+                            try:
+                                audio = self.recognizer.listen(source, timeout=timeout, phrase_time_limit=phrase_time_limit)
+                            except sr.WaitTimeoutError:
+                                print(f"[ASSISTANT] No speech detected. Attempt {attempt + 1}/{max_retries + 1}")
+                                if attempt < max_retries:
+                                    self._print_attempt(attempt + 1, is_follow_up)
+                                continue
 
-                min_audio_bytes = 20000  # ~0.6 seconds for short words
-                if not audio or len(audio.frame_data) < min_audio_bytes:
-                    print(f"[ASSISTANT] Audio too short: {len(audio.frame_data) if audio else 0} bytes, minimum required: {min_audio_bytes} bytes (~0.6s)")
-                    if attempt < max_retries:
-                        self._print_attempt(attempt + 1, is_follow_up)
-                    continue
+                    min_audio_bytes = 20000  # ~0.6 seconds for short words
+                    if not audio or len(audio.frame_data) < min_audio_bytes:
+                        print(f"[ASSISTANT] Audio too short: {len(audio.frame_data) if audio else 0} bytes, minimum required: {min_audio_bytes} bytes (~0.6s)")
+                        if attempt < max_retries:
+                            self._print_attempt(attempt + 1, is_follow_up)
+                        continue
 
-                # Calculate and print audio energy for debugging
-                audio_data = np.frombuffer(audio.frame_data, dtype=np.int16)
-                audio_energy = np.sqrt(np.mean(np.square(audio_data.astype(float))))
-                print(f"[ASSISTANT] Audio captured: {len(audio.frame_data)} bytes | Energy: {audio_energy:.0f} (Threshold: {int(self.recognizer.energy_threshold)})")
-    
-                command = self._recognize_audio(audio)
-                if command:
-                    return command
-                else:
-                    # Recognition failed, treat as error
-                    if not self._handle_listen_error(attempt, "Sorry, no speech detected."):
-                       
-                        pass
-               
-            except Exception as e:
-                print(f"[ASSISTANT] Error: {e}")
-                if not self._handle_listen_error(attempt, "Sorry, couldn't hear you. Let me try again."):
-                    pass
-            
-            finally:
-                if audio is not None:
-                    try:
-                        if hasattr(audio, 'frame_data'):
-                            del audio.frame_data
-                        del audio
-                    except:
-                        pass
-                if microphone is not None:
-                    try:
-                        microphone.close()
-                        del microphone
-                    except:
-                        pass
-                gc.collect()
+                    # Calculate and print audio energy for debugging
+                    audio_data = np.frombuffer(audio.frame_data, dtype=np.int16)
+                    audio_energy = np.sqrt(np.mean(np.square(audio_data.astype(float))))
+                    print(f"[ASSISTANT] Audio captured: {len(audio.frame_data)} bytes | Energy: {audio_energy:.0f} (Threshold: {int(self.recognizer.energy_threshold)})")
         
-        print("[ASSISTANT] No command detected after multiple attempts.")
-        # self.audio_processor.speak("I didn't hear anything. Please call if you need me.")
-        return None
+                    command = self._recognize_audio(audio)
+                    if command:
+                        return command
+                    else:
+                        # Recognition failed, treat as error and retry if attempts left
+                        should_retry = self._handle_listen_error(attempt, "Sorry, couldn't understand that.", max_retries)
+                        if not should_retry:
+                            break  # Stop loop if no more retries
+                        # Otherwise continue to next iteration
+                   
+                except Exception as e:
+                    print(f"[ASSISTANT] Error: {e}")
+                    should_retry = self._handle_listen_error(attempt, f"Error during listening: {e}", max_retries)
+                    if not should_retry:
+                        break  # Stop loop if no more retries
+                
+                finally:
+                    if audio is not None:
+                        try:
+                            if hasattr(audio, 'frame_data'):
+                                del audio.frame_data
+                            del audio
+                        except:
+                            pass
+                    if microphone is not None:
+                        try:
+                            microphone.close()
+                            del microphone
+                        except:
+                            pass
+                    gc.collect()
+            
+            print("[ASSISTANT] No command detected after multiple attempts.")
+            return None
+        
+        except Exception as e:
+            print(f"[ASSISTANT] Unexpected error in listen_for_command: {e}")
+            return None
 
     def _recognize_audio(self, audio):
         """Recognize audio using either OpenAI Whisper or Google Speech Recognition"""

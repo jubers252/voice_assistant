@@ -7,7 +7,7 @@ from speech.energy_calibrator import EnergyCalibrator
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.75
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.70
 ):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
@@ -76,10 +76,15 @@ class WakeWordManager:
             
             if user_command:
                 print(f"Processing command: {user_command}")
-                should_exit = process_command_callback(user_command)
-                print(f"Command processing result - should_exit: {should_exit}")
-                if should_exit:
+                result = process_command_callback(user_command)
+                # New: process_user_command returns dict with response or None for exit
+                if result is None:
+                    # Exit command detected
+                    print("Exit command detected, stopping detection loop")
                     return True  # Signal to break from main loop
+                elif isinstance(result, dict):
+                    # Normal command processed successfully
+                    print(f"Command processed - Response received")
             else:
                 print("No command detected, waiting for next input...")
             
@@ -93,7 +98,6 @@ class WakeWordManager:
             print(f"Error in handle_wake_word_detection: {e}")
             import traceback
             traceback.print_exc()
-            return False  # Continue on error
             return False  # Continue on error
     
     def _play_beep_async(self):

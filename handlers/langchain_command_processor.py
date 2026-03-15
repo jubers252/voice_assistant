@@ -7,7 +7,9 @@ This replaces your current CommandProcessor with an intelligent agent
 from asyncio.log import logger
 import os
 import threading
+import json
 
+from datetime import datetime
 import time
 from typing import Dict, Any
 from dotenv import load_dotenv
@@ -116,7 +118,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -693,6 +695,82 @@ class LangChainAgentProcessor:
             func=check_reminders_function,
             name="check_reminders",
             description="Check for any due reminders right now. No input required."
+        )
+    
+    def _create_schedule_event_tool(self) -> Tool:
+        """Add a scheduled event tool"""
+        def schedule_event_function(event_input: str) -> str:
+            """
+            Schedule an event. Input format: 'time|prompt|event_id'
+            Examples: '9:00 AM|Good morning!|morning', '2:30 PM|Afternoon check|afternoon'
+            """
+            try:
+              
+                
+                # Parse input format: "HH:MM|prompt|event_id" or "HH:MM AM/PM|prompt|event_id"
+                parts = event_input.split('|')
+                if len(parts) < 3:
+                    return "Invalid format. Use: 'time|prompt|event_id'. Example: '9:00 AM|Good morning!|morning'"
+                
+                time_str = parts[0].strip()
+                prompt = parts[1].strip()
+                event_id = parts[2].strip()
+                
+                # Parse time
+                try:
+                    # Handle both "9:00 AM" and "09:00" formats
+                    if 'AM' in time_str.upper() or 'PM' in time_str.upper():
+                        time_obj = datetime.strptime(time_str, "%I:%M %p").time()
+                    else:
+                        time_obj = datetime.strptime(time_str, "%H:%M").time()
+                    
+                    hour = time_obj.hour
+                    minute = time_obj.minute
+                except ValueError:
+                    return f"Invalid time format: {time_str}. Use: '9:00 AM' or '09:00' (24-hour)"
+                
+                # Find events.json
+                current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                events_file = os.path.join(current_dir, 'events.json')
+                
+                # Read existing events
+                try:
+                    if os.path.exists(events_file):
+                        with open(events_file, 'r') as f:
+                            data = json.load(f)
+                    else:
+                        data = {"events": []}
+                except json.JSONDecodeError:
+                    data = {"events": []}
+                
+                # Check if event already exists
+                for event in data.get("events", []):
+                    if event.get("event_id") == event_id:
+                        return f"Event '{event_id}' already exists. Try a different event_id."
+                
+                # Add new event
+                new_event = {
+                    "hour": hour,
+                    "minute": minute,
+                    "prompt": prompt,
+                    "event_id": event_id
+                }
+                
+                data["events"].append(new_event)
+                
+                # Write back to file
+                with open(events_file, 'w') as f:
+                    json.dump(data, f, indent=2)
+                
+                return f"Event scheduled! '{event_id}' at {time_str} with message: '{prompt}'"
+                
+            except Exception as e:
+                return f"Schedule event error: {str(e)}"
+        
+        return Tool(
+            name="schedule_event",
+            description="Schedule a recurring event that triggers at a specific time daily. User can say things like 'Schedule an event at 9 AM to say good morning' or 'Add reminder at 2:30 PM'. Input format: 'time|prompt|event_id'. Examples: '9:00 AM|Good morning!|morning', '2:30 PM|How is afternoon?|afternoon', '6 PM|Evening check|evening'. Time can be in 24-hour format (09:00) or 12-hour format (9:00 AM).",
+            func=schedule_event_function
         )
     
     def _create_telegram_message_tool(self) -> Tool:
@@ -1345,6 +1423,7 @@ class LangChainAgentProcessor:
             self._create_list_reminders_tool(),
             self._create_cancel_reminder_tool(),
             self._create_check_reminders_tool(),
+            self._create_schedule_event_tool(),
             self._create_telegram_message_tool(),
             self._create_telegram_photo_tool(),
             self._create_telegram_document_tool(),
@@ -1487,18 +1566,22 @@ class LangChainAgentProcessor:
             return self.agent_executor
 
         
-    def process_user_command(self, user_command: str) -> bool:
+    def process_user_command(self, user_command: str):
         """
         Main method that replaces your original process_user_command
         Now uses intelligent agent instead of manual tool selection
         Includes follow-up conversation support and conversation history awareness
+        
+        Returns:
+            dict: Contains 'response' (full response) and 'tts_text' (cleaned for speech)
+            or None if command was exit
         """
         
         # Check for exit commands (same as original)
         if any(word in user_command.lower() for word in ["exit", "quit", "goodbye", "bye"]):
             # Speak goodbye (LED controlled in audio_processor)
             self.audio_processors.speak("Goodbye!")
-            return True
+            return None
         
         try:
             # Set LED to processing/thinking state (blinking)
@@ -1572,17 +1655,29 @@ class LangChainAgentProcessor:
                 except Exception:
                     tts_text = response
                 self.audio_processors.speak(tts_text)
+            else:
+                tts_text = response
             
             # Explicitly clean up memory after agent processing
             gc.collect()
-            return False
+            
+            # Return response for external handlers (e.g., Telegram)
+            return {
+                "response": response,
+                "tts_text": tts_text,
+                "urls": unique_urls
+            }
             
         except Exception as e:
             error_msg = f"Sorry, I encountered an error: {str(e)}"
             self.audio_processors.speak(error_msg)
             # Clean up memory after error
             gc.collect()
-            return False
+            return {
+                "response": error_msg,
+                "tts_text": error_msg,
+                "urls": []
+            }
     
     def get_agent_info(self) -> Dict[str, Any]:
         """Get information about the agent's current state"""

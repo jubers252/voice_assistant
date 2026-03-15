@@ -63,6 +63,13 @@ TOOL_KEYWORDS = {
     "check_reminders": ["check reminder", "any reminders", "do i have reminders",
                        "reminder hai", "kuch yaad hai"],
     
+    # Scheduled Events
+    "schedule_event": ["schedule event", "schedule at", "set event", "add event","event", "schedule", "recurring event", "daily event",
+                       "every day at", "at 9 am", "at 10 am", "at 2 pm", "at 6 pm", "at noon", "at midnight",
+                       "schedule at", "set daily", "recurring reminder",
+                       "event at", "reminder daily", "daily check",
+                       "yojana banao", "har din", "schedule karo", "yaad rakhna"],
+    
     # Telegram
     "send_telegram_message": ["telegram", "message", "send message", "whatsapp", "chat",
                              "sandesh", "bhejo", "msg", "baat karo", "mobile", "phone"],
@@ -121,6 +128,8 @@ TOOL_DESCRIPTIONS = {
     "list_reminders": "Show all active reminders",
     "cancel_reminder": "Cancel a specific reminder",
     "check_reminders": "Check if any reminders are active",
+    
+    "schedule_event": "Schedule a DAILY recurring event at specific time. Use when: 'schedule at 9 AM', 'event at 2 PM', 'every day at'. Format input as: 'time|instruction|event_id'. Examples: '9:00 AM|Say good morning|morning', '2 PM|Ask about work|afternoon'",
     
     "send_telegram_message": "Send telegram message. Input: recipient name and message text",
     "send_telegram_photo": "Send photo via Telegram. Input: recipient name and photo description",

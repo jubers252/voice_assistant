@@ -1,0 +1,76 @@
+{
+  "events": [
+    {
+      "hour": 10,
+      "minute": 0,
+      "prompt": "Say good morning and ask user to wake up and get ready for the day",
+      "event_id": "morning"
+    },
+    {
+      "hour": 14,
+      "minute": 0,
+      "prompt": "It's lunch time - remind me to eat and ask if user need any help",
+      "event_id": "lunch"
+    },
+     {
+      "hour": 14,
+      "minute": 15,
+      "prompt": "ask user to take medicine after lunch",
+      "event_id": "lunch_medicine"
+    },
+    {
+      "hour": 15,
+      "minute": 30,
+      "prompt": "It's mid-afternoon - ask user how their work is going and if they need a break",
+      "event_id": "afternoon"
+    },
+    {
+      "hour": 18,
+      "minute": 0,
+      "prompt": "It's evening - ask user about their day and what they're planning for tonight",
+      "event_id": "evening"
+    },
+    {
+      "hour": 20,
+      "minute": 15,
+      "prompt": "It's late evening - ask user to logout from work and start winding down for the night",
+      "event_id": "work_end"
+    },
+    {
+      "hour": 22,
+      "minute": 0,
+      "prompt": "ask user to take dinner since its close to bedtime",
+      "event_id": "night"
+    },
+     {
+      "hour": 22,
+      "minute": 30,
+      "prompt": "ask user to take medicine after dinner",
+      "event_id": "night_medicine"
+    },
+    {
+      "hour": 23,
+      "minute": 0,
+      "prompt": "It's bedtime - wish user goodnight and suggest winding down or playing some relaxing music",
+      "event_id": "night"
+    },
+    {
+      "hour": 10,
+      "minute": 15,
+      "prompt": "Tell me today's top 5 news headlines with brief summaries in Pune prefer language Hindi",
+      "event_id": "morning_news"
+    },
+    {
+      "hour": 18,
+      "minute": 5,
+      "prompt": "Turn on the light in evening",
+      "event_id": "evening_light_on"
+    },
+    {
+      "hour": 12,
+      "minute": 15,
+      "prompt": "Turn off the light at night and on the zero light",
+      "event_id": "night_light_off"
+    }
+  ]
+}

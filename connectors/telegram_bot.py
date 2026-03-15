@@ -317,6 +317,173 @@ class TelegramBot:
             logger.error(f"Error getting bot info: {e}")
             return None
 
+    def get_updates(self, offset: int = 0, timeout: int = 30, allowed_updates: list = None) -> Optional[list]:
+        """
+        Get pending messages and updates from Telegram (polling method)
+        
+        Args:
+            offset (int): ID of the first update to be returned
+            timeout (int): Timeout in seconds for long polling
+            allowed_updates (list): Types of updates to receive (e.g., ['message', 'callback_query'])
+        
+        Returns:
+            list: List of updates, or None if failed
+        """
+        try:
+            data = {
+                'offset': offset,
+                'timeout': timeout
+            }
+            
+            if allowed_updates:
+                # Convert list to JSON format for API
+                import json
+                data['allowed_updates'] = json.dumps(allowed_updates)
+            
+            response = self._make_request('getUpdates', data)
+            
+            if response.get('ok'):
+                updates = response.get('result', [])
+                if updates:
+                    logger.info(f"Received {len(updates)} update(s)")
+                return updates
+            else:
+                logger.error(f"Failed to get updates: {response.get('description', 'Unknown error')}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting updates: {e}")
+            return None
+    
+    def extract_message_data(self, update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Extract message data from a Telegram update
+        
+        Args:
+            update (dict): Update object from Telegram API
+        
+        Returns:
+            dict: Extracted message data including message text, sender info, etc.
+        """
+        try:
+            if 'message' not in update:
+                return None
+            
+            message = update['message']
+            update_id = update.get('update_id')
+            
+            # Extract basic message info
+            message_data = {
+                'update_id': update_id,
+                'message_id': message.get('message_id'),
+                'chat_id': message['chat']['id'],
+                'sender_id': message['from']['id'],
+                'sender_name': message['from'].get('first_name', '') + ' ' + message['from'].get('last_name', ''),
+                'sender_username': message['from'].get('username', 'N/A'),
+                'timestamp': message.get('date'),
+                'type': 'unknown'
+            }
+            
+            # Extract content based on message type
+            if 'text' in message:
+                message_data['type'] = 'text'
+                message_data['content'] = message['text']
+            elif 'photo' in message:
+                message_data['type'] = 'photo'
+                message_data['photo_id'] = message['photo'][-1]['file_id']  # Get largest photo
+                message_data['caption'] = message.get('caption', '')
+            elif 'document' in message:
+                message_data['type'] = 'document'
+                message_data['document_id'] = message['document']['file_id']
+                message_data['file_name'] = message['document'].get('file_name', '')
+                message_data['caption'] = message.get('caption', '')
+            elif 'audio' in message:
+                message_data['type'] = 'audio'
+                message_data['audio_id'] = message['audio']['file_id']
+                message_data['caption'] = message.get('caption', '')
+            elif 'voice' in message:
+                message_data['type'] = 'voice'
+                message_data['voice_id'] = message['voice']['file_id']
+            elif 'video' in message:
+                message_data['type'] = 'video'
+                message_data['video_id'] = message['video']['file_id']
+                message_data['caption'] = message.get('caption', '')
+            
+            return message_data
+            
+        except Exception as e:
+            logger.error(f"Error extracting message data: {e}")
+            return None
+    
+    def receive_messages(self, callback=None, allowed_updates: list = None):
+        """
+        Continuously receive messages from users (blocking polling loop)
+        
+        Args:
+            callback (function): Function to call for each received message. 
+                                Should accept message_data dict as parameter.
+            allowed_updates (list): Types of updates to receive (e.g., ['message'])
+        
+        Example:
+            def handle_message(msg_data):
+                print(f"Received: {msg_data['content']} from {msg_data['sender_name']}")
+            
+            bot.receive_messages(callback=handle_message)
+        """
+        try:
+            offset = 0
+            logger.info("Starting message receiver loop...")
+            
+            while True:
+                updates = self.get_updates(offset=offset, timeout=30, allowed_updates=allowed_updates)
+                
+                if updates:
+                    for update in updates:
+                        try:
+                            message_data = self.extract_message_data(update)
+                            
+                            if message_data:
+                                logger.info(f"Message from {message_data['sender_name']} ({message_data['type']}): {message_data.get('content', message_data.get('file_name', 'N/A'))}")
+                                
+                                # Call user's callback if provided
+                                if callback:
+                                    callback(message_data)
+                            
+                            # Update offset to avoid getting same message again
+                            offset = update['update_id'] + 1
+                            
+                        except Exception as e:
+                            logger.error(f"Error processing update {update.get('update_id')}: {e}")
+                            continue
+                    
+        except KeyboardInterrupt:
+            logger.info("Message receiver stopped by user")
+        except Exception as e:
+            logger.error(f"Error in receive_messages loop: {e}")
+    
+    def receive_message_once(self) -> Optional[Dict[str, Any]]:
+        """
+        Receive a single message (non-blocking, returns immediately if no message)
+        
+        Returns:
+            dict: Message data if available, None otherwise
+        """
+        try:
+            updates = self.get_updates(offset=0, timeout=0)  # timeout=0 makes it non-blocking
+            
+            if updates:
+                for update in updates:
+                    message_data = self.extract_message_data(update)
+                    if message_data:
+                        logger.info(f"Received message from {message_data['sender_name']}")
+                        return message_data
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error receiving single message: {e}")
+            return None
+
     def telegram_handler(self, tool_request):
         """
         Handle incoming Telegram updates (webhook or polling)
@@ -374,8 +541,17 @@ class TelegramBot:
                 )
                 return response
             elif action == 'get_update':
-                # For simplicity, just return a placeholder
-                return {"status": "get_update not implemented in this example"}
+                # Fetch incoming messages from users
+                updates = self.get_updates()
+                if updates:
+                    messages = []
+                    for update in updates:
+                        msg_data = self.extract_message_data(update)
+                        if msg_data:
+                            messages.append(msg_data)
+                    return {"status": "success", "messages": messages, "count": len(messages)}
+                else:
+                    return {"status": "success", "messages": [], "count": 0}
         except Exception as e:
             logger.error(f"Error handling update: {e}")
             return {}
@@ -389,23 +565,45 @@ if __name__ == "__main__":
         # Get chat ID from environment or use a default
         chat_id = os.getenv('TELEGRAM_CHAT_ID', '@your_username')  # Replace with your chat ID or username
         
-        # Send text message
-        message_text = "Hello from Python Telegram Bot!"
-        bot.send_message(chat_id, message_text)
+        # Example 1: Send text message
+        # message_text = "Hello from Python Telegram Bot!"
+        # bot.send_message(chat_id, message_text)
+        bot.receive_messages()  # Start receiving messages (blocking call)
+        # Example 2: Send photo with caption
+        # photo_url = "https://m.media-amazon.com/images/I/81QoDTzKadL._SX679_.jpg"
+        # photo_caption = "Check out this amazing product!"
+        # bot.send_photo(chat_id, photo_url, photo_caption)
         
-        # Send photo with caption
-        photo_url = "https://m.media-amazon.com/images/I/81QoDTzKadL._SX679_.jpg"
-        photo_caption = "Check out this amazing product!"
-        bot.send_photo(chat_id, photo_url, photo_caption)
+        # Example 3: Receive a single message (non-blocking)
+        # message = bot.receive_message_once()
+        # if message:
+        #     print(f"Received {message['type']} from {message['sender_name']}: {message.get('content', 'media')}")
         
-        # Send document (example)
-        # doc_url = "https://example.com/sample.pdf"
-        # bot.send_document(chat_id, doc_url, "Important document")
+        # Example 4: Continuously receive messages with callback
+        def handle_user_message(msg_data):
+            """Callback function to handle incoming messages"""
+            sender = msg_data['sender_name']
+            msg_type = msg_data['type']
+            content = msg_data.get('content', msg_data.get('file_name', 'media'))
+            
+            print(f"\n📱 Message from {sender} ({msg_type}):")
+            print(f"   Content: {content}")
+            print(f"   Chat ID: {msg_data['chat_id']}")
+            
+            # Example: Send auto-reply
+            # if msg_type == 'text':
+            #     reply = f"Echo: {content}"
+            #     bot.send_message(msg_data['chat_id'], reply)
         
-        # Get bot info
-        bot_info = bot.get_bot_info()
-        if bot_info:
-            print(f"Bot Info: @{bot_info['username']} - {bot_info['first_name']}")
+        # Start receiving messages
+        print("Starting bot... (press Ctrl+C to stop)")
+        print("Waiting for messages from Telegram users...\n")
+        bot.receive_messages(callback=handle_user_message, allowed_updates=['message'])
+        
+        # Uncomment to get bot info instead
+        # bot_info = bot.get_bot_info()
+        # if bot_info:
+        #     print(f"Bot Info: @{bot_info['username']} - {bot_info['first_name']}")
             
     except ValueError as e:
         print(f"Configuration error: {e}")
@@ -416,8 +614,3 @@ if __name__ == "__main__":
         print("4. Set TELEGRAM_CHAT_ID environment variable (your chat ID or @username)")
     except Exception as e:
         print(f"Unexpected error: {e}")
-
-
-    
-
-    
