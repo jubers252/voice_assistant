@@ -28,6 +28,9 @@ def suppress_alsa_errors():
 class EnergyCalibrator:
     """Handles continuous ambient energy calibration for speech recognizer"""
     
+    # Global flag to enable/disable background calibration modifications
+    enable_calibration = True  # Enabled by default, paused during listening
+    
     def __init__(self, recognizer, device_index=None):
         """
         Args:
@@ -36,7 +39,6 @@ class EnergyCalibrator:
         """
         self.recognizer = recognizer
         self.device_index = device_index
-        self.pause_calibration = False  # Flag to pause calibration during active listening
     
     def start_continuous_calibration(self, interval=30):
         """Start background thread for continuous energy calibration
@@ -45,6 +47,23 @@ class EnergyCalibrator:
             interval: Calibration interval in seconds (default 30s)
         """
         import threading
+        
+        # Do immediate calibration BEFORE starting background thread to ensure first listen has correct threshold
+        try:
+            initial_threshold = int(self.recognizer.energy_threshold)
+            self._calibrate_silent(duration=2.0)
+            new_threshold = int(self.recognizer.energy_threshold)
+            
+            # Cap maximum threshold at 2000 to prevent over-sensitivity
+            if new_threshold > 2000:
+                self.recognizer.energy_threshold = 2000
+                new_threshold = 2000
+            
+            print("[ENERGY_CALIBRATOR] Initial calibration: {} → {} (max cap: 2000)".format(initial_threshold, new_threshold))
+        except Exception as e:
+            print("[ENERGY_CALIBRATOR] Initial calibration failed (non-critical): {}".format(e))
+        
+        # Now start background thread for continuous updates
         calibration_thread = threading.Thread(
             target=self._calibration_loop,
             args=(interval,),
@@ -55,25 +74,25 @@ class EnergyCalibrator:
     
     def _calibration_loop(self, interval):
         """Continuously calibrate ambient energy at specified interval"""
-        # Run calibration immediately on startup (don't wait 30 seconds)
+        # Initial calibration already done in start_continuous_calibration(), so start with sleep
         first_run = True
         while True:
             try:
-                if not first_run:
-                    time.sleep(interval)
-                else:
+                if first_run:
                     first_run = False
+                    time.sleep(interval)  # Wait before second calibration
+                else:
+                    time.sleep(interval)
                 
-                # Skip if calibration is paused (during active listening)
-                if not self.pause_calibration:
-                    # Use longer duration (2 seconds) to better capture ambient noise
-                    # Use lower multiplier (1.3 instead of 1.5) to be conservative and not filter distant speech
-                    self._calibrate_silent(duration=2.0, multiplier=1.3)
+                # Skip if calibration is disabled globally
+                if EnergyCalibrator.enable_calibration:
+                    # Calibrate ambient noise to adjust energy threshold
+                    self._calibrate_silent(duration=2.0)
             except Exception as e:
                 print("[ENERGY_CALIBRATOR] Calibration loop error: {}".format(e))
                 time.sleep(5)  # Wait before retrying
     
-    def _calibrate_silent(self, duration=2.0, multiplier=1.3):
+    def _calibrate_silent(self, duration=2.0):
         """Silent calibration using recognizer's built-in ambient noise adjustment"""
         try:
             mic_kwargs = {"device_index": self.device_index} if self.device_index is not None else {}
@@ -86,27 +105,18 @@ class EnergyCalibrator:
                 with suppress_alsa_errors():
                     with microphone as source:
                         # Use recognizer's built-in ambient noise calibration
-                        # This uses the library's own energy calculation method for consistency
+                        # This automatically adjusts energy_threshold based on current ambient noise
                         self.recognizer.adjust_for_ambient_noise(source, duration=duration)
                         
                         new_threshold = int(self.recognizer.energy_threshold)
                         
-                        # Prevent drastic threshold jumps that break detection at night
-                        # If new threshold is more than 50% different from old, cap the change
-                        max_increase_ratio = 1.5  # Allow up to 50% increase
-                        max_decrease_ratio = 0.7  # Allow threshold to drop to 70% of old value (better for night)
+                        # Cap maximum threshold at 2000 to prevent over-sensitivity
+                        if new_threshold > 2000:
+                            self.recognizer.energy_threshold = 2000
+                            new_threshold = 2000
                         
-                        if new_threshold > old_threshold * max_increase_ratio:
-                            new_threshold = int(old_threshold * max_increase_ratio)
-                            self.recognizer.energy_threshold = new_threshold
-                            print("[ENERGY_CALIBRATOR] Background calibration: Threshold capped at increase limit")
-                        elif new_threshold < old_threshold * max_decrease_ratio and old_threshold > 100:
-                            new_threshold = int(old_threshold * max_decrease_ratio)
-                            self.recognizer.energy_threshold = new_threshold
-                            print("[ENERGY_CALIBRATOR] Background calibration: Threshold restored for night sensitivity")
-                        
-                        print("[ENERGY_CALIBRATOR] Background calibration: Threshold updated: {} → {} (multiplier: {})".format(
-                            old_threshold, new_threshold, multiplier))
+                        print("[ENERGY_CALIBRATOR] Background calibration: Threshold updated: {} → {} (max cap: 2000)".format(
+                            old_threshold, new_threshold))
         except Exception as e:
             print("[ENERGY_CALIBRATOR] Background calibration error: {}".format(e))
       

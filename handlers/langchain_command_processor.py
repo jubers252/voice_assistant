@@ -4,6 +4,7 @@ This replaces your current CommandProcessor with an intelligent agent
 """
 
 
+from asyncio.log import logger
 import os
 import threading
 
@@ -29,9 +30,11 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from typing import TypedDict, Annotated
 import operator
-
 # Import system prompt
 from handlers.system_prompt import SOFI_SYSTEM_PROMPT
+
+# Import dynamic prompt generator
+from handlers.dynamic_prompt_generator import DynamicPromptGenerator
 
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
@@ -47,6 +50,7 @@ from connectors.bigbasket_connector import BigBasketTools
 from connectors.zepto_order_automation import ZeptoScraper
 from connectors.home_automation import HomeAutomation
 from connectors.yt_music import MusicPlayer
+from connectors.map import get_travel_time_with_traffic
 import asyncio
 
 load_dotenv()
@@ -70,7 +74,7 @@ class LangChainAgentProcessor:
     This intelligently decides which tools to use based on user input
     """
     
-    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None, recognizer=None):
+    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None, recognizer=None, use_dynamic_prompts=True):
         """
         Initialize LangChain Agent Processor
         
@@ -79,6 +83,9 @@ class LangChainAgentProcessor:
         - audio_processors: Handler for speech/TTS functionality
         - pixel_led: Optional PixelLEDController for visual feedback
         - recognizer: Optional SpeechRecognizer instance (for follow-up questions)
+        
+        Optional parameters:
+        - use_dynamic_prompts: Whether to use dynamic prompt generation (default: True)
         """
         
         # Store the handlers that are actually used
@@ -88,6 +95,10 @@ class LangChainAgentProcessor:
         self.reminder_manager = ReminderManager()
         # Optional ConversationManager instance to persist history
         self.conversation_manager = conversation_manager
+        
+        # Dynamic prompt configuration
+        self.use_dynamic_prompts = use_dynamic_prompts
+        self.prompt_generator = DynamicPromptGenerator() if use_dynamic_prompts else None
         
         # Load conversation history from manager if provided, otherwise use provided history
         if conversation_manager:
@@ -105,7 +116,7 @@ class LangChainAgentProcessor:
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
@@ -186,6 +197,42 @@ class LangChainAgentProcessor:
             name="get_current_weather",
             description="Get current weather. Use when: 'what is the weather', 'is it raining', 'temperature'. Input: city name",
             func=current_weather_function
+        )
+    
+
+    def _create_travel_time_tool(self) -> Tool:
+        """Get travel time and traffic information between two locations"""
+        def travel_time_function(origin_destination: str) -> str:
+            try:
+                # Parse origin and destination from input
+                parts = origin_destination.split(" to ")
+                if len(parts) != 2:
+                    # Try alternate format: origin | destination
+                    parts = origin_destination.split("|")
+                    if len(parts) != 2:
+                        return "Please provide origin and destination. Format: 'origin to destination' or 'origin | destination'"
+                
+                origin = parts[0].strip()
+                destination = parts[1].strip()
+                
+                result = get_travel_time_with_traffic(origin, destination)
+                
+                # Format the response
+                response = f"Travel Information from {origin} to {destination}:\n"
+                response += f"Distance: {result['distance']}\n"
+                response += f"Travel time (no traffic): {result['standard_duration']}\n"
+                response += f"Travel time (in traffic): {result['duration_in_traffic']}\n"
+                response += f"Traffic delay: {result['traffic_delay_seconds']} seconds\n"
+                response += f"Traffic impact: +{result['traffic_impact_percent']}%"
+                
+                return response
+            except Exception as e:
+                return f"Travel time error: {str(e)}"
+        
+        return Tool(
+            name="get_travel_time",
+            description="Get travel time and traffic information between two locations. Use when: 'how long to reach', 'travel time', 'distance', 'how far is', 'what's the traffic'. Input: 'origin to destination' (e.g., 'Pisoli Pune to Kondhwa Pune')",
+            func=travel_time_function
         )
     
     def _create_home_automation_tool(self) -> Tool:
@@ -483,7 +530,6 @@ class LangChainAgentProcessor:
                     return "Sorry, I couldn't find detailed information about that product. Please try another search."
                 return f"Amazon search result: {str(result)[:500]}"
             except Exception as e:
-                print(f"Amazon single product tool error: {e}")
                 return f"Sorry, I encountered an error while searching Amazon. Please try again."
         
         return Tool(
@@ -530,7 +576,6 @@ class LangChainAgentProcessor:
                 else:
                     return "Sorry, I couldn't find any products matching your search. Please try a different search term."
             except Exception as e:
-                print(f"Amazon multi-product tool error: {e}")
                 return f"Sorry, I encountered an error while searching Amazon. Please try again."
         
         return Tool(
@@ -812,6 +857,39 @@ class LangChainAgentProcessor:
                 parts = input_str.split("|")
               
                 action = parts[0].lower().strip()
+                
+                # NEW: Check latest incomplete order from database
+                if action == "get_latest":
+                    latest_order = self.zepto_db.get_latest_order()
+                    
+                    if not latest_order:
+                        return "No incomplete Zepto orders found in the database. Ready to start a fresh order!"
+                    
+                    # Format the order for the agent to understand and act on
+                    order_id = latest_order.get('id', 'N/A')
+                    status = latest_order.get('status', 'unknown')
+                    current_task = latest_order.get('current_task', 'order_details')
+                    items = latest_order.get('items', [])
+                    total_price = latest_order.get('total_price', 0)
+                    created_at = latest_order.get('created_at', 'N/A')
+                    if "payment" in current_task.lower() or "checkout" in current_task.lower():
+                        current_task = "order_details"
+                    # Format items list
+                    items_str = ', '.join(items) if items else 'No items'
+                   
+                    result = f"""INCOMPLETE ZEPTO ORDER FOUND:
+                    Order ID: {order_id}
+                    Status: {status}
+                    Current Task: {current_task}
+                    Items: {items_str}
+                    Total Price: ₹{total_price}
+                    Created: {created_at}
+
+                    DO NOT START FRESH. This order must be resumed. Ask user: "I found your incomplete order with {items_str} at ₹{total_price}. Should I continue from where we left off?"
+
+                    If user says YES: Call zepto_ordering with action "{current_task}" to resume
+                    If user says NO: Call zepto_ordering with "clear_cart" to start fresh"""
+                    return result
 
                 quantity = 1
                 product_index = 0
@@ -821,34 +899,28 @@ class LangChainAgentProcessor:
                     last_part = parts[-1].strip()
                     if last_part.isdigit():
                         product_index = int(last_part)
-                        print(f"[ZEPTO DEBUG] Product index from last part: {product_index}")
                     else:
-                        print(f"[ZEPTO DEBUG] Warning: Last part '{last_part}' is not numeric, using default 0")
+                        pass
                     
                     second_last = parts[-2].strip()
                     if second_last.isdigit():
                         quantity = int(second_last)
-                        print(f"[ZEPTO DEBUG] Quantity from 2nd-last part: {quantity}")
                     else:
-                        print(f"[ZEPTO DEBUG] Warning: 2nd-last part '{second_last}' is not numeric, using default 1")
+                        pass
                     
                     product = "|".join(parts[1:-2]).strip()
-                    print(f"[ZEPTO DEBUG] Product name from middle parts: '{product}'")
                     
                 elif len(parts) >= 3:
                     last_part = parts[-1].strip()
                     if last_part.isdigit():
                         quantity = int(last_part)
-                        print(f"[ZEPTO DEBUG] Quantity: {quantity}")
                     else:
-                        print(f"[ZEPTO DEBUG] Warning: Last part not numeric: '{last_part}'")
+                        pass
                     
                     product = "|".join(parts[1:-1]).strip()
-                    print(f"[ZEPTO DEBUG] Product name: '{product}'")
                     
                 elif len(parts) >= 2:
                     product = parts[1].strip()
-                    print(f"[ZEPTO DEBUG] Product name only: '{product}'")
                 
                 # Validate for add_product action
                 if action == "add_product":
@@ -858,40 +930,31 @@ class LangChainAgentProcessor:
                         return f"Error: Invalid quantity {quantity}. Must be >= 1"
                     if product_index < 0:
                         return f"Error: Invalid product index {product_index}. Must be >= 0"
-                    print(f"[ZEPTO DEBUG] Validation passed. Product='{product}', Qty={quantity}, Index={product_index}")
                 
                 if action == "login":
                     self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     # Save initial order state
                     order_id = self.zepto_db.save_order(status="pending", current_task="login", items=[], total_price=0.0, error=False)
-                    print(f"[ZEPTO_DB_TRACK] Login: Created order #{order_id}")
                     return "Zepto login initiated."
                 elif action == "clear_cart":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     result = self._run_in_zepto_loop(self.zepto_scraper.clear_cart())
                     return f"Zepto clear cart result: {result}"
                 elif action == "search":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     product_list = self._run_in_zepto_loop(self.zepto_scraper.search_and_extract_products(product))
                     # Update order task to searching
                     latest_order = self.zepto_db.get_latest_order()
                     if latest_order:
                         self.zepto_db.update_task(latest_order['id'], "searching", f"Searched for: {product}")
-                        print(f"[ZEPTO_DB_TRACK] Search: Updated order #{latest_order['id']} to searching")
                     else:
-                        print(f"[ZEPTO_DB_TRACK] Search: No pending/processing order found, creating new one")
                         order_id = self.zepto_db.save_order(status="pending", current_task="searching", items=[], error=False, context=f"Searched for: {product}")
-                        print(f"[ZEPTO_DB_TRACK] Search: Created order #{order_id}")
                     return f"Zepto search results: {product_list}"
                 elif action == "add_product":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                    print(f"[ZEPTO DEBUG] Calling add_product_to_cart with: product='{product}', quantity={quantity}, index={product_index}")
                     result = self._run_in_zepto_loop(self.zepto_scraper.add_product_to_cart(product, quantity, product_index))
                     
                     # Update order with new item
@@ -904,31 +967,24 @@ class LangChainAgentProcessor:
                             items.append(item_str)
                         self.zepto_db.update_items(latest_order['id'], items)
                         self.zepto_db.update_task(latest_order['id'], "item_added", f"Added: {product} x{quantity}")
-                        print(f"[ZEPTO_DB_TRACK] Add Product: Updated order #{latest_order['id']} with item '{item_str}'")
                     else:
-                        print(f"[ZEPTO_DB_TRACK] Add Product: No pending order found")
                         order_id = self.zepto_db.save_order(status="pending", current_task="item_added", items=[f"{product} x{quantity}"], error=False, context=f"Added: {product} x{quantity}")
-                        print(f"[ZEPTO_DB_TRACK] Add Product: Created order #{order_id} with item")
                     
                     return f"Zepto add product result: {result}"
                 elif action == "order_details":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     order_info = self._run_in_zepto_loop(self.zepto_scraper.get_order_details())
                     return f"Zepto order details: {order_info}"
                 elif action == "checkout":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     payment_result = self._run_in_zepto_loop(self.zepto_scraper.checkout())
                     
                     # Update order status to payment
                     latest_order = self.zepto_db.get_latest_order()
                     if latest_order:
-                        self.zepto_db.update_status(latest_order['id'], "payment")
                         self.zepto_db.update_task(latest_order['id'], "payment_confirmation", "Checkout initiated")
-                        print(f"[ZEPTO_DB_TRACK] Checkout: Updated order #{latest_order['id']} to payment status")
                     
                     # Add confirmation prompt for COD payment
                     if payment_result.get('cod_available'):
@@ -941,20 +997,17 @@ class LangChainAgentProcessor:
                 elif action == "place_order":
                     result = self._run_in_zepto_loop(self.zepto_scraper.click_proceed_final())
                     if result and result.get("status") == "clicked":
-                        print("Order placed successfully.")
                         # Update order to completed
                         latest_order = self.zepto_db.get_latest_order()
                         if latest_order:
                             self.zepto_db.update_status(latest_order['id'], "completed")
                             self.zepto_db.update_task(latest_order['id'], "order_placed", "Order successfully placed")
-                            print(f"[ZEPTO_DB_TRACK] Place Order: Updated order #{latest_order['id']} to completed status")
                         return "Zepto order placed successfully."
                     else:
                         # Set error flag
                         latest_order = self.zepto_db.get_latest_order()
                         if latest_order:
                             self.zepto_db.set_error(latest_order['id'], True, "Failed to place order")
-                            print(f"[ZEPTO_DB_TRACK] Place Order: Error flag set for order #{latest_order['id']}")
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
                 elif action == "cleanup":
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
@@ -962,37 +1015,16 @@ class LangChainAgentProcessor:
                 else:
                     return f"Unknown action: {action}. Supported: login, search, add_product, order_details, checkout, place_order, cleanup"
             except Exception as e:
-                print(f"[ZEPTO ERROR] {str(e)}")
                 # Set error flag when exception occurs
                 latest_order = self.zepto_db.get_latest_order()
                 if latest_order:
                     self.zepto_db.set_error(latest_order['id'], True, str(e))
-                    print(f"[ZEPTO_DB_TRACK] Exception: Error flag set for order #{latest_order['id']}")
                 return f"Zepto tool error: {str(e)}"
         
         return Tool(
             name="zepto_ordering_tool",
-            description="Zepto grocery shopping. Workflow: 1) login 2)clear_cart 3)search|product_name 4) add_product|product_name|quantity|index 5) order_details 6) checkout (auto-selects COD) 7) ask confirmation 8) place_order 9) cleanup. Format: 'action|product|quantity|index'. ALWAYS ask user confirmation before place_order using ask_follow_up_question tool.",
+            description="Zepto grocery ordering and database check. ACTIONS: 1) get_latest - check for incomplete order in database (CALL THIS FIRST), 2) login, 3) clear_cart, 4) search|product_name, 5) add_product|product_name|quantity|index, 6) order_details, 7) checkout, 8) place_order, 9) cleanup. Format: 'action|product|quantity|index'. ALWAYS use get_latest first when user mentions Zepto/order. ALWAYS ask user confirmation before place_order.",
             func=zepto_function
-        )
-
-    def _create_zepto_get_latest_order_tool(self) -> Tool:
-        """Get latest incomplete order from database"""
-        def get_latest_order_function(query: str = "") -> str:
-            try:
-                latest_order = self.zepto_db.get_latest_order()
-                
-                if not latest_order:
-                    return "No incomplete Zepto orders found in the database."
-                                               
-                return latest_order
-            except Exception as e:
-                return f"Error retrieving order from database: {str(e)}"
-        
-        return Tool(
-            name="zepto_get_latest_order_from_db",
-            description="Get the latest incomplete Zepto order from the database. Use when user wants to check if there's an incomplete order or continue previous order. Returns order ID, status, current task, items, and recent activity.",
-            func=get_latest_order_function
         )
 
     def _create_zepto_order_history_tool(self) -> Tool:
@@ -1004,11 +1036,6 @@ class LangChainAgentProcessor:
                     max_orders_int = int(max_orders.strip())
                 except:
                     max_orders_int = 3
-                
-                # Ensure logged in
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    print("Not logged in - logging in first.")
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                 
                 # Get order history
                 orders = self._run_in_zepto_loop(
@@ -1046,11 +1073,6 @@ class LangChainAgentProcessor:
                 except:
                     return "Invalid order index. Please provide a number (0 for most recent order)."
                 
-                # Ensure logged in
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    print("Not logged in - logging in first.")
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                
                 # Reorder
                 success = self._run_in_zepto_loop(
                     self.zepto_scraper.order_again(order_index=index)
@@ -1077,11 +1099,6 @@ class LangChainAgentProcessor:
                 parts = params.split('|')
                 max_orders = int(parts[0].strip()) if parts[0].strip().isdigit() else 3
                 detail_index = int(parts[1].strip()) if len(parts) > 1 and parts[1].strip().isdigit() else None
-                
-                # Ensure logged in
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    print("Not logged in - logging in first.")
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                 
                 # Track orders
                 result = self._run_in_zepto_loop(
@@ -1255,7 +1272,6 @@ class LangChainAgentProcessor:
                 
                 # If there's a preamble, speak it first
                 if preamble:
-                    print(f"Speaking preamble: {preamble}")
                     self.audio_processors.speak(preamble)
                     # Wait for preamble to complete
                     while hasattr(self.audio_processors, 'is_speaking') and self.audio_processors.is_speaking:
@@ -1266,11 +1282,9 @@ class LangChainAgentProcessor:
                 self.audio_processors.speak(question)
                 
                 # Wait for speech to complete using is_speaking flag
-                print("Waiting for speech to complete...")
                 while hasattr(self.audio_processors, 'is_speaking') and self.audio_processors.is_speaking:
                     time.sleep(0.1)
                 
-                print("Speech completed, ready for follow-up...")
                 time.sleep(0.5)  # Longer buffer to ensure TTS cleanup
                 
                 # Set LED to listening state
@@ -1278,9 +1292,6 @@ class LangChainAgentProcessor:
                     self.pixel_led.set_listening()
                 
                 # Now listen for follow-up response
-                print(f"AI asked: {question}")
-                print("Now listening for follow-up response...")
-                
                 # Use existing recognizer (with Spotify connector and Google Cloud v2 config)
                 # If no recognizer provided, create a basic one
                 if self.recognizer:
@@ -1293,10 +1304,9 @@ class LangChainAgentProcessor:
                 
                 # Listen with longer timeout for follow-up
                 # Music detection happens inside listen_for_command, which will reduce timeout to 5s if music is playing
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0, calibrate_ambient=True)
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0)
                 
                 if follow_up_command:
-                    print(f"Received follow-up response: '{follow_up_command}'")
                     # Return the response in a way that makes it clear this is answering the question
                     return f"User's answer to your question: '{follow_up_command}'. Now complete the original task based on this answer without searching again."
                 else:
@@ -1346,11 +1356,17 @@ class LangChainAgentProcessor:
             self._create_youtube_music_control_tool(),
             self._create_follow_up_question_tool(),
             self._zepto_ordering_tool(),
-            self._create_zepto_get_latest_order_tool(),
             self._create_zepto_order_history_tool(),
             self._create_zepto_order_again_tool(),
+            self._create_travel_time_tool(),
             self._create_zepto_track_orders_tool()
         ]
+        
+        # Log available tools
+        if self.use_dynamic_prompts:
+           print(f"✨ Dynamic Prompts ENABLED - Available Tools: {[t.name for t in self.tools]}")
+        else:
+            print(f"📘 System Prompt Mode - Available Tools: {[t.name for t in self.tools]}")
         
         # Initialize LLM
         llm = ChatOpenAI(
@@ -1426,9 +1442,49 @@ class LangChainAgentProcessor:
         
         # Compile the graph
         self.agent_executor = workflow.compile()
-        
-        print("LangChain agent initialized with tools:", [tool.name for tool in self.tools])
     
+    def _create_focused_agent_executor(self, user_command: str):
+        """Create a focused agent executor with custom prompt and filtered tools"""
+        if not self.use_dynamic_prompts:
+            return self.agent_executor
+        
+        try:
+            custom_prompt, tool_names = self.prompt_generator.generate_custom_prompt(user_command)
+            filtered_tools = self.prompt_generator.create_filtered_tool_list(self.tools, tool_names)
+            
+            print(f"🎯 Dynamic Prompt Active for: '{user_command}'")
+            print(f"📋 Requested Tools: {tool_names}")
+            print(f"✅ Filtered Tools: {[t.name for t in filtered_tools]}")
+            
+            llm = ChatOpenAI(model="gpt-4.1-mini", temperature=1, openai_api_key=os.getenv('OPENAI_API_KEY'))
+            
+            class AgentState(TypedDict):
+                messages: Annotated[list[BaseMessage], operator.add]
+            
+            def agent_node(state: AgentState):
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", custom_prompt),
+                    MessagesPlaceholder(variable_name="messages"),
+                ])
+                chain = prompt | llm.bind_tools(filtered_tools)
+                return {"messages": [chain.invoke({"messages": state["messages"]})]}
+            
+            def route_tools(state: AgentState):
+                msg = state["messages"][-1]
+                if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+                    return "tools"
+                return END
+            
+            workflow = StateGraph(AgentState)
+            workflow.add_node("agent", agent_node)
+            workflow.add_node("tools", ToolNode(filtered_tools))
+            workflow.add_conditional_edges("agent", route_tools, {"tools": "tools", END: END})
+            workflow.add_edge("tools", "agent")
+            workflow.set_entry_point("agent")
+            
+            return workflow.compile()
+        except Exception:
+            return self.agent_executor
 
         
     def process_user_command(self, user_command: str) -> bool:
@@ -1463,17 +1519,15 @@ class LangChainAgentProcessor:
             user_message = HumanMessage(content=user_command)
             messages.append(user_message)
             
+            # Get the appropriate agent executor (dynamic or static)
+            agent_executor = self._create_focused_agent_executor(user_command) if self.use_dynamic_prompts else self.agent_executor
+            
             # Invoke the agent with full context
-            result = self.agent_executor.invoke({"messages": messages})
+            result = agent_executor.invoke({"messages": messages})
             
             # Extract the response from the final message
             final_message = result["messages"][-1]
-            if isinstance(final_message, AIMessage):
-                response = final_message.content
-            else:
-                response = str(final_message)
-            
-            print(response)
+            response = final_message.content if isinstance(final_message, AIMessage) else str(final_message)
             
             # Extract URLs from response (especially for Amazon products)
             urls = re.findall(r'https?://\S+', response)
@@ -1492,17 +1546,15 @@ class LangChainAgentProcessor:
             assistant_entry = {"role": "assistant", "content": response}
             if unique_urls:
                 assistant_entry["urls"] = unique_urls
-                print(f"✓ URLs saved to history: {unique_urls}")
             self.conversation_history.append(assistant_entry)
             
             # Persist conversation history if a ConversationManager is provided
-            try:
-                if getattr(self, 'conversation_manager', None):
-                    # Sync in-memory history to manager before saving
+            if getattr(self, 'conversation_manager', None):
+                try:
                     self.conversation_manager.conversation_history = self.conversation_history
                     self.conversation_manager.save_conversation_history()
-            except Exception as save_err:
-                print(f"Warning: failed to save conversation history: {save_err}")
+                except Exception:
+                    pass
             
 
             used_follow_up = False
@@ -1523,14 +1575,10 @@ class LangChainAgentProcessor:
             
             # Explicitly clean up memory after agent processing
             gc.collect()
-            
-            print("Agent processing completed. Ready for next command.")
             return False
             
         except Exception as e:
             error_msg = f"Sorry, I encountered an error: {str(e)}"
-            print(f"Agent error: {e}")
-            # Speak error message (LED controlled in audio_processor)
             self.audio_processors.speak(error_msg)
             # Clean up memory after error
             gc.collect()

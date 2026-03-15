@@ -81,7 +81,7 @@ def record_background_sound(save_path, n_times=2500):
     """
 
     input("To start recording your background sounds press Enter: ")
-    for i in range(3515, n_times):
+    for i in range(4000, n_times):
         myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
         write(os.path.join(save_path, str(i) + ".wav"), SAMPLE_RATE, myrecording)
@@ -89,9 +89,9 @@ def record_background_sound(save_path, n_times=2500):
 
 # Step 1: Record yourself saying the Wake Word
 # print("record_audio_and_save the Wake Word:\n")
-record_background_sound(SAVE_DIR, n_times=4000) 
+record_background_sound(SAVE_DIR, n_times=5000)
 
-# Step 2: Record your background sounds (Just let it run, it will auto
+# Step 2: Record your background sounds (Just let it run, it will automatically record)
 # matically record)
 # print("Recording the Background sounds:\n")
 # record_audio_and_save(SAVE_DIR, n_times=400)

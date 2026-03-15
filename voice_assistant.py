@@ -7,6 +7,7 @@ import os
 import time
 import threading
 import sounddevice as sd
+import speech_recognition as sr
 from dotenv import load_dotenv
 # Component imports
 from audio.audio_processor import AudioProcessors
@@ -40,6 +41,10 @@ class VoiceAssistantRefactored:
         self.audio_processors = AudioProcessors()
         self.audio_processors.set_pixel_led(self.pixel_led)  # Connect LED to audio processor
         
+        # Create single recognizer instance to be shared across all components
+        shared_recognizer = sr.Recognizer()
+        self._setup_recognizer(shared_recognizer)
+        
         # Check speech recognition service to use
         use_azure = os.getenv('USE_AZURE', 'false').lower() == 'true'
         
@@ -49,14 +54,15 @@ class VoiceAssistantRefactored:
             print("[ASSISTANT] Using default Google Speech Recognition")
             
         self.recognizer = SpeechRecognizer(
+            shared_recognizer,  # Pass the shared recognizer
             self.audio_processors, 
             device_index=0,  # ReSpeaker Lite (from diagnostic)
             pixel_led=self.pixel_led, 
         )
         
         # Start energy calibration thread (updates every 30 seconds)
-        self.energy_calibrator = EnergyCalibrator(self.recognizer.recognizer, device_index=self.recognizer.device_index)
-        self.energy_calibrator.start_continuous_calibration(interval=5)
+        self.energy_calibrator = EnergyCalibrator(shared_recognizer, device_index=self.recognizer.device_index)
+        self.energy_calibrator.start_continuous_calibration(interval=10)
         print("[ASSISTANT] Energy calibration thread started (continuous updates every 30s)")
         
         # Store reference to energy calibrator in recognizer so it can be controlled during listening
@@ -70,7 +76,7 @@ class VoiceAssistantRefactored:
         self.reminder_manager.start_reminder_checker()
         
 
-        ww_model_path = f"{model_dir}/WWD_respeaker_model_v10.h5"
+        ww_model_path = f"{model_dir}/WWD_respeaker_model_v11.h5"
        
         if not os.path.exists(ww_model_path):
             ww_model_path = f"{model_dir}/wake_word_model.h5"
@@ -110,6 +116,17 @@ class VoiceAssistantRefactored:
             recognizer=self.recognizer  # Pass recognizer for follow-up questions
         )
 
+    def _setup_recognizer(self, recognizer):
+        """Configure the shared recognizer instance"""
+        # Minimal energy threshold - will be set by initial calibration
+        recognizer.energy_threshold = 300  # Minimal value (will be updated immediately)
+        recognizer.dynamic_energy_threshold = False  # Keep fixed for consistency
+        recognizer.dynamic_energy_adjustment_damping = 0.15
+        recognizer.dynamic_energy_ratio = 1.5
+        recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
+        recognizer.phrase_threshold = 0.3  # Minimum 300ms to catch speech start
+        recognizer.non_speaking_duration = 1.0  # Allow up to 1.3 seconds pause mid-phrase
+        print(f"[RECOGNIZER] Recognizer configured - Energy threshold will be auto-calibrated on startup")
 
     
     def run(self):

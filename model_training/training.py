@@ -110,7 +110,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v10.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v11.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")
@@ -150,7 +150,7 @@ print(f"Suggested optimal threshold: {optimal_threshold:.3f}")
 plot_confusion_matrix(cm, classes=["Background", "Wake Word"])
 
 print("\n=== Model Training Complete ===")
-print("Improved model saved as 'WWD_respeaker_model_v10.h5'")
+print("Improved model saved as 'WWD_respeaker_model_v11.h5'")
 print("Use this model with the suggested threshold for better performance!")
 
 print("\n=== Model Training Complete ===")

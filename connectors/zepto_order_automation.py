@@ -598,6 +598,14 @@ class ZeptoScraper(ZeptoLoginAsync):
         """
         logger.info(f"Searching and extracting up to {max_products} products for: {product_name}")
 
+        # Check if browser is initialized
+        if self.page is None:
+            logger.warning("Browser not initialized, setting up now...")
+            result = await self.setup_browser()
+            if result is None:
+                logger.error("Failed to setup browser for product search")
+                return []
+
         # First search for the product
         search_success = await self.search_products(product_name)
         if not search_success:
@@ -915,6 +923,14 @@ class ZeptoScraper(ZeptoLoginAsync):
         logger.info("Navigating to cart")
         
         try:
+            # Check if browser is initialized
+            if self.page is None:
+                logger.warning("Browser not initialized, setting up now...")
+                result = await self.setup_browser()
+                if result is None:
+                    logger.error("Failed to setup browser for cart navigation")
+                    return False
+            
             # Check if already on cart page
             current_url = self.page.url
             if 'cart=open' in current_url or '/cart' in current_url or '/checkout' in current_url:
@@ -971,6 +987,14 @@ class ZeptoScraper(ZeptoLoginAsync):
         logger.info("Navigating to account/profile page")
         
         try:
+            # Check if browser is initialized
+            if self.page is None:
+                logger.warning("Browser not initialized, setting up now...")
+                result = await self.setup_browser()
+                if result is None:
+                    logger.error("Failed to setup browser for account navigation")
+                    return False
+            
             # Wait for page to be ready
             await self.page.wait_for_load_state('domcontentloaded')
             await self.page.wait_for_timeout(2000)
@@ -1553,6 +1577,14 @@ class ZeptoScraper(ZeptoLoginAsync):
         """
         logger.info("Getting order details (compact)")
         try:
+            # Check if browser is initialized
+            if self.page is None:
+                logger.warning("Browser not initialized, setting up now...")
+                result = await self.setup_browser()
+                if result is None:
+                    logger.error("Failed to setup browser for order details")
+                    return None
+            
             if not ensure_cart:
                 await self.goto_cart()
 

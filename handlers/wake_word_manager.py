@@ -1,12 +1,13 @@
 import time
 import numpy as np
 import threading
+from speech.energy_calibrator import EnergyCalibrator
 
 
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.70
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.75
 ):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
@@ -69,7 +70,7 @@ class WakeWordManager:
             # Start speech recognition immediately without waiting for beep
             print("Starting speech recognition...")
 
-            user_command = self.recognizer.listen_for_command(calibrate_ambient=True)
+            user_command = self.recognizer.listen_for_command()
 
             print(f"Speech recognition result: {user_command}")
             
@@ -159,7 +160,16 @@ class WakeWordManager:
                         pass
                     time.sleep(0.1)  # Reduced pause after interruption (was 0.3s)
 
+                # Disable calibration during listening (prevent threshold changes during command capture)
+                EnergyCalibrator.enable_calibration = False
+                print("[CALIBRATION] Paused during listening")
+                
                 should_exit = self.handle_wake_word_detection(process_command_callback)
+                
+                # Re-enable calibration after listening is complete
+                EnergyCalibrator.enable_calibration = True
+                print("[CALIBRATION] Resumed after listening")
+                
                 if should_exit:
                     self.detection_running = False  # Set to False before breaking
                     break

@@ -31,21 +31,18 @@ def suppress_alsa_errors():
         os.close(old_stderr)
 
 class SpeechRecognizer:
-    def __init__(self, audio_processor, device_index=None, pixel_led=None, use_whisper=False):
-        """Initialize recognizer and pick a safe microphone device index.
+    def __init__(self, recognizer, audio_processor, device_index=None, pixel_led=None, use_whisper=False):
+        """Initialize recognizer with existing sr.Recognizer instance.
 
-        On Linux the device index used on Windows (e.g. 1) may be invalid and
-        attempting to open it causes ALSA/PyAudio errors. We try to pick a
-        working device automatically and fall back to the system default.
-        
         Args:
+            recognizer: Shared sr.Recognizer instance (created in voice_assistant.py)
             audio_processor: Audio processor instance
             device_index: Optional microphone device index
             pixel_led: Optional LED control instance
             use_whisper: If True, use OpenAI Whisper for recognition instead of Google
         """
         self.device_index = None
-        self.recognizer = sr.Recognizer()
+        self.recognizer = recognizer  # Use provided recognizer instead of creating new one
         self.audio_processor = audio_processor
         self.pixel_led = pixel_led
         self.use_whisper = use_whisper
@@ -64,7 +61,6 @@ class SpeechRecognizer:
                 self.openai_client = OpenAI(api_key=api_key)
                 print("[RECOGNIZER] OpenAI Whisper initialized")
         
-        self._setup_recognizer()
         try:
             self._choose_device_index()
         except Exception:
@@ -105,51 +101,6 @@ class SpeechRecognizer:
         else:
             print("[RECOGNIZER] Music playback stopped - reverting to normal settings")
 
-
-   
-    def _setup_recognizer(self):
-        # Minimal energy threshold - will be set by initial calibration
-        # This is just a temporary value until calibrate_initial() runs
-        self.recognizer.energy_threshold = 100  # Minimal value (will be updated immediately)
-        self.recognizer.dynamic_energy_threshold = False  # Keep fixed for consistency
-        self.recognizer.dynamic_energy_adjustment_damping = 0.15
-        self.recognizer.dynamic_energy_ratio = 1.5
-        self.recognizer.pause_threshold = 1.5  # 1.5 seconds of silence before stopping
-        self.recognizer.phrase_threshold = 0.3  # Minimum 300ms to catch speech start
-        self.recognizer.non_speaking_duration = 1.3  # Allow up to 1.3 seconds pause mid-phrase
-        
-        print(f"[RECOGNIZER] Setup complete - Energy threshold will be auto-calibrated on startup")
-
-    def _calibrate_ambient_energy(self, duration=1.0, multiplier=1.5):
-        """Calibrate ambient energy by recording and measuring raw microphone audio"""
-        try:
-            mic_kwargs = {"device_index": self.device_index} if self.device_index is not None else {}
-            mic_kwargs['sample_rate'] = 16000
-            
-            with suppress_alsa_errors():
-                microphone = sr.Microphone(**mic_kwargs)
-                with suppress_alsa_errors():
-                    with microphone as source:
-                        # Record raw audio directly (don't use listen() which waits for speech)
-                        print(f"[RECOGNIZER] Sampling ambient audio for {duration}s...")
-                        
-                        # Get the stream to record raw audio
-                        audio = source.stream.read(int(16000 * duration))  # Read duration seconds of raw audio
-                        
-                        # Convert bytes to audio data
-                        audio_data = np.frombuffer(audio, dtype=np.int16)
-                        
-                        # Calculate RMS energy
-                        rms_energy = np.sqrt(np.mean(np.square(audio_data.astype(float))))
-                        new_threshold = int(rms_energy * multiplier)
-                        new_threshold = max(new_threshold, 100)  # Minimum 100
-                        old_threshold = int(self.recognizer.energy_threshold)
-                        self.recognizer.energy_threshold = new_threshold
-                        print(f"[RECOGNIZER] Calibrated: Energy {rms_energy:.0f} | Threshold: {old_threshold} → {new_threshold}")
-                            
-        except Exception as e:
-            print(f"[RECOGNIZER] Calibration error: {e} - using default threshold")
-
     def _print_attempt(self, retry_count, is_follow_up):
         if retry_count == 0:
             print("Please respond..." if is_follow_up else "Say your command...")
@@ -180,30 +131,23 @@ class SpeechRecognizer:
                 self.pixel_led.set_error()
             return False
 
-    def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1, calibrate_ambient=True):
+    def listen_for_command(self, timeout=20, is_follow_up=False, max_retries=1):
         """Listen for user command with retry logic (retries once, then returns error).
         
         Args:
             timeout: Maximum time to wait for speech (in seconds)
             is_follow_up: Whether this is a follow-up command
             max_retries: Number of times to retry if no speech detected
-            calibrate_ambient: If True, calibrate ambient energy once before listening
         """
        
         if self.is_music_playing:
             timeout = 5
             print("[ASSISTANT] Music is playing - using 5s timeout")
         phrase_time_limit = 5 if timeout == 5 else 20  # Increased from 15 to 20 seconds for more speaking time
-
-        # Calibrate ambient energy once before listening (longer duration to actually capture noise)
-        # if calibrate_ambient:
-        #     self._calibrate_ambient_energy(duration=1.0, multiplier=1.5)
         
         print(f"timeout={timeout}, phrase_time_limit={phrase_time_limit}")
         msg = "Listening for follow-up..." if is_follow_up else "Listening for command..."
         print(f"[ASSISTANT] {msg}")
-        
-       
         
         self._print_attempt(0, is_follow_up)
 
@@ -230,8 +174,9 @@ class SpeechRecognizer:
                                 self._print_attempt(attempt + 1, is_follow_up)
                             continue
 
-                if not audio or len(audio.frame_data) < 400:
-                    print(f"[ASSISTANT] Audio too short: {len(audio.frame_data) if audio else 0} bytes, minimum required: 400 bytes")
+                min_audio_bytes = 20000  # ~0.6 seconds for short words
+                if not audio or len(audio.frame_data) < min_audio_bytes:
+                    print(f"[ASSISTANT] Audio too short: {len(audio.frame_data) if audio else 0} bytes, minimum required: {min_audio_bytes} bytes (~0.6s)")
                     if attempt < max_retries:
                         self._print_attempt(attempt + 1, is_follow_up)
                     continue
@@ -270,11 +215,6 @@ class SpeechRecognizer:
                     except:
                         pass
                 gc.collect()
-                # self.recognizer.energy_threshold =300
-        
-        # Resume energy calibration after listening is done
-        if self.energy_calibrator:
-            self.energy_calibrator.pause_calibration = False
         
         print("[ASSISTANT] No command detected after multiple attempts.")
         # self.audio_processor.speak("I didn't hear anything. Please call if you need me.")
