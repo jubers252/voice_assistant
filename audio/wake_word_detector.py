@@ -18,7 +18,7 @@ class WakeWordDetector:
         # Model configuration (matches training)
         self.desired_length = 44
         self.feature_dim = 120
-        self.optimal_threshold = 0.40 # Based on latest training: background mean 0.009, wake word mean 0.920
+        self.optimal_threshold = 0.35  # Lowered from 0.40 for better nighttime detection while maintaining accuracy
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")
@@ -72,13 +72,17 @@ class WakeWordDetector:
             if audio.ndim > 1:
                 audio = np.mean(audio, axis=0)  # Average channels for mono
             
+            # Normalize audio first (matches training preprocessing)
+            audio = audio / (np.max(np.abs(audio)) + 1e-8)
+            
             mfcc = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=self.n_mfcc, n_fft=self.n_fft, hop_length=self.hop_length)
             mfcc_delta = librosa.feature.delta(mfcc)
             mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
             features = np.concatenate((mfcc, mfcc_delta, mfcc_delta2), axis=0)
             features = features.T  # Transpose to (time_steps, features)
             
-            # Normalize features using StandardScaler (MUST match training preprocessing)
+            # Normalize features using StandardScaler fitted on flattened features (EXACTLY as in training)
+            # This matches the preprocessing in model_training/PreprocessingData.py
             scaler = StandardScaler()
             flat_features = features.flatten()
             normalized_flat = scaler.fit_transform(flat_features.reshape(-1, 1)).flatten()

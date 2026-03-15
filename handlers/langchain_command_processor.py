@@ -818,7 +818,6 @@ class LangChainAgentProcessor:
                 product = ""
                 
                 if len(parts) >= 4:
-                    # Last part is product_index
                     last_part = parts[-1].strip()
                     if last_part.isdigit():
                         product_index = int(last_part)
@@ -826,7 +825,6 @@ class LangChainAgentProcessor:
                     else:
                         print(f"[ZEPTO DEBUG] Warning: Last part '{last_part}' is not numeric, using default 0")
                     
-                    # Second to last is quantity
                     second_last = parts[-2].strip()
                     if second_last.isdigit():
                         quantity = int(second_last)
@@ -834,12 +832,10 @@ class LangChainAgentProcessor:
                     else:
                         print(f"[ZEPTO DEBUG] Warning: 2nd-last part '{second_last}' is not numeric, using default 1")
                     
-                    # Everything in between is product name (can contain pipes)
                     product = "|".join(parts[1:-2]).strip()
                     print(f"[ZEPTO DEBUG] Product name from middle parts: '{product}'")
                     
                 elif len(parts) >= 3:
-                    # Could be: action|product|quantity
                     last_part = parts[-1].strip()
                     if last_part.isdigit():
                         quantity = int(last_part)
@@ -867,9 +863,10 @@ class LangChainAgentProcessor:
                 if action == "login":
                     self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     # Save initial order state
-                    self.zepto_db.save_order(status="pending", current_task="login", items=[], total_price=0.0, error=False)
+                    order_id = self.zepto_db.save_order(status="pending", current_task="login", items=[], total_price=0.0, error=False)
+                    print(f"[ZEPTO_DB_TRACK] Login: Created order #{order_id}")
                     return "Zepto login initiated."
-                if action == "clear_cart":
+                elif action == "clear_cart":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
                         print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
@@ -884,6 +881,11 @@ class LangChainAgentProcessor:
                     latest_order = self.zepto_db.get_latest_order()
                     if latest_order:
                         self.zepto_db.update_task(latest_order['id'], "searching", f"Searched for: {product}")
+                        print(f"[ZEPTO_DB_TRACK] Search: Updated order #{latest_order['id']} to searching")
+                    else:
+                        print(f"[ZEPTO_DB_TRACK] Search: No pending/processing order found, creating new one")
+                        order_id = self.zepto_db.save_order(status="pending", current_task="searching", items=[], error=False, context=f"Searched for: {product}")
+                        print(f"[ZEPTO_DB_TRACK] Search: Created order #{order_id}")
                     return f"Zepto search results: {product_list}"
                 elif action == "add_product":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
@@ -902,6 +904,11 @@ class LangChainAgentProcessor:
                             items.append(item_str)
                         self.zepto_db.update_items(latest_order['id'], items)
                         self.zepto_db.update_task(latest_order['id'], "item_added", f"Added: {product} x{quantity}")
+                        print(f"[ZEPTO_DB_TRACK] Add Product: Updated order #{latest_order['id']} with item '{item_str}'")
+                    else:
+                        print(f"[ZEPTO_DB_TRACK] Add Product: No pending order found")
+                        order_id = self.zepto_db.save_order(status="pending", current_task="item_added", items=[f"{product} x{quantity}"], error=False, context=f"Added: {product} x{quantity}")
+                        print(f"[ZEPTO_DB_TRACK] Add Product: Created order #{order_id} with item")
                     
                     return f"Zepto add product result: {result}"
                 elif action == "order_details":
@@ -921,6 +928,7 @@ class LangChainAgentProcessor:
                     if latest_order:
                         self.zepto_db.update_status(latest_order['id'], "payment")
                         self.zepto_db.update_task(latest_order['id'], "payment_confirmation", "Checkout initiated")
+                        print(f"[ZEPTO_DB_TRACK] Checkout: Updated order #{latest_order['id']} to payment status")
                     
                     # Add confirmation prompt for COD payment
                     if payment_result.get('cod_available'):
@@ -939,12 +947,14 @@ class LangChainAgentProcessor:
                         if latest_order:
                             self.zepto_db.update_status(latest_order['id'], "completed")
                             self.zepto_db.update_task(latest_order['id'], "order_placed", "Order successfully placed")
+                            print(f"[ZEPTO_DB_TRACK] Place Order: Updated order #{latest_order['id']} to completed status")
                         return "Zepto order placed successfully."
                     else:
                         # Set error flag
                         latest_order = self.zepto_db.get_latest_order()
                         if latest_order:
                             self.zepto_db.set_error(latest_order['id'], True, "Failed to place order")
+                            print(f"[ZEPTO_DB_TRACK] Place Order: Error flag set for order #{latest_order['id']}")
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
                 elif action == "cleanup":
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
@@ -957,6 +967,7 @@ class LangChainAgentProcessor:
                 latest_order = self.zepto_db.get_latest_order()
                 if latest_order:
                     self.zepto_db.set_error(latest_order['id'], True, str(e))
+                    print(f"[ZEPTO_DB_TRACK] Exception: Error flag set for order #{latest_order['id']}")
                 return f"Zepto tool error: {str(e)}"
         
         return Tool(
@@ -1447,22 +1458,6 @@ class LangChainAgentProcessor:
                     messages.append(HumanMessage(content=hist_entry["content"]))
                 elif hist_entry["role"] == "assistant":
                     messages.append(AIMessage(content=hist_entry["content"]))
-            
-            # Check for incomplete Zepto orders and inject context
-            latest_order = self.zepto_db.get_latest_order()
-            if latest_order:
-                order_context = f"""
-🛒 INCOMPLETE ZEPTO ORDER FOUND:
-- Status: {latest_order['status']}
-- Current Task: {latest_order['current_task']}
-- Items: {len(latest_order['items'])} items
-- Total: ₹{latest_order['total_price']}
-- Items: {', '.join(latest_order['items'])}
-{'⚠️ Previous Error Occurred' if latest_order['error'] else ''}
----
-Ask user if they want to continue this order or create a new one.
-"""
-                messages.append(AIMessage(content=order_context))
             
             # Add current user message
             user_message = HumanMessage(content=user_command)

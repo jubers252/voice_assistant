@@ -5,7 +5,7 @@ import os
 import logging
 import re
 from playwright.async_api import async_playwright
-from connectors.telegram_bot import TelegramBot
+from telegram_bot import TelegramBot
 from zepto_simple_login_async import ZeptoLoginAsync
 from dotenv import load_dotenv  
 
@@ -1657,8 +1657,8 @@ class ZeptoScraper(ZeptoLoginAsync):
                 # Send to Telegram
                 if self.chat_id:
                     abs_filepath = os.path.abspath(filepath)
-                    self.telegram_bot.send_message(self.chat_id, order_message, parse_mode=None)
-                    self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto order details", parse_mode=None)
+                    self.telegram_bot.send_message(self.chat_id, order_message)
+                    self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto order details")
                 else:
                     logger.warning("TELEGRAM_CHAT_ID not set - skipping Telegram notification")
               
@@ -1952,7 +1952,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             
             if self.chat_id:
                 abs_filepath = os.path.abspath(filepath)
-                self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto Final Checkout", parse_mode=None)
+                self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto Final Checkout")
           
             clicked = await self._click_proceed_if_present(self.page)
             if clicked:
@@ -2075,16 +2075,19 @@ class ZeptoScraper(ZeptoLoginAsync):
 
 
 
-            is_high_demand = await self.check_high_demand_flag()
-            if is_high_demand:
-                print("High demand - try again later")
-                return 0
-            await self.clear_cart()
+            # is_high_demand = await self.check_high_demand_flag()
+            # if is_high_demand:
+            #     print("High demand - try again later")
+            #     return 0
+            # await self.clear_cart()
 
           
-            result = await self.get_order_history()
-            print(result)
-            await self.order_again(order_index=0)
+            # result = await self.get_order_history()
+            # print(result)
+            # await self.order_again(order_index=0)
+            # product = await self.search_and_extract_products("milk")
+            # print(f"Product: {product}")
+            # await self.add_product_to_cart(product_index=0)
             cart_info = await self.get_order_details()
             print(f"Cart Info: {cart_info}")
             payment_url = await self.go_to_payment()

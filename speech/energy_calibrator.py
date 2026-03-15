@@ -90,7 +90,23 @@ class EnergyCalibrator:
                         self.recognizer.adjust_for_ambient_noise(source, duration=duration)
                         
                         new_threshold = int(self.recognizer.energy_threshold)
-                        print("[ENERGY_CALIBRATOR] Background calibration: Threshold updated: {} → {}".format(old_threshold, new_threshold))
+                        
+                        # Prevent drastic threshold jumps that break detection at night
+                        # If new threshold is more than 50% different from old, cap the change
+                        max_increase_ratio = 1.5  # Allow up to 50% increase
+                        max_decrease_ratio = 0.7  # Allow threshold to drop to 70% of old value (better for night)
+                        
+                        if new_threshold > old_threshold * max_increase_ratio:
+                            new_threshold = int(old_threshold * max_increase_ratio)
+                            self.recognizer.energy_threshold = new_threshold
+                            print("[ENERGY_CALIBRATOR] Background calibration: Threshold capped at increase limit")
+                        elif new_threshold < old_threshold * max_decrease_ratio and old_threshold > 100:
+                            new_threshold = int(old_threshold * max_decrease_ratio)
+                            self.recognizer.energy_threshold = new_threshold
+                            print("[ENERGY_CALIBRATOR] Background calibration: Threshold restored for night sensitivity")
+                        
+                        print("[ENERGY_CALIBRATOR] Background calibration: Threshold updated: {} → {} (multiplier: {})".format(
+                            old_threshold, new_threshold, multiplier))
         except Exception as e:
             print("[ENERGY_CALIBRATOR] Background calibration error: {}".format(e))
       

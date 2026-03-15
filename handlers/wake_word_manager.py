@@ -6,7 +6,7 @@ import threading
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.65
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.70
 ):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
@@ -18,6 +18,12 @@ class WakeWordManager:
         # Wake word detection thresholds (higher for better accuracy - reduce false positives)
         self.energy_threshold = energy_threshold  # Higher energy threshold to filter noise
         self.confidence_threshold = confidence_threshold  # Higher confidence to avoid false detections
+        
+        # Night-mode and low-noise compensation
+        self.min_energy_threshold = 0.00005  # Absolute minimum to catch quiet nighttime speech
+        self.max_energy_threshold = 0.0005   # Maximum to prevent false positives in noisy environments
+        self.use_adaptive_thresholding = True  # Use recognizer's calibration with bounds checking
+        
         # Wake word detection parameters
         # Use a 2.0 second analysis window for wake-word detection (sliding window)
         self.window_duration = 2.0  # seconds (matches training duration)
@@ -114,11 +120,18 @@ class WakeWordManager:
 
             # Get dynamically calibrated energy threshold from recognizer (updates every 30s)
             # This adapts wake word detection to changing background noise levels
-            if hasattr(self.recognizer, 'energy_threshold'):
-                # Use recognizer's calibrated threshold, scaled down for wake word detection
-                # (wake word is more critical, so use a slightly lower threshold for sensitivity)
-                calibrated_threshold = self.recognizer.energy_threshold / 10000.0
-                dynamic_energy_threshold = max(calibrated_threshold, 0.00005)  # Minimum threshold of 0.00005
+            if hasattr(self.recognizer, 'energy_threshold') and self.use_adaptive_thresholding:
+                # Convert recognizer's raw energy threshold (0-4000+ range) to normalized scale (0-1 range)
+                # recognizer uses RMS values directly, so we normalize: threshold / ~4000 (typical max RMS)
+                # Then scale for wake word sensitivity
+                recognizer_threshold = self.recognizer.energy_threshold
+                normalized_threshold = (recognizer_threshold / 4000.0) * 0.05  # Scale to ~0.00-0.05 range
+                # Bound the threshold to safe range for nighttime operation
+                dynamic_energy_threshold = np.clip(
+                    normalized_threshold, 
+                    self.min_energy_threshold,  # 0.00005 - catch quiet night speech
+                    self.max_energy_threshold   # 0.0005 - prevent too many false positives
+                )
             else:
                 dynamic_energy_threshold = self.energy_threshold
             
@@ -132,7 +145,8 @@ class WakeWordManager:
             
             # Show detection attempts with energy > 0.010 for debugging
             if energy and energy > 0.0001 and self.debug_mode:
-                print(f"Wakeword check: Detected={detected}, Energy={energy:.6f}, Confidence={confidence:.4f}, Threshold={dynamic_energy_threshold:.6f}")
+                status = "✓ DETECTED" if detected else "✗ rejected"
+                print(f"[WWD_NIGHT_DEBUG] {status} | Energy={energy:.6f} | Confidence={confidence:.4f} | EnergyThresh={dynamic_energy_threshold:.6f} | ConfThresh={self.confidence_threshold:.4f}")
             
             # Handle wake word detection
             if detected:

@@ -56,22 +56,48 @@ class TelegramBot:
             logger.error(f"Connection test failed: {e}")
             return False
     
-    def _make_request(self, method: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _make_request(self, method: str, data: Dict[str, Any], file_field: Optional[str] = None) -> Dict[str, Any]:
         """
         Make a request to Telegram Bot API
         
         Args:
             method (str): API method name
             data (dict): Request data
+            file_field (str): Name of the field containing file path (e.g., 'photo', 'document')
             
         Returns:
             dict: API response
         """
         try:
             url = f"{self.base_url}/{method}"
-            response = requests.post(url, data=data, timeout=30)
-            response.raise_for_status()
-            return response.json()
+            
+            # Handle file uploads
+            files = None
+            if file_field and file_field in data:
+                file_path = data[file_field]
+                
+                # Check if it's a local file path (not a URL or file_id)
+                if isinstance(file_path, str) and os.path.isfile(file_path):
+                    files = {file_field: open(file_path, 'rb')}
+                    # Remove from data since it will be sent as files
+                    data = {k: v for k, v in data.items() if k != file_field}
+            
+            # Send request with files if provided
+            if files:
+                try:
+                    response = requests.post(url, data=data, files=files, timeout=30)
+                    response.raise_for_status()
+                    return response.json()
+                finally:
+                    # Close all opened files
+                    for file_obj in files.values():
+                        if hasattr(file_obj, 'close'):
+                            file_obj.close()
+            else:
+                response = requests.post(url, data=data, timeout=30)
+                response.raise_for_status()
+                return response.json()
+                
         except requests.exceptions.RequestException as e:
             logger.error(f"Request failed: {e}")
             return {"ok": False, "error": str(e)}
@@ -130,7 +156,7 @@ class TelegramBot:
                 'parse_mode': parse_mode
             }
             
-            response = self._make_request('sendPhoto', data)
+            response = self._make_request('sendPhoto', data, file_field='photo')
             
             if response.get('ok'):
                 message_id = response['result']['message_id']
@@ -165,7 +191,7 @@ class TelegramBot:
                 'parse_mode': parse_mode
             }
             
-            response = self._make_request('sendDocument', data)
+            response = self._make_request('sendDocument', data, file_field='document')
             
             if response.get('ok'):
                 message_id = response['result']['message_id']
