@@ -54,12 +54,12 @@ class EnergyCalibrator:
             self._calibrate_silent(duration=2.0)
             new_threshold = int(self.recognizer.energy_threshold)
             
-            # Cap maximum threshold at 2000 to prevent over-sensitivity
-            if new_threshold > 2000:
-                self.recognizer.energy_threshold = 2000
-                new_threshold = 2000
+            # Cap maximum threshold at 3000 to prevent over-sensitivity
+            if new_threshold > 3000:
+                self.recognizer.energy_threshold = 3000
+                new_threshold = 3000
             
-            print("[ENERGY_CALIBRATOR] Initial calibration: {} → {} (max cap: 2000)".format(initial_threshold, new_threshold))
+            print("[ENERGY_CALIBRATOR] Initial calibration: {} → {} (max cap: 3000)".format(initial_threshold, new_threshold))
         except Exception as e:
             print("[ENERGY_CALIBRATOR] Initial calibration failed (non-critical): {}".format(e))
         
@@ -110,12 +110,12 @@ class EnergyCalibrator:
                         
                         new_threshold = int(self.recognizer.energy_threshold)
                         
-                        # Cap maximum threshold at 2000 to prevent over-sensitivity
-                        if new_threshold > 2000:
-                            self.recognizer.energy_threshold = 2000
-                            new_threshold = 2000
+                        # Cap maximum threshold at 3000 to prevent over-sensitivity
+                        if new_threshold > 3000:
+                            self.recognizer.energy_threshold = 3000
+                            new_threshold = 3000
                         
-                        print("[ENERGY_CALIBRATOR] Background calibration: Threshold updated: {} → {} (max cap: 2000)".format(
+                        print("[ENERGY_CALIBRATOR] Background calibration: Threshold updated: {} → {} (max cap: 3000)".format(
                             old_threshold, new_threshold))
         except Exception as e:
             print("[ENERGY_CALIBRATOR] Background calibration error: {}".format(e))
