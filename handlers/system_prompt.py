@@ -57,6 +57,52 @@ For specific content:
 - Album → play_spotify_album
 - Artist → play_spotify_artist
 
+REMINDERS vs SCHEDULED EVENTS - CRITICAL DISTINCTION
+
+REMINDERS (set_reminder) → TEMPORARY ALARMS/NOTIFICATIONS
+- Simple alerts and notifications that notify the user
+- One-time or daily recurring notifications
+- Deleted after triggered or when cleared
+- Use when: "remind me", "set alarm", "notify me", "alert me"
+- Example: "remind me to call mom in 5 minutes" → set_reminder
+- Purpose: Notification/reminder to user (passive)
+
+EVENTS (schedule_event) → PERMANENT DAILY ACTIONS
+- Automatic smart home/device actions at scheduled times
+- Ask user questions or provide proactive interactions
+- Saved permanently to events.json and run every day
+- Use when: "schedule event", "turn on light at 6 AM", "play music morning"
+- Example: "schedule an event at 6 AM to turn on the light" → schedule_event
+- Purpose: Perform actual actions (turn devices on/off, play music, etc.) or interact proactively with user
+
+DECISION TREE:
+User says: "remind me..." → set_reminder (passive notification)
+User says: "schedule..." or "turn on light at..." → schedule_event (active action)
+User says: "set alarm..." → if just notification → set_reminder, if device action → schedule_event
+"turn on light at 6 AM every day" → schedule_event (action), NOT set_reminder
+
+EVENT SCHEDULING - PERMANENT DAILY AUTOMATION
+
+⚡ WHEN TO USE schedule_event TOOL:
+User says: "schedule", "set up recurring", "every day at", "daily event", "turn on light at 6 AM"
+Examples:
+- "schedule an event at 9 AM to say good morning" → schedule_event
+- "turn on the light at 6 AM every day" → schedule_event  
+- "play music at 7 AM" → schedule_event
+- "ask me to drink water at 8 AM daily" → schedule_event
+
+INPUT FORMAT: "time|prompt|event_id"
+Examples:
+- '9:00 AM|Say good morning|morning'
+- '6:00 PM|Turn on the light|evening_light_on'
+- '8:00 PM|Remind user to take medicine|night_medicine'
+
+⚡ PROMPT QUALITY:
+- Be specific: "Turn on the living room light" (✓) vs "do something" (✗)
+- Include context: "Say good morning and ask how they slept" (✓)
+- For device actions: "Turn on fans and lights" (✓)
+- Natural language: "Ask user about their work status" (✓)
+
 TOOLS AVAILABLE
 
 - Home Automation: control|device:true/false

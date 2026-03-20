@@ -71,6 +71,10 @@ class VoiceAssistantRefactored:
         self.reminder_manager.set_audio_processors(self.audio_processors)
         self.reminder_manager.start_reminder_checker()
         
+        # Start continuous energy calibration (runs in background, pauses during listening)
+        energy_calibrator = EnergyCalibrator(shared_recognizer, device_index=0)
+        energy_calibrator.start_continuous_calibration(interval=10)
+        
 
         ww_model_path = f"{model_dir}/WWD_respeaker_model_v11.h5"
        
@@ -128,14 +132,14 @@ class VoiceAssistantRefactored:
     def _setup_recognizer(self, recognizer):
         """Configure the shared recognizer instance"""
         # Lower threshold for noisy environments + dynamic adjustment
-        recognizer.energy_threshold = 150  # Lower sensitivity baseline for background noise
+        recognizer.energy_threshold = 100  # Lower sensitivity baseline for background noise
         recognizer.dynamic_energy_threshold = True  # Auto-adjust based on ambient noise
-        recognizer.dynamic_energy_adjustment_damping = 0.15  # Smooth transitions
+        recognizer.dynamic_energy_adjustment_damping = 0.10  # More aggressive adjustment (lower = faster response)
         recognizer.dynamic_energy_ratio = 1.5
         recognizer.pause_threshold = 1.3  # 1.3 seconds of silence before stopping
         recognizer.phrase_threshold = 0.3  # Minimum 300ms to catch speech start
         recognizer.non_speaking_duration = 1.0  # Allow up to 1.0 seconds pause mid-phrase
-        print(f"[RECOGNIZER] Recognizer configured - Energy: {recognizer.energy_threshold}, Dynamic: {recognizer.dynamic_energy_threshold}")
+        print(f"[RECOGNIZER] Recognizer configured - Energy: {recognizer.energy_threshold}, Dynamic: {recognizer.dynamic_energy_threshold} (Damping: {recognizer.dynamic_energy_adjustment_damping})")
 
     def schedule_event(self, hour: int, minute: int, prompt: str, event_id: str = None) -> str:
         """

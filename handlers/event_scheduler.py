@@ -55,7 +55,7 @@ class EventScheduler:
         
         Args:
             event_time: Time to trigger (datetime.time object)
-            prompt: Message for agent
+            prompt: Message for agent (prompt describes the action to take)
             event_id: Optional unique ID
         
         Returns:
@@ -63,7 +63,7 @@ class EventScheduler:
         """
         event = ScheduledEvent(event_time, prompt, event_id)
         self.events.append(event)
-        print(f"[SCHEDULER] Event added: {event.event_id} at {event_time.strftime('%H:%M')}")
+        print(f"[SCHEDULER] Event added: {event.event_id} at {event.event_time.strftime('%H:%M')}")
         return event.event_id
     
     def remove_event(self, event_id: str) -> bool:

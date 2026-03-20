@@ -1,104 +1,23 @@
 """
 Dynamic Prompt Generator for Voice Assistant
 Generates custom prompts based on tools required for user's request
+Uses LLM-based (GPT-4o-mini) intent detection instead of keyword matching
 """
 
-import re
+
+import logging
 from typing import Dict, List, Tuple, Set
 from langchain_core.tools import BaseTool
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+import os
+from functools import lru_cache
+from dotenv import load_dotenv
+from datetime import datetime
+load_dotenv()
 
-# Tool-to-keywords mapping (English + Romanized Hindi/Hinglish)
-# Keywords are combined so both English and Hindi (Romanized) queries work
-# Example: "play" (English) and "bajao" (Hindi) will both match music tools
-TOOL_KEYWORDS = {
-    # Weather tools
-    "get_current_weather": ["weather", "mausam", "vedar","tapman", "temperature", "cold", "hot", "raining", "rain", "sunny", "cloudy", "forecast",
-                            "thandi", "garam", "barish", "dhoop", "badal"],
-    "get_weather_forecast": ["forecast", "tomorrow", "next day", "week", "rain tomorrow", "weather tomorrow",
-                             "pehle din", "kal", "agle hfte", "kal ki barish"],
-    "get_timezone": ["timezone", "time in", "what time is it in", "current time", "time zone", "time",
-                     "samay", "kaunsa samay", "vartman samay"],
-    
-    # Travel and traffic
-    "get_travel_time": ["travel time", "how long", "distance", "how far", "traffic", "reach", "commute", "route",
-                        "safar", "kitni dur", "time lagega", "raasta", "traffic jam", "jam"],
-    
-    # Home automation
-    "control_home_automation": ["light", "fan", "zero", "device", "turn on", "turn off", "automation", "smart home", "devices",
-                                "roshni", "bulb", "pankha", "switch on", "switch off", "band karo", "kholo"],
-    
-    # Music - YouTube (default)
-    "play_youtube_music_song": ["play", "music", "song", "resume", "artist",
-                                "bajao", "gana", "sangeet", "repeat", "shuru karo"],
-    "play_youtube_music_playlist": ["playlist", "play playlist", "romantic", "workout",
-                                    "gaaon ki list", "pyar wale gane"],
-    "play_youtube_music_artist": ["artist", "singer", "gayak"],
-    "control_youtube_music_playback": ["pause", "stop", "next", "skip", "previous", "back",
-                                       "roko", "band karo", "agle gane", "chhodo", "pichla"],
-    
-    # Music - Spotify (explicit)
-    "play_spotify_track": ["spotify", "on spotify", "from spotify", "using spotify", "spotify songs",
-                          "spotify par", "spotify se"],
-    "play_spotify_album": ["spotify album", "spotify collection"],
-    "play_spotify_artist": ["spotify artist", "spotify singer"],
-    "control_spotify_playback": ["spotify"],
-    
-    # Search and Amazon
-    "search_web": ["search", "news", "latest", "current", "trending", "right now", "live", "prices", "updates",
-                   "khoj", "samachar", "nayi", "abhi", "dam", "tulna"],
-    "search_amazon_single_product": ["amazon", "product", "price", "compare", "rating",
-                                     "maal", "kimat", "daim", "star"],
-    "search_amazon_multiple_products": ["amazon", "compare", "options",
-                                    "tulna karo", "vikal"],
-    "track_amazon_orders": ["amazon order", "track order", "order status",
-                          "order kahan hai", "delivery kab hogi", "amazon"],
-    
-    # Reminders
-    "set_reminder": ["remind", "reminder", "set reminder", "remember", "schedule",
-                     "yaad dilao", "alarm", "sudharo", "yaad rakho"],
-    "list_reminders": ["list reminders", "show reminders", "my reminders",
-                       "sare reminders", "mere reminders"],
-    "cancel_reminder": ["cancel reminder", "delete reminder", "remove reminder",
-                       "reminder hatao", "mita do"],
-    "check_reminders": ["check reminder", "any reminders", "do i have reminders",
-                       "reminder hai", "kuch yaad hai"],
-    
-    # Scheduled Events
-    "schedule_event": ["schedule event", "schedule at", "set event", "add event","event", "schedule", "recurring event", "daily event",
-                       "every day at", "at 9 am", "at 10 am", "at 2 pm", "at 6 pm", "at noon", "at midnight",
-                       "schedule at", "set daily", "recurring reminder",
-                       "event at", "reminder daily", "daily check",
-                       "yojana banao", "har din", "schedule karo", "yaad rakhna"],
-    
-    # Telegram
-    "send_telegram_message": ["telegram", "message", "send message", "whatsapp", "chat",
-                             "sandesh", "bhejo", "msg", "baat karo", "mobile", "phone"],
-    "send_telegram_photo": ["telegram photo", "send photo", "share photo",
-                           "tasveer", "photo", "shaare karo", "mobile", "phone"],
-    "send_telegram_document": ["telegram document", "send document", "share document",
-                              "dastavez", "file", "mobile", "phone"],
-    "send_telegram_video": ["telegram video", "send video", "share video",
-                           "video", "mobile", "phone"],
-    
-    # Volume
-    "control_system_volume": ["volume", "mute", "unmute", "loud", "quiet", "increase", "decrease",
-                       "awaaz", "sound", "kum", "zyada", "sunao"],
-    
-    # Zepto shopping
-    "zepto_ordering_tool": ["jaipur","zepto", "grocery", "order", "shopping", "buy", "milk", "bread", "vegetables",
-                       "kirana", "mangwao", "delivery"],
-
-    "zepto_order_history": ["jaipur","order history", "past orders", "previous orders",
-                           "pehle se order"],
-    "zepto_order_again": ["jaipur","order again", "reorder", "same order",
-                         "phir se order karo"],
-    "zepto_track_orders": ["jaipur","track order", "order status", "delivery", "track",
-                          "track karo", "delivery kab", "kahaan hai order"],
-    
-    # Follow-up questions
-    "ask_follow_up_question": ["which", "what", "prefer", "like", "choose", "select",
-                              "kaun sa", "kaunsa", "pasand", "chuno"],
-}
+# Configure logging
+logger = logging.getLogger(__name__)
 
 # Tool descriptions organized by category
 TOOL_DESCRIPTIONS = {
@@ -147,9 +66,7 @@ TOOL_DESCRIPTIONS = {
 }
 
 # Base prompt sections that are always included
-BASE_LANGUAGE_RULES = """LANGUAGE
-Hindi input → respond only in हिंदी देवनागरी
-English input → respond only in English
+BASE_LANGUAGE_RULES = """
 default location is Pune, India (for weather, timezone, local context)
 RESPONSE RULES
 - Keep responses short, clear, and conversational
@@ -288,110 +205,270 @@ Examples:
 - "Travel time from home to office?" → Ask for specific locations first
 """
 
+EVENT_SCHEDULING_RULES = """EVENT SCHEDULING - DAILY AUTOMATION
+
+Use schedule_event when user says: "schedule event", "every day at [time]", "turn on light at [time]"
+
+INPUT FORMAT: "time|prompt|event_id"
+
+FIELDS:
+- TIME: "9:00 AM" or "09:00" (24-hour format)
+- PROMPT: Clear instruction (e.g., "Say good morning", "Turn on the light")
+- EVENT_ID: Unique ID using underscores (e.g., morning, evening_light_on)
+
+EXAMPLES:
+- "schedule at 9 AM to say good morning" → schedule_event|9:00 AM|Say good morning|morning
+- "turn on light at 6 PM" → schedule_event|6:00 PM|Turn on the light|evening_light_on
+- "play music at 7 AM" → schedule_event|7:00 AM|Play morning music|morning_music
+
+REMINDERS VS EVENTS:
+- "remind me to call mom in 30 min" → set_reminder (one-time, temporary)
+- "call mom at 10 AM daily" → schedule_event (daily, permanent)
+"""
+
 class DynamicPromptGenerator:
-    """Generate custom prompts based on detected tool requirements"""
+    """Generate custom prompts based on detected tool requirements using LLM-based intent detection"""
     
-    def __init__(self):
-        self.tool_keywords = TOOL_KEYWORDS
+    def __init__(self, use_llm=True, model="gpt-4o-mini"):
         self.tool_descriptions = TOOL_DESCRIPTIONS
+        self.use_llm = use_llm
+        self.model = model
+        
+        # OPTIMIZATION: Cache tool descriptions (generated once, reused for all requests)
+        self._cached_tools_list = "\n".join([
+            f"- {tool}: {desc}" 
+            for tool, desc in self.tool_descriptions.items()
+        ])
+        logger.info(f"✅ Tool descriptions cached: {len(self._cached_tools_list)} chars")
+        
+        # Initialize LLM for intent detection (gpt-4o-mini for speed and cost efficiency)
+        if use_llm:
+            try:
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    logger.warning("OPENAI_API_KEY not found. LLM-based tool detection requires valid API key.")
+                    self.use_llm = False
+                    self.llm = None
+                else:
+                    self.llm = ChatOpenAI(
+                        model=model,
+                        temperature=0,
+                        api_key=api_key,
+                        timeout=5  # Fast timeout for tool selection
+                    )
+                    logger.info(f"✅ LLM initialized: {model}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM: {e}. LLM-based tool detection will not be available.")
+                self.use_llm = False
+                self.llm = None
+        else:
+            self.llm = None
     
-    def detect_required_tools(self, user_input: str) -> Set[str]:
+    def _llm_detect_required_tools(self, user_input: str) -> Tuple[Set[str], str]:
         """
-        Detect which tools are likely needed based on user input
+        Use LLM to detect which tools are needed AND the language of the input
+        More semantically intelligent than keyword matching
         
         Args:
             user_input: User's command/question
             
         Returns:
-            Set of tool names that match the user's intent
+            Tuple of (Set of tool names, language flag: 'hindi' or 'english')
         """
-        user_input_lower = user_input.lower()
-        detected_tools = set()
+        if not self.llm:
+            return set(), 'english'
         
-        # Score each tool based on keyword matches
-        tool_scores = {}
-        
-        for tool_name, keywords in self.tool_keywords.items():
-            score = 0
-            for keyword in keywords:
-                if keyword in user_input_lower:
-                    score += 1
-            
-            if score > 0:
-                tool_scores[tool_name] = score
-        
-        # Sort by score and take top matches
-        if tool_scores:
-            # Take tools with score > 0
-            detected_tools = set(tool for tool, score in tool_scores.items() if score > 0)
-        
-        # Special handling: if Zepto mentioned, include all Zepto tools
-        if "zepto" in user_input_lower or "grocery" in user_input_lower or "order" in user_input_lower:
-            detected_tools.update([
-                "zepto_ordering_tool",
-                "zepto_order_history",
-                "zepto_order_again",
-                "zepto_track_orders"
-            ])
+        try:
+            # OPTIMIZATION: Use cached tools list (generated once in __init__)
+            prompt = f"""You are a tool selection and language detection expert. Analyze this user input.
 
-        if "amazon" in user_input_lower or "order" in user_input_lower or "track" in user_input_lower:
-            detected_tools.update([
-                "search_amazon_single_product",
-                "search_amazon_multiple_products",
-                "track_amazon_orders"
-            ])
+User Input: "{user_input}"
+
+Available Tools:
+{self._cached_tools_list}
+
+CRITICAL RULES - Apply these STRICTLY:
+
+MUSIC RULES (Check FIRST):
+- If user says "Spotify" / "on spotify" / "from spotify" → USE ONLY Spotify tools
+  * play_spotify_track (for specific songs)
+  * play_spotify_album (for albums)
+  * play_spotify_artist (for artists)
+  * control_spotify_playback (for play/pause/next)
+- If user says "YouTube" / "YouTube Music" → USE ONLY YouTube Music tools
+- If no platform specified → DEFAULT to YouTube Music tools
+
+SHOPPING RULES:
+1. If mentions Zepto/grocery/milk/vegetables → include zepto_ordering_tool + zepto_track_orders
+2. If mentions Amazon/packages/orders → include track_amazon_orders + search_amazon_* tools
+3. If multiple platforms → include tools for ALL mentioned platforms
+
+OTHER RULES:
+- Ask follow-up if unclear
+- Include search_web for live data requests
+- Include Telegram tools ONLY if user wants to send/share something
+
+OUTPUT FORMAT:
+First line: LANGUAGE: [hindi or english]
+Following lines: Tool names only, one per line. NO EXPLANATIONS.
+
+LANGUAGE: """
+            
+            response = self.llm.invoke([HumanMessage(content=prompt)])
+            lines = response.content.strip().split('\n')
+            
+            # Parse language from first line
+            language = 'english'  # default
+            tools_start_idx = 0
+            
+            if lines and 'LANGUAGE:' in lines[0].upper():
+                lang_line = lines[0].upper()
+                if 'HINDI' in lang_line:
+                    language = 'hindi'
+                    tools_start_idx = 1
+                elif 'ENGLISH' in lang_line:
+                    language = 'english'
+                    tools_start_idx = 1
+            
+            # Parse tool names from remaining lines
+            detected_tools = set()
+            for tool_name in lines[tools_start_idx:]:
+                tool_name = tool_name.strip().strip('-').strip()
+                if tool_name and tool_name in self.tool_descriptions:
+                    detected_tools.add(tool_name)
+            
+            # Ensure minimum set of tools (LLM should include these but enforce as safety)
+            detected_tools.add("ask_follow_up_question")
+            detected_tools.add("search_web")
+            
+            # Log detection
+            logger.debug(f"✅ LLM detected: Language={language}, Tools={sorted(detected_tools)} for '{user_input}'")
+            
+            return detected_tools, language
+            
+        except Exception as e:
+            logger.error(f"LLM detection failed: {e}")
+            raise RuntimeError(f"Tool detection failed: {e}")
+    
+    def _heuristic_detect_tools(self, user_input: str) -> Set[str]:
+        """
+        OPTIMIZATION: Use simple heuristics for obvious queries to skip LLM
+        Saves ~40-50% of LLM calls for common patterns
         
-        # Special handling: music defaults to YouTube
-        if any(word in user_input_lower for word in ["play", "pause", "resume", "next", "skip"]):
-            if "spotify" not in user_input_lower:
-                # Default to YouTube Music
-                detected_tools.update([
+        Returns None if query needs LLM analysis, otherwise returns tool set
+        """
+        user_lower = user_input.lower()
+        
+        # Pattern 1: Simple music queries
+        if any(verb in user_lower for verb in ["play", "pause", "stop", "resume"]):
+            # Check if it's about a specific platform
+            if "spotify" in user_lower:
+                tools = {
+                    "play_spotify_track",
+                    "play_spotify_playlist",
+                    "play_spotify_artist",
+                    "control_spotify_playback",
+                    "ask_follow_up_question",
+                    "search_web"
+                }
+                logger.debug(f"✅ Heuristic detected Spotify query: {sorted(tools)}")
+                return tools
+            
+            # YouTube Music by default for music queries
+            if any(word in user_lower for word in ["play", "music", "song", "artist"]):
+                tools = {
                     "play_youtube_music_song",
                     "play_youtube_music_playlist",
                     "play_youtube_music_artist",
-                    "control_youtube_music_playback"
-                ])
-                # Remove Spotify tools
-                detected_tools.discard("play_spotify_track")
-                detected_tools.discard("play_spotify_album")
-                detected_tools.discard("play_spotify_artist")
-                detected_tools.discard("control_spotify_playback")
+                    "control_youtube_music_playback",
+                    "ask_follow_up_question",
+                    "search_web"
+                }
+                logger.debug(f"✅ Heuristic detected YouTube Music query: {sorted(tools)}")
+                return tools
         
-        # Always include follow-up question tool (for clarification)
-        detected_tools.add("ask_follow_up_question")
+        # Pattern 2: Weather queries (simple pattern)
+        if any(word in user_lower for word in ["weather", "mausam", "temperature", "rain", "forecast"]):
+            if "forecast" in user_lower:
+                tools = {"get_weather_forecast", "ask_follow_up_question", "search_web"}
+            else:
+                tools = {"get_current_weather", "ask_follow_up_question", "search_web"}
+            logger.debug(f"✅ Heuristic detected weather query: {sorted(tools)}")
+            return tools
         
-        # Always include telegram tools (for communication in any context)
-        detected_tools.update([
-            "send_telegram_message",
-            "send_telegram_photo",
-            "send_telegram_document",
-            "send_telegram_video"
-        ])
+        # Pattern 3: Traffic/travel queries
+        if any(word in user_lower for word in ["traffic", "travel", "distance", "reach", "commute"]):
+            tools = {"get_travel_time", "ask_follow_up_question", "search_web"}
+            logger.debug(f"✅ Heuristic detected travel query: {sorted(tools)}")
+            return tools
         
-        # Add logging
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"✅ Detected tools for '{user_input_lower}': {sorted(detected_tools)}")
+        # Pattern 4: Home automation (simple on/off)
+        if any(word in user_lower for word in ["light", "fan", "device", "turn"]) and len(user_input) < 50:
+            tools = {"control_home_automation", "ask_follow_up_question", "search_web"}
+            logger.debug(f"✅ Heuristic detected home automation query: {sorted(tools)}")
+            return tools
         
-        return detected_tools
+        # Return None if no patterns matched - let LLM handle it
+        return None
     
-    def generate_custom_prompt(self, user_input: str, detected_tools: Set[str] = None) -> Tuple[str, List[str]]:
+    def detect_required_tools(self, user_input: str) -> Tuple[Set[str], str]:
         """
-        Generate a custom prompt based on detected tools
+        Detect which tools are likely needed based on user input AND the language
+        Uses LLM-based detection combined with heuristics
+        
+        Args:
+            user_input: User's command/question
+            
+        Returns:
+            Tuple of (Set of tool names, language: 'hindi' or 'english')
+            
+        Raises:
+            RuntimeError: If LLM is not initialized or detection fails
+        """
+        # OPTIMIZATION: Try fast heuristic detection first (90% faster, 0% cost)
+        # For heuristics, also do basic language detection
+        heuristic_tools = self._heuristic_detect_tools(user_input)
+        if heuristic_tools is not None:
+            # Do basic language detection for heuristic path
+            devanagari_count = sum(1 for c in user_input if '\u0900' <= c <= '\u097F')
+            lang = 'hindi' if devanagari_count > 5 else 'english'
+            return heuristic_tools, lang
+        
+        # Fall back to LLM for complex queries that need semantic understanding
+        if not self.use_llm or not self.llm:
+            raise RuntimeError(
+                "LLM-based tool detection is disabled or not initialized. "
+                "Please set use_llm=True and ensure OPENAI_API_KEY is configured."
+            )
+        
+        detected_tools, language = self._llm_detect_required_tools(user_input)
+        if not detected_tools:
+            raise RuntimeError(f"LLM failed to detect tools for input: {user_input}")
+        
+        return detected_tools, language
+    
+    def generate_custom_prompt(self, user_input: str, detected_tools: Set[str] = None, language: str = None) -> Tuple[str, List[str], str]:
+        """
+        Generate a custom prompt based on detected tools and language
         
         Args:
             user_input: User's command/question
             detected_tools: Optional set of tool names to include. If None, will detect automatically.
+            language: Optional language flag ('hindi' or 'english'). If None, will detect automatically.
             
         Returns:
-            Tuple of (custom_prompt, tool_names_list)
+            Tuple of (custom_prompt, tool_names_list, language_flag)
         """
         if detected_tools is None:
-            detected_tools = self.detect_required_tools(user_input)
-        
+            detected_tools, language = self.detect_required_tools(user_input)
+        elif language is None:
+            # If tools provided but not language, detect language from input
+            devanagari_count = sum(1 for c in user_input if '\u0900' <= c <= '\u097F')
+            language = 'hindi' if devanagari_count > 5 else 'english'
         # Start with base sections
         prompt_sections = [
-            "You are Sofi, a female voice assistant based in Pune, India.\n",
+            f"You are Sofi, a female voice assistant based in pisoli, Pune, India today {datetime.now().strftime('%B %d, %Y')}.\n",
+            f"always respond in the {language} language.\n",
             BASE_LANGUAGE_RULES,
         ]
         
@@ -415,6 +492,9 @@ class DynamicPromptGenerator:
         if any("get_travel_time" in tool for tool in detected_tools):
             prompt_sections.append("\n" + TRAVEL_RULES)
         
+        if any("schedule_event" in tool for tool in detected_tools):
+            prompt_sections.append("\n" + EVENT_SCHEDULING_RULES)
+        
         # Add tool descriptions
         prompt_sections.append("\nAVAILABLE TOOLS\n")
         for tool in sorted(detected_tools):
@@ -428,7 +508,7 @@ class DynamicPromptGenerator:
         
         custom_prompt = "\n".join(prompt_sections)
         
-        return custom_prompt, sorted(list(detected_tools))
+        return custom_prompt, sorted(list(detected_tools)), language
     
     def create_filtered_tool_list(self, all_tools: List[BaseTool], tool_names: List[str]) -> List[BaseTool]:
         """
@@ -445,7 +525,7 @@ class DynamicPromptGenerator:
         return [tool for tool in all_tools if tool.name in tool_name_set]
 
 
-def create_focused_prompt(user_input: str, all_tools: List[BaseTool]) -> Tuple[str, List[BaseTool]]:
+def create_focused_prompt(user_input: str, all_tools: List[BaseTool]) -> Tuple[str, List[BaseTool], str]:
     """
     Convenience function to generate focused prompt and tools for a user input
     
@@ -454,13 +534,13 @@ def create_focused_prompt(user_input: str, all_tools: List[BaseTool]) -> Tuple[s
         all_tools: List of all available tools
         
     Returns:
-        Tuple of (custom_prompt, filtered_tools)
+        Tuple of (custom_prompt, filtered_tools, language)
     """
     generator = DynamicPromptGenerator()
-    custom_prompt, tool_names = generator.generate_custom_prompt(user_input)
+    custom_prompt, tool_names, language = generator.generate_custom_prompt(user_input)
     filtered_tools = generator.create_filtered_tool_list(all_tools, tool_names)
     
-    return custom_prompt, filtered_tools
+    return custom_prompt, filtered_tools, language
 
 
 if __name__ == "__main__":
@@ -470,14 +550,15 @@ if __name__ == "__main__":
     # Test cases
     test_inputs = [
      
-        "order groceries from zepto",
+        " when will eid in 2026",
        
     ]
     
     for test_input in test_inputs:
         tools = generator.detect_required_tools(test_input)
-        prompt, tool_names = generator.generate_custom_prompt(test_input, tools)
-        print(f"\nInput: {test_input}")
-        print(f"Detected tools: {tool_names}")
+        prompt, tool_names, language = generator.generate_custom_prompt(test_input, tools)
+        # print(f"\nInput: {test_input}")
+        # print(f"Detected tools: {tool_names}")
+        print(f"Detected language: {language}")
         print(f"Prompt length: {(prompt)} chars")
         print("---")

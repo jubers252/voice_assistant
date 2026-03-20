@@ -636,7 +636,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="set_reminder",
-            description="Set a reminder or daily alarm for the user. Input format: 'reminder text|time|recurring' where recurring is 'once' (default) or 'daily'. Examples: 'Call mom|in 30 minutes|once', 'Wake up|7 AM|daily', 'Meeting|tomorrow at 2 PM'. For daily alarms like morning wake-up, use 'daily'. If no time specified, defaults to 5 minutes. Daily reminders repeat every day at the same time.",
+            description="Set a TEMPORARY notification/alarm - deleted after triggered or when cleared. Use for: one-time alerts, time-based notifications, meeting reminders. Input: 'text|time|recurring' (recurring='once' or 'daily'). Examples: 'Call mom|in 30 minutes|once', 'Take medicine|2:00 PM|once', 'Gym|6 AM|daily'. Default time: 5 minutes. IMPORTANT: This is NOT for permanent daily events - use schedule_event for that.",
             func=set_reminder_function
         )
     
@@ -769,7 +769,7 @@ class LangChainAgentProcessor:
         
         return Tool(
             name="schedule_event",
-            description="Schedule a recurring event that triggers at a specific time daily. User can say things like 'Schedule an event at 9 AM to say good morning' or 'Add reminder at 2:30 PM'. Input format: 'time|prompt|event_id'. Examples: '9:00 AM|Good morning!|morning', '2:30 PM|How is afternoon?|afternoon', '6 PM|Evening check|evening'. Time can be in 24-hour format (09:00) or 12-hour format (9:00 AM).",
+            description="Schedule a PERMANENT daily event that runs automatically every day at a specific time (saved to events.json). Use ONLY when user says 'schedule event', 'add daily event', 'set up a recurring event'. Input: 'time|prompt|event_id'. Examples: '9:00 AM|Good morning say wake up|morning', '2:30 PM|Afternoon break reminder|afternoon', '6:00 PM|Evening reminder|evening'. Time formats: 24hr (09:00) or 12hr (9:00 AM/PM). Do NOT use for temporary reminders.",
             func=schedule_event_function
         )
     
@@ -1528,12 +1528,12 @@ class LangChainAgentProcessor:
             return self.agent_executor
         
         try:
-            custom_prompt, tool_names = self.prompt_generator.generate_custom_prompt(user_command)
+            custom_prompt, tool_names, language = self.prompt_generator.generate_custom_prompt(user_command)
             filtered_tools = self.prompt_generator.create_filtered_tool_list(self.tools, tool_names)
             
-            print(f"🎯 Dynamic Prompt Active for: '{user_command}'")
-            print(f"📋 Requested Tools: {tool_names}")
-            print(f"✅ Filtered Tools: {[t.name for t in filtered_tools]}")
+           
+            print(f"Filtered Tools: {[t.name for t in filtered_tools]}")
+            print(f"Language Detected: {language}")
             
             llm = ChatOpenAI(model="gpt-4.1-mini", temperature=1, openai_api_key=os.getenv('OPENAI_API_KEY'))
             

@@ -64,8 +64,6 @@ class SpeechRecognizer:
         try:
             self._choose_device_index()
         except Exception:
-            # Non-fatal: leave device_index as-is (None will let speech_recognition
-            # use the system default device)
             self.device_index = None
         
         # Warm up microphone to avoid 100ms+ latency on first use
@@ -121,7 +119,7 @@ class SpeechRecognizer:
             if self.pixel_led:
                 self.pixel_led.set_error()
             print(f"[ERROR] {error_message} - Retrying...")
-            time.sleep(0.5)  # Give audio time to settle
+            time.sleep(1.0)  # Give audio time to settle
             if self.pixel_led:
                 self.pixel_led.set_listening()
             return True  # Continue to next retry

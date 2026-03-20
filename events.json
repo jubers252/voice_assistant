@@ -2,7 +2,7 @@
   "events": [
     {
       "hour": 10,
-      "minute": 0,
+      "minute": 45,
       "prompt": "Say good morning and ask user to wake up and get ready for the day",
       "event_id": "morning"
     },
@@ -12,7 +12,7 @@
       "prompt": "It's lunch time - remind me to eat and ask if user need any help",
       "event_id": "lunch"
     },
-     {
+    {
       "hour": 14,
       "minute": 15,
       "prompt": "ask user to take medicine after lunch",
@@ -31,6 +31,12 @@
       "event_id": "evening"
     },
     {
+      "hour": 0,
+      "minute": 45,
+      "prompt": "Turn off the zero light its sleeping time",
+      "event_id": "zero_light_off"
+    },
+    {
       "hour": 20,
       "minute": 15,
       "prompt": "It's late evening - ask user to logout from work and start winding down for the night",
@@ -42,10 +48,10 @@
       "prompt": "ask user to take dinner since its close to bedtime",
       "event_id": "night"
     },
-     {
+    {
       "hour": 22,
       "minute": 30,
-      "prompt": "ask user to take medicine after dinner",
+      "prompt": "ask user to take night medicine after dinner",
       "event_id": "night_medicine"
     },
     {
@@ -55,9 +61,9 @@
       "event_id": "night"
     },
     {
-      "hour": 10,
-      "minute": 15,
-      "prompt": "Tell me today's top 5 news headlines with brief summaries in Pune prefer language Hindi",
+      "hour": 11,
+      "minute": 0,
+      "prompt": "Tell me today's top 5 news headlines with brief summaries in Pune, india and world news prefer language Hindi",
       "event_id": "morning_news"
     },
     {
@@ -67,10 +73,11 @@
       "event_id": "evening_light_on"
     },
     {
-      "hour": 12,
-      "minute": 15,
+      "hour": 0,
+      "minute": 30,
       "prompt": "Turn off the light at night and on the zero light",
       "event_id": "night_light_off"
     }
+    
   ]
 }
