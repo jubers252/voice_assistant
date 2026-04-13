@@ -67,6 +67,7 @@ TOOL_DESCRIPTIONS = {
 
 # Base prompt sections that are always included
 BASE_LANGUAGE_RULES = """
+if language id hindi always responfbin hindi devnagri transcription.
 default location is Pune, India (for weather, timezone, local context)
 RESPONSE RULES
 - Keep responses short, clear, and conversational

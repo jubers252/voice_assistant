@@ -20,6 +20,7 @@ from conversation.conversation_manager import ConversationManager
 from connectors.spotify_connector import SpotifyConnector
 from connectors.reminder_manager import ReminderManager
 from connectors.telegram_bot import TelegramBot
+from connectors.home_automation import HomeAutomation, MotionControlThread
 from handlers.wake_word_manager import WakeWordManager
 from handlers.event_scheduler import EventScheduler
 # from handlers.command_processor import CommandProcessor  # Replaced by LangChain processor
@@ -70,6 +71,19 @@ class VoiceAssistantRefactored:
         self.reminder_manager = ReminderManager()
         self.reminder_manager.set_audio_processors(self.audio_processors)
         self.reminder_manager.start_reminder_checker()
+        
+        # Initialize motion control for automatic device management
+        # self.home_automation = HomeAutomation()
+        # self.motion_thread = MotionControlThread(
+        #     home_automation=self.home_automation,
+        #     port='/dev/ttyAMA0',
+        #     baudrate=115200,
+        #     min_range=150,      # Turn ON if range < 150cm
+        #     max_range=350,      # Turn OFF if range > 350cm
+        #     timeout=10          # Turn OFF after 10s out of range
+        # )
+        # self.motion_thread.start()
+        # print("[MOTION] Motion control thread started")
         
         # Start continuous energy calibration (runs in background, pauses during listening)
         energy_calibrator = EnergyCalibrator(shared_recognizer, device_index=0)

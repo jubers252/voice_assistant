@@ -25,11 +25,7 @@ logger = logging.getLogger(__name__)
 # Add connectors to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'connectors'))
 
-try:
-    from volume_control import VolumeController
-    VOLUME_CONTROLLER_AVAILABLE = True
-except ImportError:
-    VOLUME_CONTROLLER_AVAILABLE = False
+
 
 # Use /tmp socket for Linux, Windows named pipe for Windows
 IPC_SOCKET = "/tmp/mpvsocket" if os.name == "posix" else r"\\.\pipe\mpvsocket"
@@ -52,7 +48,7 @@ class MusicPlayer:
         """Initialize the MusicPlayer with YouTube Music API and volume control."""
         self.player = None
         self.ytmusic = YTMusic()
-        self.volume_controller = VolumeController() if VOLUME_CONTROLLER_AVAILABLE else None
+        self.set_mpv_volume(80)
 
     def search_song(self, query: str) -> tuple:
         """
@@ -105,7 +101,7 @@ class MusicPlayer:
             logger.error(f"Error searching artist: {e}")
             return None
 
-    def get_artist_info(self, artist_id: str, limit: int = None) -> dict:
+    def get_artist_info(self, artist_id: str, limit: int = 10) -> dict:
         """
         Retrieve comprehensive artist information and songs.
         
@@ -208,7 +204,7 @@ class MusicPlayer:
             logger.error(f"Error getting artist info: {e}", exc_info=True)
             return None
 
-    def search_playlist(self, query: str, limit: int = 1) -> tuple:
+    def search_playlist(self, query: str, limit: int = 10) -> tuple:
         """
         Search for a playlist on YouTube Music.
         
@@ -237,7 +233,7 @@ class MusicPlayer:
             logger.error(f"Error searching playlist: {e}")
             return None
 
-    def get_playlist_songs(self, playlist_id: str, limit: int = None) -> list:
+    def get_playlist_songs(self, playlist_id: str, limit: int = 10) -> list:
         """
         Retrieve songs from a YouTube Music playlist.
         
@@ -250,7 +246,7 @@ class MusicPlayer:
         """
         try:
             # Fetch more songs - use 0 for no limit initially, then apply our own limit
-            playlist = self.ytmusic.get_playlist(playlist_id, limit=500)
+            playlist = self.ytmusic.get_playlist(playlist_id, limit=50)
             songs = playlist.get("tracks", [])
             
             # Apply user limit if specified
@@ -263,7 +259,7 @@ class MusicPlayer:
             logger.error(f"Error getting playlist songs: {e}")
             return []
 
-    def play_playlist(self, playlist_query: str, limit: int = None) -> None:
+    def play_playlist(self, playlist_query: str, limit: int = 10) -> None:
         """
         Search for and play a playlist on YouTube Music.
         
@@ -563,14 +559,12 @@ class MusicPlayer:
         if self._send_mpv_command('{"command": ["playlist-prev"]}'):
             logger.info("Skipped to previous track")
     
-    def set_volume(self, level: int) -> bool:
+    def set_mpv_volume(self, level: int) -> bool:
         """
-        Set system volume level.
-        
-        Uses PulseAudio system-level volume control.
+        Set mpv player volume directly (0-100).
         
         Args:
-            level: Volume level (0-100)
+            level: Volume level (0-100, where 100 is 100%)
             
         Returns:
             True if volume was set successfully, False otherwise
@@ -579,20 +573,16 @@ class MusicPlayer:
             logger.warning("Volume must be between 0-100")
             return False
         
-        if self.volume_controller:
-            if self.volume_controller.set_volume(level):
-                logger.info(f"Volume set to {level}%")
-                return True
-            else:
-                logger.error(f"Failed to set volume to {level}%")
-                return False
-        else:
-            logger.warning("Volume controller not available")
-            return False
+        # mpv uses 0-100 scale
+        cmd = f'{{"command": ["set_property", "volume", {level}]}}'
+        if self._send_mpv_command(cmd):
+            logger.info(f"Mpv volume set to {level}%")
+            return True
+        return False
 
-    def volume_up(self, step: int = 5) -> bool:
+    def mpv_volume_up(self, step: int = 5) -> bool:
         """
-        Increase volume by specified step.
+        Increase mpv volume by specified step.
         
         Args:
             step: Volume increment (default: 5%)
@@ -600,16 +590,15 @@ class MusicPlayer:
         Returns:
             True if volume was increased successfully, False otherwise
         """
-        if self.volume_controller:
-            new_vol = self.volume_controller.increase_volume(step)
-            if new_vol is not None:
-                logger.info(f"Volume increased to {new_vol}%")
-                return True
+        cmd = f'{{"command": ["add", "volume", {step}]}}'
+        if self._send_mpv_command(cmd):
+            logger.info(f"Mpv volume increased by {step}%")
+            return True
         return False
-    
-    def volume_down(self, step: int = 5) -> bool:
+
+    def mpv_volume_down(self, step: int = 5) -> bool:
         """
-        Decrease volume by specified step.
+        Decrease mpv volume by specified step.
         
         Args:
             step: Volume decrement (default: 5%)
@@ -617,26 +606,13 @@ class MusicPlayer:
         Returns:
             True if volume was decreased successfully, False otherwise
         """
-        if self.volume_controller:
-            new_vol = self.volume_controller.decrease_volume(step)
-            if new_vol is not None:
-                logger.info(f"Volume decreased to {new_vol}%")
-                return True
+        cmd = f'{{"command": ["add", "volume", -{step}]}}'
+        if self._send_mpv_command(cmd):
+            logger.info(f"Mpv volume decreased by {step}%")
+            return True
         return False
-    
-    def get_volume(self) -> int:
-        """
-        Get current system volume level.
-        
-        Returns:
-            Current volume percentage (0-100), or None if unavailable
-        """
-        if self.volume_controller:
-            vol = self.volume_controller.get_current_volume()
-            if vol is not None:
-                logger.info(f"Current volume: {vol}%")
-                return vol
-        return None
+
+   
 
     def stop(self) -> None:
         """
@@ -677,10 +653,12 @@ if __name__ == "__main__":
 
     # Example usage:
     # music.play_all_artist_tracks("guru randhawa", limit=10)
-    # music.play_playlist("romantic songs", limit=5)
-    # music.play("meow meow kitten voice")  # Play a specific song by name
+    # music.play_playlist("romantic hindi songs", limit=5)
+    # music.play("shaky song")  # Play a specific song by name
     # time.sleep(3)
     
+    # music.set_volume(80)
+    # print
     # Playback controls:
     music.pause()          # Pause playback
     # time.sleep(2)

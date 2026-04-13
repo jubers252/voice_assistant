@@ -18,7 +18,7 @@ class WakeWordDetector:
         # Model configuration (matches training)
         self.desired_length = 44
         self.feature_dim = 120
-        self.optimal_threshold = 0.35  # Lowered from 0.40 for better nighttime detection while maintaining accuracy
+        self.optimal_threshold = 0.85  # Lowered from 0.40 for better nighttime detection while maintaining accuracy
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")
@@ -79,8 +79,7 @@ class WakeWordDetector:
             mfcc_delta = librosa.feature.delta(mfcc)
             mfcc_delta2 = librosa.feature.delta(mfcc, order=2)
             features = np.concatenate((mfcc, mfcc_delta, mfcc_delta2), axis=0)
-            features = features.T  # Transpose to (time_steps, features)
-            
+            features = features.T 
             # Normalize features using StandardScaler fitted on flattened features (EXACTLY as in training)
             # This matches the preprocessing in model_training/PreprocessingData.py
             scaler = StandardScaler()

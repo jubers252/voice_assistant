@@ -261,8 +261,12 @@ class ReminderManager:
                         if not getattr(self.audio_processors, 'is_speaking', False) and reminder["notified"] == False:
                            
                             time_diff = (datetime.now() - datetime.fromisoformat(reminder['remind_time'])).total_seconds()
-                            if time_diff > 120: 
-                                print("Skipping reminder - more than 2 minutes late")
+                            if time_diff > 600 and reminder.get('recurring') != 'daily': 
+                                print("Skipping reminder - more than 10 minutes late")
+                                self.mark_reminded(reminder["id"])
+                                continue
+                            elif time_diff > 1800 and reminder.get('recurring') == 'daily':
+                                print("Skipping daily reminder - more than 30 minutes late")
                                 self.mark_reminded(reminder["id"])
                                 continue
 

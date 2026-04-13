@@ -5,26 +5,6 @@
     "description": "",
     "remind_time": "2026-01-25T10:00:00",
     "created_time": "2026-01-07T23:49:04.439155",
-    "active": false,
-    "notified": true,
-    "recurring": "daily"
-  },
-  {
-    "id": 2,
-    "text": "Daily alarm at 4:45 AM",
-    "description": "",
-    "remind_time": "2026-03-17T04:45:00",
-    "created_time": "2026-03-17T00:42:04.890242",
-    "active": false,
-    "notified": false,
-    "recurring": "daily"
-  },
-  {
-    "id": 3,
-    "text": "Alarm for 5:00 AM",
-    "description": "",
-    "remind_time": "2026-03-18T05:00:00",
-    "created_time": "2026-03-17T01:17:38.459919",
     "active": true,
     "notified": true,
     "recurring": "daily"
@@ -37,26 +17,26 @@
     "created_time": "2026-03-17T14:00:02.934930",
     "active": true,
     "notified": true,
-    "recurring": "once"
+    "recurring": "daily"
   },
   {
-    "id": 5,
-    "text": "Lunch time - remember to eat now",
+    "id": 8,
+    "text": "Take medicine after lunch",
     "description": "",
-    "remind_time": "2026-03-18T14:01:12.231169",
-    "created_time": "2026-03-18T14:00:12.231292",
+    "remind_time": "2026-03-21T14:15:24.950422",
+    "created_time": "2026-03-21T14:15:24.950453",
     "active": true,
     "notified": true,
-    "recurring": "once"
+    "recurring": "daily"
   },
   {
-    "id": 6,
-    "text": "Lunch time, please eat your meal",
+    "id": 11,
+    "text": "Its dinner time take your dinner",
     "description": "",
-    "remind_time": "2026-03-20T14:01:13.512934",
-    "created_time": "2026-03-20T14:00:13.512964",
+    "remind_time": "2026-03-29T20:00:00",
+    "created_time": "2026-03-29T01:26:19.244725",
     "active": true,
     "notified": true,
-    "recurring": "once"
+    "recurring": "daily"
   }
 ]

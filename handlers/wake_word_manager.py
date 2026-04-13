@@ -7,7 +7,7 @@ from speech.energy_calibrator import EnergyCalibrator
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.91
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.90
 ):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
@@ -156,13 +156,13 @@ class WakeWordManager:
             # Handle wake word detection
             if detected:
                 # If we're speaking, interrupt it via audio_processors
-                if getattr(self.audio_processors, 'is_speaking', False):
-                    print("Wake word detected while speaking - interrupting!")
-                    try:
-                        self.audio_processors.stop_speech()
-                    except Exception:
-                        pass
-                    time.sleep(0.1)  # Reduced pause after interruption (was 0.3s)
+                # if getattr(self.audio_processors, 'is_speaking', False):
+                #     print("Wake word detected while speaking - interrupting!")
+                #     try:
+                #         self.audio_processors.stop_speech()
+                #     except Exception:
+                #         pass
+                #     time.sleep(0.1)  # Reduced pause after interruption (was 0.3s)
 
                 # Disable calibration during listening (prevent threshold changes during command capture)
                 EnergyCalibrator.enable_calibration = False

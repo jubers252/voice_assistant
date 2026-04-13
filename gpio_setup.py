@@ -12,6 +12,13 @@ except ImportError:
     HAS_SPI = False
     print("Warning: spidev not available, running in simulation mode")
 
+try:
+    import RPi.GPIO as GPIO
+    HAS_GPIO = True
+except ImportError:
+    HAS_GPIO = False
+    print("Warning: RPi.GPIO not available")
+
 
 class PixelLEDController:
     """Control WS2812B RGB pixel LED using SPI interface"""
@@ -175,38 +182,63 @@ class PixelLEDController:
             self.spi.close()
 
 
-# Example usage
-if __name__ == "__main__":
-    print("WS2812B LED Controller (SPI Method)")
-    print("Make sure SPI is enabled on your Raspberry Pi")
-    print("Connect LED Data pin to GPIO 10 (Physical pin 19)\n")
+def detect_motion_with_red_led(gpio_pin: int = 27, duration: int = 60):
+    """
+    Detect human micro-motion using HMMD-mmWave sensor GPIO output.
+    Turn red LED on when micro-motion detected.
     
-    led = PixelLEDController(led_count=6, brightness=0.5)
+    Args:
+        gpio_pin: GPIO pin for sensor output (default: 27 = Physical pin 13)
+        duration: Monitor duration in seconds (default: 60)
+    """
+    if not HAS_GPIO:
+        print("GPIO not available")
+        return
+    
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(gpio_pin, GPIO.IN)  # Set as input from sensor
+    
+    led = PixelLEDController(led_count=6)
     
     try:
-        print("Testing LED colors...")
+        print(f"HMMD-mmWave Sensor on GPIO {gpio_pin} (Physical pin 13)")
+        print(f"Monitoring for {duration} seconds...\n")
         
-        print("Red")
-        led.set_error()
-        time.sleep(1)
+        consecutive_high = 0
+        consecutive_low = 0
+        threshold = 2  # Need 2 consecutive reads to confirm
         
-        print("Green")
-        led.set_speaking()
-        time.sleep(1)
-        
-        print("Blue")
-        led.set_listening()
-        time.sleep(1)
-        
-        print("Blinking (Processing)")
-        led.set_processing()
-        time.sleep(3)
-        
-        print("Off")
-        led.off()
-        
-    except KeyboardInterrupt:
-        print("\nStopped by user")
+        for _ in range(duration):
+            reading = GPIO.input(gpio_pin)
+            
+            if reading:
+                consecutive_high += 1
+                consecutive_low = 0
+                
+                if consecutive_high >= threshold:
+                    led.set_error()  # Red LED on
+                    if consecutive_high == threshold:
+                        print("Micro-motion detected - LED RED")
+            else:
+                consecutive_low += 1
+                consecutive_high = 0
+                
+                if consecutive_low >= threshold:
+                    led.set_listening()  # Blue LED on (motion stopped)
+                    if consecutive_low == threshold:
+                        print("Motion stopped - LED BLUE")
+            
+            time.sleep(1)
     finally:
-        led.cleanup()
-        print("Cleanup complete")
+        led.off()
+        GPIO.cleanup(gpio_pin)
+
+
+# Example usage
+if __name__ == "__main__":
+    print("HMMD-mmWave Sensor Motion Detection with Red LED")
+    print("=" * 60)
+    print("GPIO 27 (Physical pin 13) <- Sensor OUT")
+    print()
+    
+    detect_motion_with_red_led(gpio_pin=27, duration=300)

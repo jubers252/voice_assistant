@@ -81,7 +81,7 @@ def record_background_sound(save_path, n_times=2500):
     """
 
     input("To start recording your background sounds press Enter: ")
-    for i in range(4000, n_times):
+    for i in range(4304, n_times):
         myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
         write(os.path.join(save_path, str(i) + ".wav"), SAMPLE_RATE, myrecording)
