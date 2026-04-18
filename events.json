@@ -1,15 +1,11 @@
 {
   "events": [
-    
-   
-   
     {
       "hour": 0,
       "minute": 45,
       "prompt": "Turn off the zero light its sleeping time",
       "event_id": "zero_light_off"
     },
-    
     {
       "hour": 11,
       "minute": 0,
@@ -27,7 +23,12 @@
       "minute": 30,
       "prompt": "Turn off the light at night and on the zero light",
       "event_id": "night_light_off"
+    },
+    {
+      "hour": 21,
+      "minute": 0,
+      "prompt": "Off the light and on zero light",
+      "event_id": "night_light_control"
     }
-   
   ]
 }

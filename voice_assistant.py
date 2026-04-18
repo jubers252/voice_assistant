@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 from audio.audio_processor import AudioProcessors
 from audio.wake_word_detector import WakeWordDetector
 from speech.speech_recognizer import SpeechRecognizer
-from speech.energy_calibrator import EnergyCalibrator
 from conversation.conversation_manager import ConversationManager
 from connectors.spotify_connector import SpotifyConnector
 from connectors.reminder_manager import ReminderManager
@@ -63,6 +62,7 @@ class VoiceAssistantRefactored:
             self.audio_processors, 
             device_index=0,  # ReSpeaker Lite (from diagnostic)
             pixel_led=self.pixel_led, 
+         
         )
         
         self.conversation_manager = ConversationManager()
@@ -85,9 +85,9 @@ class VoiceAssistantRefactored:
         # self.motion_thread.start()
         # print("[MOTION] Motion control thread started")
         
-        # Start continuous energy calibration (runs in background, pauses during listening)
-        energy_calibrator = EnergyCalibrator(shared_recognizer, device_index=0)
-        energy_calibrator.start_continuous_calibration(interval=10)
+        # Start continuous energy calibration (runs in background, pauses during listening) - DISABLED
+        # energy_calibrator = EnergyCalibrator(shared_recognizer, device_index=0)
+        # energy_calibrator.start_continuous_calibration(interval=10)
         
 
         ww_model_path = f"{model_dir}/WWD_respeaker_model_v11.h5"
@@ -145,15 +145,13 @@ class VoiceAssistantRefactored:
 
     def _setup_recognizer(self, recognizer):
         """Configure the shared recognizer instance"""
-        # Lower threshold for noisy environments + dynamic adjustment
-        recognizer.energy_threshold = 100  # Lower sensitivity baseline for background noise
-        recognizer.dynamic_energy_threshold = True  # Auto-adjust based on ambient noise
-        recognizer.dynamic_energy_adjustment_damping = 0.10  # More aggressive adjustment (lower = faster response)
-        recognizer.dynamic_energy_ratio = 1.5
-        recognizer.pause_threshold = 1.3  # 1.3 seconds of silence before stopping
+        # Optimized settings for better speech detection
+        recognizer.energy_threshold = 200  # Reduced from 300 for lower dynamic energy
+        recognizer.dynamic_energy_threshold = True  # Enable dynamic adjustment
+        recognizer.pause_threshold = 1.0  # 1.0 second of silence before stopping
         recognizer.phrase_threshold = 0.3  # Minimum 300ms to catch speech start
-        recognizer.non_speaking_duration = 1.0  # Allow up to 1.0 seconds pause mid-phrase
-        print(f"[RECOGNIZER] Recognizer configured - Energy: {recognizer.energy_threshold}, Dynamic: {recognizer.dynamic_energy_threshold} (Damping: {recognizer.dynamic_energy_adjustment_damping})")
+        recognizer.non_speaking_duration = 1.0  # Allow 0.8 seconds pause mid-phrase
+        print(f"[RECOGNIZER] Recognizer configured - Energy: {recognizer.energy_threshold}, Dynamic: {recognizer.dynamic_energy_threshold}")
 
     def schedule_event(self, hour: int, minute: int, prompt: str, event_id: str = None) -> str:
         """

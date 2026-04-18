@@ -1,13 +1,12 @@
 import time
 import numpy as np
 import threading
-from speech.energy_calibrator import EnergyCalibrator
 
 
 class WakeWordManager:
     """Manages wake word detection and related audio processing"""
     
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.90
+    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=16000, energy_threshold=0.0001, confidence_threshold=0.93
 ):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
@@ -156,23 +155,23 @@ class WakeWordManager:
             # Handle wake word detection
             if detected:
                 # If we're speaking, interrupt it via audio_processors
-                # if getattr(self.audio_processors, 'is_speaking', False):
-                #     print("Wake word detected while speaking - interrupting!")
-                #     try:
-                #         self.audio_processors.stop_speech()
-                #     except Exception:
-                #         pass
-                #     time.sleep(0.1)  # Reduced pause after interruption (was 0.3s)
+                if getattr(self.audio_processors, 'is_speaking', False):
+                    print("Wake word detected while speaking - interrupting!")
+                    try:
+                        self.audio_processors.stop_speech()
+                    except Exception:
+                        pass
+                    time.sleep(0.1)  # Reduced pause after interruption (was 0.3s)
 
-                # Disable calibration during listening (prevent threshold changes during command capture)
-                EnergyCalibrator.enable_calibration = False
-                print("[CALIBRATION] Paused during listening")
+                # Disable calibration during listening - DISABLED (dynamic calibration removed)
+                # EnergyCalibrator.enable_calibration = False
+                # print("[CALIBRATION] Paused during listening")
                 
                 should_exit = self.handle_wake_word_detection(process_command_callback)
                 
-                # Re-enable calibration after listening is complete
-                EnergyCalibrator.enable_calibration = True
-                print("[CALIBRATION] Resumed after listening")
+                # Re-enable calibration after listening is complete - DISABLED
+                # EnergyCalibrator.enable_calibration = True
+                # print("[CALIBRATION] Resumed after listening")
                 
                 if should_exit:
                     self.detection_running = False  # Set to False before breaking

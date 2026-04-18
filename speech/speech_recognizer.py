@@ -5,13 +5,11 @@ import os
 from contextlib import contextmanager
 import numpy as np
 import time
-import io
-import wave
-import openai
-from openai import OpenAI
 import time as timing_module
 import gc
 import threading
+from google.cloud import speech_v2
+from google.cloud.speech_v2.types import cloud_speech
 
 # Load environment variables
 load_dotenv()
@@ -31,7 +29,7 @@ def suppress_alsa_errors():
         os.close(old_stderr)
 
 class SpeechRecognizer:
-    def __init__(self, recognizer, audio_processor, device_index=None, pixel_led=None, use_whisper=False):
+    def __init__(self, recognizer, audio_processor, device_index=None, pixel_led=None):
         """Initialize recognizer with existing sr.Recognizer instance.
 
         Args:
@@ -39,27 +37,14 @@ class SpeechRecognizer:
             audio_processor: Audio processor instance
             device_index: Optional microphone device index
             pixel_led: Optional LED control instance
-            use_whisper: If True, use OpenAI Whisper for recognition instead of Google
         """
         self.device_index = None
         self.recognizer = recognizer  # Use provided recognizer instead of creating new one
         self.audio_processor = audio_processor
         self.pixel_led = pixel_led
-        self.use_whisper = use_whisper
         self.is_music_playing = False
         self.spotify_connector = None
-        # Set Whisper language from environment variable (default: English)
-        self.whisper_language = os.getenv('WHISPER_LANGUAGE', 'en')
-        
-        # Initialize OpenAI client if using Whisper
-        if self.use_whisper:
-            api_key = os.getenv('OPENAI_API_KEY')
-            if not api_key:
-                print("[RECOGNIZER] Warning: OPENAI_API_KEY not found in environment. Falling back to Google Speech Recognition.")
-                self.use_whisper = False
-            else:
-                self.openai_client = OpenAI(api_key=api_key)
-                print("[RECOGNIZER] OpenAI Whisper initialized")
+        self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         
         try:
             self._choose_device_index()
@@ -226,12 +211,15 @@ class SpeechRecognizer:
             return None
 
     def _recognize_audio(self, audio):
-        """Recognize audio using either OpenAI Whisper or Google Speech Recognition"""
+        """Recognize audio using free Google first, fallback to paid Google Cloud"""
         try:
-            if self.use_whisper:
-                return self._recognize_with_whisper(audio)
-            else:
-                return self._recognize_with_google(audio)
+            # Try free Google Speech Recognition first
+            result = self._recognize_with_google(audio)
+            if result:
+                return result
+    
+            print("[ASSISTANT] Free Google failed, trying paid Google Cloud...")
+            return self.recognize_from_paid_google(audio)
         except Exception as e:
             print(f"[ASSISTANT] Unexpected recognition error: {e}")
             return None
@@ -249,69 +237,59 @@ class SpeechRecognizer:
             print(f"[ASSISTANT] Audio received - Sample rate: {audio.sample_rate}, Frames: {len(audio.frame_data)} bytes")
             command = self.recognizer.recognize_google(audio, language='en-US')
             print(f"[ASSISTANT] You said: {command}")
-            cleaned_command = command.lower().strip()
-            if len(cleaned_command) < 2:
-                print("[ASSISTANT] Command too short, trying again...")
-                # Don't speak here - let it retry silently
-                return None
-            return cleaned_command
-        except sr.RequestError as e:
-            print(f"[ASSISTANT] Google API request error: {e}")
-            return None
-        except sr.UnknownValueError as e:
-            print(f"[ASSISTANT] Google couldn't understand audio (speech too quiet or unclear)")
-            return None
+            return command
         except Exception as e:
             print(f"[ASSISTANT] Google Recognition unexpected error: {type(e).__name__}: {e}")
             return None
 
-    def _recognize_with_whisper(self, audio):
-        """Recognize audio using OpenAI Whisper API"""
+    def recognize_from_paid_google(self, audio):
+        """Recognize audio using Google Cloud Speech-to-Text API (paid version)"""
         try:
-            # Convert audio object to WAV file for Whisper API
-            wav_data = self._audio_to_wav(audio)
+            if not self.project_id:
+                print("[ASSISTANT] Error: GOOGLE_CLOUD_PROJECT_ID not set, paid Google STT unavailable")
+                return None
             
-            # Send to Whisper API
-            print(f"[ASSISTANT] Sending audio to Whisper API (Language: {self.whisper_language})...")
-            transcript = self.openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=("audio.wav", wav_data, "audio/wav"),
-               
+            # Pass raw PCM audio directly with proper explicit decoding config
+            client = speech_v2.SpeechClient()
+            config = cloud_speech.RecognitionConfig(
+                explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+                    encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                    sample_rate_hertz=audio.sample_rate,
+                    audio_channel_count=1,
+                ),
+                language_codes=["en-US", "hi-IN"],
+                model="latest_long",
+                features=cloud_speech.RecognitionFeatures(
+                    enable_automatic_punctuation=True,
+                ),
             )
+            request = cloud_speech.RecognizeRequest(
+                recognizer=f"projects/{self.project_id}/locations/global/recognizers/_",
+                config=config,
+                content=audio.frame_data,
+            )
+
+            print("[ASSISTANT] Sending to Google Cloud Speech-to-Text API...")
+            response = client.recognize(request=request)
             
-            command = transcript.text
-            print(f"[ASSISTANT] Whisper recognized: {command}")
-            cleaned_command = command.lower().strip()
+            # Validate results
+            if not response.results or not response.results[0].alternatives:
+                print("[ASSISTANT] No results from Google Cloud API")
+                return None
             
+            result = response.results[0]
+            transcript = result.alternatives[0].transcript
+            confidence = result.alternatives[0].confidence
+            print(f"[ASSISTANT] Google Cloud - Transcript: {transcript} (Confidence: {confidence:.2%})")
+            cleaned_command = transcript.lower().strip()
             if len(cleaned_command) < 2:
                 print("[ASSISTANT] Command too short, trying again...")
                 return None
-            
             return cleaned_command
-            
-        except openai.APIError as e:
-            print(f"[ASSISTANT] OpenAI API error: {e}.")
-            return None
+        
         except Exception as e:
-            print(f"[ASSISTANT] Whisper recognition error: {e}")
+            print(f"[ASSISTANT] Google Cloud recognition error: {type(e).__name__}: {e}")
             return None
-
-    def _audio_to_wav(self, audio):
-        """Convert speech_recognition Audio object to WAV bytes"""
-        try:
-            # Create WAV file in memory
-            wav_buffer = io.BytesIO()
-            with wave.open(wav_buffer, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)  # 16-bit
-                wav_file.setframerate(audio.sample_rate)
-                wav_file.writeframes(audio.frame_data)
-            
-            wav_buffer.seek(0)
-            return wav_buffer.getvalue()
-        except Exception as e:
-            print(f"[ASSISTANT] Error converting audio to WAV: {e}")
-            raise
 
     def list_available_microphones(self):
         """Return a list of available microphone names."""

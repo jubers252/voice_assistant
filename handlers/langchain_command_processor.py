@@ -1443,9 +1443,9 @@ class LangChainAgentProcessor:
         
         # Log available tools
         if self.use_dynamic_prompts:
-           print(f"✨ Dynamic Prompts ENABLED - Available Tools: {[t.name for t in self.tools]}")
+           print(f"Dynamic Prompts ENABLED - Available Tools: {[t.name for t in self.tools]}")
         else:
-            print(f"📘 System Prompt Mode - Available Tools: {[t.name for t in self.tools]}")
+            print(f"System Prompt Mode - Available Tools: {[t.name for t in self.tools]}")
         
         # Initialize LLM
         llm = ChatOpenAI(
