@@ -654,13 +654,13 @@ if __name__ == "__main__":
     # Example usage:
     # music.play_all_artist_tracks("guru randhawa", limit=10)
     # music.play_playlist("romantic hindi songs", limit=5)
-    # music.play("shaky song")  # Play a specific song by name
+    music.play("shaky song")  # Play a specific song by name
     # time.sleep(3)
     
     # music.set_volume(80)
     # print
     # Playback controls:
-    music.pause()          # Pause playback
+    # music.pause()          # Pause playback
     # time.sleep(2)
     # music.resume()         # Resume playback
     # time.sleep(2)

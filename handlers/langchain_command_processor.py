@@ -36,7 +36,7 @@ import operator
 from handlers.system_prompt import SOFI_SYSTEM_PROMPT
 
 # Import dynamic prompt generator
-from handlers.dynamic_prompt_generator import DynamicPromptGenerator
+# from handlers.dynamic_prompt_generator import DynamicPromptGenerator
 
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
@@ -76,7 +76,7 @@ class LangChainAgentProcessor:
     This intelligently decides which tools to use based on user input
     """
     
-    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None, recognizer=None, use_dynamic_prompts=True):
+    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None, recognizer=None, use_dynamic_prompts=False):
         """
         Initialize LangChain Agent Processor
         

@@ -159,7 +159,7 @@ class SpeechRecognizer:
                                     self._print_attempt(attempt + 1, is_follow_up)
                                 continue
 
-                    min_audio_bytes = 20000  # ~0.6 seconds for short words
+                    min_audio_bytes = 10000  # ~0.6 seconds for short words
                     if not audio or len(audio.frame_data) < min_audio_bytes:
                         print(f"[ASSISTANT] Audio too short: {len(audio.frame_data) if audio else 0} bytes, minimum required: {min_audio_bytes} bytes (~0.6s)")
                         if attempt < max_retries:

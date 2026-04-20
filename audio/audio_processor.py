@@ -16,13 +16,7 @@ from langdetect import detect
 import re
 import azure.cognitiveservices.speech as speechsdk
 # For Hindi transliteration
-try:
-    from indic_transliteration import sanscript
-    from indic_transliteration.sanscript import transliterate
-    TRANSLITERATION_AVAILABLE = True
-except ImportError:
-    print("Warning: indic-transliteration not installed. Hindi transliteration disabled.")
-    TRANSLITERATION_AVAILABLE = False
+
 
 # Load environment variables
 load_dotenv()
@@ -209,24 +203,10 @@ class AudioProcessors:
             return None
         
 
-    def transliterate_to_devanagari(self, text):
-        """Convert romanized Hindi text to Devanagari script"""
-        if not TRANSLITERATION_AVAILABLE:
-            print("Transliteration unavailable - returning original text")
-            return text
-        
-        try:
-            # Transliterate from ITRANS (common romanization) to Devanagari
-            devanagari_text = transliterate(text, sanscript.ITRANS, sanscript.DEVANAGARI)
-            print(f"Transliterated: '{text}' -> '{devanagari_text}'")
-            return devanagari_text
-        except Exception as e:
-            print(f"Transliteration error: {e}, returning original text")
-            return text
-    
     def speak(self, text, prompt=None, lang=None):
         """
-        Threaded TTS function with interruption support and improved Hindi handling
+        TTS function with interruption support and improved Hindi handling.
+        Designed to be called from executor (thread pool), so no internal threading.
         """
         # Clean text before processing (remove links/URLs etc.)
         text = clean_text_for_speech(text)
@@ -236,7 +216,6 @@ class AudioProcessors:
             self.stop_speech()
             time.sleep(0.1)  # Brief pause to ensure cleanup
         
-     
         if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
             try:
                 with self._external_buffer_lock:
@@ -259,13 +238,8 @@ class AudioProcessors:
             lang = detect(text) if text.strip() else 'en'
                 
         print(f"Final TTS text (lang={lang}): {text}")
-        # Start new speech thread
-        self.speech_thread = threading.Thread(
-            target=self._speak_threaded, 
-            args=(text, prompt, lang)
-        )
-        self.speech_thread.daemon = True
-        self.speech_thread.start()
+        # Call speak logic directly (executor handles threading)
+        self._speak_threaded(text, prompt, lang)
 
     def generate_and_play_azure_tts(self, text, speech_file_path=None, lang="en"):
         """Generate speech with Azure TTS and save to file for playback control.
@@ -325,7 +299,7 @@ class AudioProcessors:
             return None
 
     def _generate_and_play_simple(self, text, prompt=None, lang="en"):
-        """Generate speech with Azure TTS and play with pygame for interruption support."""
+        """Generate speech with Azure TTS and play with pygame or system command for interruption support."""
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp_file_path = tmp_file.name
         tmp_file.close()
@@ -338,6 +312,7 @@ class AudioProcessors:
 
             # Play audio with pygame (supports interruption via stop_speech)
             if os.path.exists(tmp_file_path):
+                played = False
                 try:
                     # Ensure mixer is initialized
                     if not pygame.mixer.get_init():
@@ -352,9 +327,29 @@ class AudioProcessors:
                         time.sleep(0.1)
 
                     pygame.mixer.music.stop()
+                    played = True
                 except Exception as pygame_error:
                     print(f"Pygame audio failed: {pygame_error}")
-                  
+                    print("Falling back to system audio playback...")
+                
+                # Fallback: Use system command to play audio
+                if not played:
+                    try:
+                        import subprocess
+                        # Try aplay first (default on RPi), then paplay (PulseAudio)
+                        for cmd in ['aplay', 'paplay']:
+                            result = subprocess.run(['which', cmd], capture_output=True)
+                            if result.returncode == 0:
+                                subprocess.Popen([cmd, tmp_file_path]).wait()
+                                played = True
+                                break
+                        
+                        if not played:
+                            print("No audio player found (aplay/paplay)")
+                    except Exception as sys_error:
+                        print(f"System audio playback also failed: {sys_error}")
+            else:
+                print(f"[ERROR] Generated file not found: {tmp_file_path}")
 
         except Exception as e:
             print(f"TTS error: {e}")
@@ -375,10 +370,7 @@ class AudioProcessors:
         
         # Set LED to green when starting to speak
         if self.pixel_led:
-            print("[DEBUG] Setting LED to GREEN (speaking)")
             self.pixel_led.set_speaking()
-        else:
-            print("[DEBUG] pixel_led is None - LED not available")
         
         try:
             print(f"Speaking with TTS (lang={lang}): {text}")
@@ -391,10 +383,7 @@ class AudioProcessors:
             self.is_speaking = False
             # Turn off LED when done speaking
             if self.pixel_led:
-                print("[DEBUG] Turning LED OFF (finished speaking)")
                 self.pixel_led.off()
-            else:
-                print("[DEBUG] pixel_led is None - LED not available")
     
 
     
