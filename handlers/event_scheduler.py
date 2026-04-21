@@ -50,6 +50,7 @@ class EventScheduler:
         self.callbacks: List[Callable] = []
     
     def add_event(self, event_time: dt_time, prompt: str, event_id: str = None) -> str:
+        
         """
         Add a scheduled event
         

@@ -5,15 +5,15 @@ from strands import Agent, tool
 import uuid
 from asyncio.log import logger
 import os
-import sys
+from datetime import datetime, time as dt_time
 import threading
 import json
 import concurrent.futures
 import queue
 import speech_recognition as sr
 # Ensure project root is in path when running this file directly
+
 # sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import time
@@ -23,14 +23,15 @@ import warnings
 import urllib3
 import gc
 from connectors.zepto_order_database import ZeptoOrderDatabase
-from strands.session.file_session_manager import FileSessionManager
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from strands.models.openai import OpenAIModel
 import chromadb
 from chromadb.utils import embedding_functions
 from handlers.system_prompt import SOFI_SYSTEM_PROMPT
-
+import nest_asyncio
+from playwright.sync_api import sync_playwright
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
 from connectors.weather_connector import handle_tool_requests
@@ -46,12 +47,13 @@ from connectors.zepto_order_automation import ZeptoScraper
 from connectors.home_automation import HomeAutomation
 from connectors.yt_music import MusicPlayer
 from connectors.map import get_travel_time_with_traffic
+from connectors.get_images_and_video import search_and_download_images, search_videos
 import asyncio
 from handlers.agent_session_manager import MySQLiteRepository
 from strands.session.repository_session_manager import RepositorySessionManager
 from strands.agent.conversation_manager import SlidingWindowConversationManager
-
-
+from handlers.event_scheduler import EventScheduler
+from audio.audio_processor import AudioProcessors
 warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
 load_dotenv()
 
@@ -74,12 +76,14 @@ class StrandsAgent(Agent):
         self.home_automation = HomeAutomation()
         self.youtube_music = MusicPlayer()
         self.audio_processors = audio_processors
+        self.audio_processors = AudioProcessors()
+
         self.pixel_led = pixel_led
         if self.audio_processors:
             self.audio_processors.set_pixel_led(self.pixel_led) 
         self.recognizer = recognizer  
         self.conversation_history = []
-  
+        self.event_scheduler = EventScheduler()
         if recognizer:
             self.spotify_connector.set_speech_recognizer(recognizer)
 
@@ -91,7 +95,7 @@ class StrandsAgent(Agent):
         self._zepto_loop = None
         self._zepto_thread = None
         self._setup_zepto_loop()
-        
+        nest_asyncio.apply()
         # Sliding window for the "last 10 messages" logic
         conv_manager = SlidingWindowConversationManager(window_size=10)
         repo = MySQLiteRepository("assistant_memory.db")
@@ -146,12 +150,17 @@ class StrandsAgent(Agent):
                 self._create_youtube_music_play_artist_tool,
                 self._create_youtube_music_control_tool,
                 self._create_follow_up_question_tool,
+                self.add_event_tool,
                 self.save_fact,
+                self.search_past_conversations,
+                self.get_images_tool,
+                self.get_video_tool,
+
             ],
             session_manager=session_manager,
             conversation_manager=conv_manager
         )
-
+        
         self.executor = ThreadPoolExecutor(max_workers=3)
         self._last_follow_up_question = ""
         self._last_follow_up_question_at = 0.0
@@ -232,7 +241,107 @@ class StrandsAgent(Agent):
             ids=[str(uuid.uuid4())]
         )
 
-   
+    @tool
+    def get_images_tool(self, query: str, num_images: int = 5) -> list[str]:
+        """
+        get images for a query and return list of image URLs. Use when user says: 'show me pictures of', 'find images of', 'get me photos of'. Input: search query (e.g., 'cute cats', 'Eiffel Tower at night').
+        Args:
+        query (str): What to search for
+        num_images (int): Number of images to return (default: 5)
+    
+    Returns:
+        dict: {
+            'success': bool,
+            'message': str,
+            'images': list of {
+                'filename': str,
+                'path': str,
+                'url': str,
+                'title': str
+            }
+        }
+        """
+        try:
+            result = search_and_download_images(query, num_images=num_images)
+            if result['success']:
+                return [img['url'] for img in result['images']]
+            else:
+                return [f"Error: {result['message']}"]
+        
+        except Exception as e:
+            return [f"Error scraping images: {str(e)}"]
+
+    @tool
+    def get_video_tool(self, query: str, num_videos: int = 5) -> list[str]:
+        """
+        Search for videos using Brave Search API and return list of video URLs. Use when user says: 'show me videos of', 'find videos of', 'get me clips of'. Input: search query (e.g., 'funny dog videos', 'latest music videos').
+        Args:
+            query (str): What to search for
+            num_videos (int): Number of videos to return (default: 5)
+            """
+        try:
+            result = search_videos(query, num_videos=num_videos)
+            if result['success']:
+                return [video['url'] for video in result['videos']]
+            else:
+                return [f"Error: {result['message']}"]
+        
+        except Exception as e:
+            return [f"Error searching videos: {str(e)}"]
+
+    
+    @tool
+    def add_event_tool(self, event_time: dt_time, prompt: str, event_id: str = None):
+        """Schedule a proactive event to run at a specific time. Use when user says: 'remind me to [do something] at [time]', or schedule an event to perform some action at a specific time. 
+        At the scheduled time, the event will automatically pass the prompt message to the agent for processing and action completion.
+        Args:
+            event_time: Time for the event in HH:MM format (e.g., "14:30" or "9:00 AM")
+            prompt: The action/message to execute at scheduled time (e.g., "Turn on the lights", "order milk from zepto on daily 9:00 AM")
+            event_id: Optional unique ID for the event (auto-generated if not provided)
+        """
+        try:
+            if not event_id:
+                event_id = str(uuid.uuid4())
+            
+            hour = event_time.hour
+            minute = event_time.minute
+            
+            self.event_scheduler.add_event(event_time, prompt, event_id)
+
+            current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            events_file = os.path.join(current_dir, 'events.json')
+            
+            try:
+                if os.path.exists(events_file):
+                    with open(events_file, 'r') as f:
+                        data = json.load(f)
+                else:
+                    data = {"events": []}
+            except json.JSONDecodeError:
+                data = {"events": []}
+            
+            new_event = {
+                "hour": hour,
+                "minute": minute,
+                "prompt": prompt,
+                "event_id": event_id
+            }
+            
+            data["events"].append(new_event)
+
+            with open(events_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            return f"Event '{prompt}' scheduled for {event_time.strftime('%H:%M')} with ID {event_id}"
+        except Exception as e:
+            return f"Error scheduling event: {str(e)}"
+
+    @tool
+    def list_schedule_event(self):
+        """List all scheduled events. Use when user says: 'what are my scheduled events', 'what are my upcoming events'. This will return a list of all upcoming scheduled events with their prompts and scheduled times."""
+        events =  self.event_scheduler.get_events()
+        return events
+    
 
     @tool
     def search_past_conversations(self, query: str) -> str:
@@ -815,7 +924,8 @@ class StrandsAgent(Agent):
     @tool
     def _create_telegram_photo_tool(self, photo_info: str):
         """Send a photo via Telegram. Input format: 'photo_path|caption' or just 'photo_path'. Note: URLs may not work directly - local files preferred.
-        Args:    photo_info: A string containing the photo path and optional caption, separated by a pipe (e.g., 'path/to/photo.jpg|This is a caption'). The photo_path can be a local file path or a URL, but local files are more reliable for Telegram."""
+        Args:    
+        photo_info: A string containing the photo path and optional caption, separated by a pipe (e.g., 'path/to/photo.jpg|This is a caption'). The photo_path can be a local file path or a URL, but local files are more reliable for Telegram."""
 
         try:
             parts = photo_info.split('|', 1)
@@ -847,7 +957,8 @@ class StrandsAgent(Agent):
     @tool
     def _create_telegram_document_tool(self, doc_info: str):
         """Send a document via Telegram. Input format: 'document_path|caption' or just 'document_path'.
-        Args:    doc_info: A string containing the document path and optional caption, separated by a pipe (e.g., 'path/to/document.pdf|This is a caption'). The document_path can be a local file path or a URL, but local files are more reliable for Telegram."""
+        Args:   
+          doc_info: A string containing the document path and optional caption, separated by a pipe (e.g., 'path/to/document.pdf|This is a caption'). The document_path can be a local file path or a URL, but local files are more reliable for Telegram."""
         
         try:
             # Parse doc_info - expected format: "document_path|caption" or just "document_path"
@@ -869,7 +980,8 @@ class StrandsAgent(Agent):
     @tool
     def _create_telegram_video_tool(self, video_info: str):
         """Send a video via Telegram. Input format: 'video_path|caption' or just 'video_path'.
-        Args:    video_info: A string containing the video path and optional caption, separated by a pipe (e.g., 'path/to/video.mp4|This is a caption'). The video_path can be a local file path or a URL, but local files are more reliable for Telegram."""
+        Args:    
+          video_info: A string containing the video path and optional caption, separated by a pipe (e.g., 'path/to/video.mp4|This is a caption'). The video_path can be a local file path or a URL, but local files are more reliable for Telegram."""
 
         try:
             # Parse video_info - expected format: "video_path|caption" or just "video_path"
@@ -891,7 +1003,8 @@ class StrandsAgent(Agent):
     @tool
     def _create_volume_control_tool(self, command: str):
         """Control system volume. Commands: 'increase', 'decrease', 'mute', 'unmute', 'set', or 'status'. Format: action|step|level (e.g., 'increase|10' or 'decrease|10' or 'set||50').
-        Args:    command: A string command to control volume, formatted as 'action|step|level'. Examples: 'increase|10' to raise volume by 10%, 'decrease|5' to lower by 5%, 'set||50' to set volume to 50%, 'mute' to mute, 'unmute' to unmute, 'status' to check current volume."""
+        Args:   
+          command: A string command to control volume, formatted as 'action|step|level'. Examples: 'increase|10' to raise volume by 10%, 'decrease|5' to lower by 5%, 'set||50' to set volume to 50%, 'mute' to mute, 'unmute' to unmute, 'status' to check current volume."""
     
         try:
             from connectors.volume_control import main_control
@@ -1436,15 +1549,15 @@ if __name__ == "__main__":
     openai_api_key = os.getenv("OPENAI_API_KEY")
 
     model = OpenAIModel(
-        model_id="gpt-4.1-mini",
+        model_id="gpt-5.4-mini",
         client_args={
             "api_key": openai_api_key,
         },
         params={
             "temperature": 0.7,
-            "max_tokens": 2000
+            "max_completion_tokens": 2000
         }
     )
     my_pi_agent = StrandsAgent(model=model, session_id="pi_01")
-    response = my_pi_agent.process_user_command("remember.")
+    response = my_pi_agent.process_user_command("i m getting bored what should i do")
     print(response)

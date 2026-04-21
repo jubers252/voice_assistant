@@ -21,14 +21,14 @@
     {
       "hour": 0,
       "minute": 30,
-      "prompt": "Turn off the light at night and on the zero light",
+      "prompt": "Turn off the zero light its sleeping time",
       "event_id": "night_light_off"
     },
     {
-      "hour": 21,
+      "hour": 9,
       "minute": 0,
-      "prompt": "Off the light and on zero light",
-      "event_id": "night_light_control"
+      "prompt": "Chitale milk order karne se pehle confirmation ke liye message bhejo. Confirmation milne ke baad order process karo.",
+      "event_id": "c12c31d3-6dd6-4b07-be61-da2fcfc2c837"
     }
   ]
 }

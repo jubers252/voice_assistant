@@ -6,6 +6,7 @@ import threading
 import json
 import sounddevice as sd
 import speech_recognition as sr
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 from audio.audio_processor import AudioProcessors
@@ -44,8 +45,9 @@ class VoiceAssistant:
         shared_recognizer = sr.Recognizer()
         self._setup_recognizer(shared_recognizer)
         
-        # Pass recognizer to audio processor so it can control dynamic calibration
-        self.audio_processors.set_recognizer(shared_recognizer)
+        # Store initial energy threshold for capping dynamic growth
+        self.initial_energy_threshold = shared_recognizer.energy_threshold
+        self.max_energy_threshold = self.initial_energy_threshold * 1.5  # Cap at 150% of initial
         
         self.recognizer = SpeechRecognizer(
             shared_recognizer, 
@@ -85,7 +87,7 @@ class VoiceAssistant:
         
         openai_api_key = os.getenv("OPENAI_API_KEY")
         model = OpenAIModel(
-            model_id="gpt-5.4-nano",
+            model_id="gpt-5.4-mini",
             client_args={"api_key": openai_api_key},
             params={"temperature": 0.7, "max_completion_tokens": 2000}
         )
@@ -105,8 +107,11 @@ class VoiceAssistant:
             print(f"[INIT] Telegram Bot not available: {e}")
             self.telegram_bot = None
         
+        # Create thread pool for event processing (prevents blocking agent)
+        self.event_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="scheduler")
+        
         self.event_scheduler = EventScheduler(check_interval=60)
-        self.event_scheduler.register_callback(self._handle_scheduled_event)
+        self.event_scheduler.register_callback(self._handle_scheduled_event_async)
         
         print("[INIT] Initialization Complete\n")
 
@@ -130,6 +135,15 @@ class VoiceAssistant:
         recognizer.pause_threshold = 1.2
         recognizer.phrase_threshold = 0.3
         recognizer.non_speaking_duration = 1.0
+    
+    def _cap_energy_threshold(self):
+        """Reduce energy threshold to 60% after dynamic calibration"""
+        current_energy = self.recognizer.recognizer.energy_threshold
+        reduced_energy = current_energy * 0.8
+        if current_energy > self.initial_energy_threshold:
+            self.recognizer.recognizer.energy_threshold = reduced_energy
+            print(f"[RECOGNIZER] Energy reduced: {current_energy:.0f} → {reduced_energy:.0f} (30% of calibrated)")
+    
 
     def schedule_event(self, hour, minute, prompt, event_id=None):
         """Schedule a proactive event"""
@@ -209,8 +223,29 @@ class VoiceAssistant:
         except Exception as e:
             print(f"[TELEGRAM] Error: {e}")
     
+    def _telegram_receiver_thread(self):
+        """Thread for receiving Telegram messages"""
+        if not self.telegram_bot:
+            print("[TELEGRAM] Bot not available, skipping receiver thread")
+            return
+        
+        print("[TELEGRAM] Receiver thread started\n")
+        try:
+            self.telegram_bot.receive_messages(
+                self._handle_telegram_message,
+                ['message']
+            )
+        except Exception as e:
+            print(f"[TELEGRAM] Receiver error: {e}")
+        finally:
+            print("[TELEGRAM] Receiver thread stopped")
+    
+    def _handle_scheduled_event_async(self, event_id, prompt):
+        """Queue scheduled event to run in background thread (non-blocking)"""
+        self.event_executor.submit(self._handle_scheduled_event, event_id, prompt)
+    
     def _handle_scheduled_event(self, event_id, prompt):
-        """Handle scheduled events"""
+        """Handle scheduled events (runs in executor thread)"""
         try:
             print(f"[SCHEDULER] Event triggered: {event_id}")
             result = self.command_processor.process_user_command(prompt)
@@ -275,12 +310,23 @@ class VoiceAssistant:
                 )
                 detection_thread.start()
                 
+                # Start Telegram receiver thread (if bot available)
+                telegram_thread = None
+                if self.telegram_bot:
+                    telegram_thread = threading.Thread(
+                        target=self._telegram_receiver_thread,
+                        daemon=True
+                    )
+                    telegram_thread.start()
+                
                 # Start event scheduler
                 self.event_scheduler.start()
                 
                 # Keep running until interrupted
                 while self.wake_word_manager.detection_running:
                     time.sleep(1.0)
+                    # Periodically cap energy threshold to prevent unbounded growth
+                    self._cap_energy_threshold()
                     
         except KeyboardInterrupt:
             print("\n[MAIN] Stopped by user")
@@ -291,6 +337,7 @@ class VoiceAssistant:
             self.pixel_led.off()
             self.wake_word_manager.stop_detection()
             self.event_scheduler.stop()
+            self.event_executor.shutdown(wait=True)  # Wait for all pending events to complete
           
 
 
