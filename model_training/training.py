@@ -110,7 +110,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v12.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v13.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")

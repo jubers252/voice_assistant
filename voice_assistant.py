@@ -47,8 +47,7 @@ class VoiceAssistant:
         
         # Store initial energy threshold for capping dynamic growth
         self.initial_energy_threshold = shared_recognizer.energy_threshold
-        self.max_energy_threshold = self.initial_energy_threshold * 1.5  # Cap at 150% of initial
-        
+               
         self.recognizer = SpeechRecognizer(
             shared_recognizer, 
             self.audio_processors,
@@ -77,7 +76,9 @@ class VoiceAssistant:
             wake_word_detector=self.wake_word_detector,
             audio_processors=self.audio_processors,
             recognizer=self.recognizer,
-            pixel_led=self.pixel_led
+            pixel_led=self.pixel_led,
+            confidence_threshold=0.933,  # Updated: optimal threshold from model evaluation
+            templates_dir=os.path.join(current_dir, "model_training/audio_data")
         )
         
         # Initialize AI model and command processor
@@ -119,7 +120,7 @@ class VoiceAssistant:
     def _find_wake_word_model(self):
         """Find wake word model file"""
         candidates = [
-            f"{model_dir}/WWD_respeaker_model_v11.h5",
+            f"{model_dir}/WWD_respeaker_model_v13.h5",
             f"{model_dir}/WWD_respeaker_model_v10.h5",
             f"{model_dir}/wake_word_model.h5"
         ]
@@ -139,7 +140,7 @@ class VoiceAssistant:
     def _cap_energy_threshold(self):
         """Reduce energy threshold to 60% after dynamic calibration"""
         current_energy = self.recognizer.recognizer.energy_threshold
-        reduced_energy = current_energy * 0.8
+        reduced_energy = current_energy * 0.9
         if current_energy > self.initial_energy_threshold:
             self.recognizer.recognizer.energy_threshold = reduced_energy
             print(f"[RECOGNIZER] Energy reduced: {current_energy:.0f} → {reduced_energy:.0f} (30% of calibrated)")
@@ -325,8 +326,7 @@ class VoiceAssistant:
                 # Keep running until interrupted
                 while self.wake_word_manager.detection_running:
                     time.sleep(1.0)
-                    # Periodically cap energy threshold to prevent unbounded growth
-                    self._cap_energy_threshold()
+              
                     
         except KeyboardInterrupt:
             print("\n[MAIN] Stopped by user")

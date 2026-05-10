@@ -18,7 +18,11 @@ class WakeWordDetector:
         # Model configuration (matches training)
         self.desired_length = 44
         self.feature_dim = 120
-        self.optimal_threshold = 0.85  # Lowered from 0.40 for better nighttime detection while maintaining accuracy
+        # Updated to 0.933 based on final model evaluation
+        # Test metrics: Accuracy: 0.9983, Recall: 1.0000, Precision: 0.95
+        # Wake word confidence: 0.989 ± 0.022
+        # Background confidence: 0.006 ± 0.044
+        self.optimal_threshold = 0.933
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")
@@ -65,6 +69,8 @@ class WakeWordDetector:
         except Exception as e:
             print(f"Warmup warning: {e}")
             # Continue even if warmup fails
+
+
 
     def extract_features(self, audio, sample_rate):
         try:

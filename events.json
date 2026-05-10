@@ -1,22 +1,10 @@
 {
   "events": [
     {
-      "hour": 0,
-      "minute": 45,
-      "prompt": "Turn off the zero light its sleeping time",
-      "event_id": "zero_light_off"
-    },
-    {
       "hour": 11,
       "minute": 0,
-      "prompt": "Tell me today's top 5 news headlines with brief summaries in Pune, india and world news prefer language Hindi",
+      "prompt": "Tell me today's top  news headlines with brief summaries in Pune, india and world news prefer language Hindi",
       "event_id": "morning_news"
-    },
-    {
-      "hour": 18,
-      "minute": 5,
-      "prompt": "Turn on the light in evening",
-      "event_id": "evening_light_on"
     },
     {
       "hour": 0,
@@ -29,6 +17,18 @@
       "minute": 0,
       "prompt": "Chitale milk order karne se pehle confirmation ke liye message bhejo. Confirmation milne ke baad order process karo.",
       "event_id": "c12c31d3-6dd6-4b07-be61-da2fcfc2c837"
+    },
+    {
+      "hour": 18,
+      "minute": 0,
+      "prompt": "Turn on the main light",
+      "event_id": "4b89f18f-c1e1-40d8-a96b-770448109371"
+    },
+    {
+      "hour": 18,
+      "minute": 0,
+      "prompt": "Turn on the lights",
+      "event_id": "turn_on_light_evening"
     }
   ]
 }
