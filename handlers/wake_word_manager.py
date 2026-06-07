@@ -5,6 +5,7 @@ from audio.wakeword_matcher import WakeWordMatcher
 
 class WakeWordManager:
     """Manages wake word detection"""
+
     
     def __init__(self, wake_word_detector, audio_processors, recognizer, 
                  pixel_led=None, sample_rate=16000, energy_threshold=0.0001, 
@@ -20,7 +21,7 @@ class WakeWordManager:
         self.wakword_matcher = WakeWordMatcher()
         # Detection parameters
         self.window_duration = 2.0  # seconds
-        self.step_duration = 0.05   # seconds
+        self.step_duration = 0.02   # seconds
         self.window_samples = int(self.window_duration * self.sample_rate)
         
         # State
@@ -85,6 +86,7 @@ class WakeWordManager:
         print("[WWD] Wake word detected!")
         
         try:
+            self.audio_processors.play_beep_sound()
             user_command = self.recognizer.listen_for_command()
             
             if user_command:
@@ -158,17 +160,18 @@ class WakeWordManager:
                 print(f"[WWD] Contains 'sophie': {contains_sophie}")
             
                 
-                # Only proceed if text contains sophie and open mic
+               
                 if contains_sophie :
-                    print("[WWD] ✓ Valid wake word + command detected!")
+                    print("[WWD] Valid wake word + command detected!")
                     # Process wake word event
+
                     should_exit = self.handle_wake_word_detection(process_command_callback)
                     
                     if should_exit:
                         self.detection_running = False
                         break
                 else:
-                    print("[WWD] ✗ Invalid command - ignoring")
+                    print("[WWD] Invalid command - ignoring")
                 
                 print("[WWD] Listening for wake word...\n")
             

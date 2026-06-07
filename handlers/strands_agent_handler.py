@@ -38,7 +38,7 @@ from connectors.weather_connector import handle_tool_requests
 from connectors.amzon_connector import get_amazon_result
 from connectors.amazon_order_tracker import get_order
 from connectors.spotify_connector import SpotifyConnector
-from connectors.search_engine import GeminiSearch
+from connectors.search_engine import ExaSearch
 from connectors.telegram_bot import TelegramBot
 from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
@@ -68,7 +68,7 @@ class StrandsAgent(Agent):
         # Initialize connectors
         self.volume_control = VolumeController()
         self.spotify_connector = SpotifyConnector(None)
-        self.search_connector = GeminiSearch()
+        self.exa_search_connector = ExaSearch()
         self.telegram_bot = TelegramBot()
         self.reminder_manager = ReminderManager()
         self.bigbasket_tools = BigBasketTools()
@@ -77,7 +77,7 @@ class StrandsAgent(Agent):
         self.youtube_music = MusicPlayer()
         self.audio_processors = audio_processors
         self.audio_processors = AudioProcessors()
-
+      
         self.pixel_led = pixel_led
         if self.audio_processors:
             self.audio_processors.set_pixel_led(self.pixel_led) 
@@ -633,16 +633,16 @@ class StrandsAgent(Agent):
         
 
     @tool
-    def _create_search_tool(self, query: str):
+    def _create_search_tool(self, query: str, text_limit =1000):
         """Search the internet for LATEST/CURRENT information. MANDATORY for: latest news, current prices, today's info, recent updates, live status. Use when: 'what's latest', 'current', 'today', 'right now', 'latest news about', 'trending'. Input: search query (e.g., 'latest Bitcoin price', 'current weather today', 'trending news')
         Args:    query: The search query string (e.g., 'latest news about AI').
+                text_limit: Maximum number of characters to return in the search result (default: 1000).
         """
     
         try:
             # Use your existing search connector
-            tool_request = {"query": query, "tool": "search"}
-            result = self.search_connector.handle_search_action_with_feedback(tool_request)
-            return result[:500]  # Limit response length
+            result =  self.exa_search_connector.quick_search(query) 
+            return result[:text_limit]  # Limit response length
         except Exception as e:
             return f"Search error: {str(e)}"
 
