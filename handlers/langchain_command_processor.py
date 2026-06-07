@@ -1217,20 +1217,21 @@ class LangChainAgentProcessor:
 
     def _create_youtube_music_play_song_tool(self) -> Tool:
         """Play a specific song on YouTube Music"""
-        def play_song_function(song_name: str) -> str:
+        def play_song_function(song_name: str, volume: int = None) -> str:
             try:
                 # Set music playing flag immediately
                 if self.recognizer:
                     self.recognizer.set_music_playing(True)
                 
                 def yt_music_thread_func():
-                    self.youtube_music.play(song_name)
+                    self.youtube_music.play(song_name, volume=volume)
                 
                 # Run YouTube Music in separate thread to avoid audio conflicts
                 yt_thread = threading.Thread(target=yt_music_thread_func, daemon=True)
                 yt_thread.start()
                 
-                return f"Starting song playback: {song_name}"
+                vol_label = f" at {volume}%" if volume is not None else ""
+                return f"Starting song playback: {song_name}{vol_label}"
             except Exception as e:
                 return f"YouTube Music song error: {str(e)}"
         
@@ -1242,20 +1243,21 @@ class LangChainAgentProcessor:
     
     def _create_youtube_music_play_playlist_tool(self) -> Tool:
         """Play a YouTube Music playlist"""
-        def play_playlist_function(playlist_name: str) -> str:
+        def play_playlist_function(playlist_name: str, volume: int = None) -> str:
             try:
                 # Set music playing flag immediately
                 if self.recognizer:
                     self.recognizer.set_music_playing(True)
                 
                 def yt_playlist_thread_func():
-                    self.youtube_music.play_playlist(playlist_name)
+                    self.youtube_music.play_playlist(playlist_name, volume=volume)
                 
                 # Run in separate thread
                 yt_thread = threading.Thread(target=yt_playlist_thread_func, daemon=True)
                 yt_thread.start()
                 
-                return f"Starting playlist: {playlist_name}"
+                vol_label = f" at {volume}%" if volume is not None else ""
+                return f"Starting playlist: {playlist_name}{vol_label}"
             except Exception as e:
                 return f"YouTube Music playlist error: {str(e)}"
         
@@ -1267,20 +1269,21 @@ class LangChainAgentProcessor:
     
     def _create_youtube_music_play_artist_tool(self) -> Tool:
         """Play all tracks by a specific artist on YouTube Music"""
-        def play_artist_function(artist_name: str) -> str:
+        def play_artist_function(artist_name: str, volume: int = None) -> str:
             try:
                 # Set music playing flag immediately
                 if self.recognizer:
                     self.recognizer.set_music_playing(True)
                 
                 def yt_artist_thread_func():
-                    self.youtube_music.play_all_artist_tracks(artist_name)
+                    self.youtube_music.play_all_artist_tracks(artist_name, volume=volume)
                 
                 # Run in separate thread
                 yt_thread = threading.Thread(target=yt_artist_thread_func, daemon=True)
                 yt_thread.start()
                 
-                return f"Starting artist playlist: {artist_name}"
+                vol_label = f" at {volume}%" if volume is not None else ""
+                return f"Starting artist playlist: {artist_name}{vol_label}"
             except Exception as e:
                 return f"YouTube Music artist error: {str(e)}"
         

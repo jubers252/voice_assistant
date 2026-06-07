@@ -53,7 +53,7 @@ def record_audio_and_save(save_path, n_times=50):
     """
 
     input("To start recording Wake Word press Enter: ")
-    for i in range(0, n_times):
+    for i in range(350, n_times):
         myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
         
@@ -89,7 +89,7 @@ def record_background_sound(save_path, n_times=2500):
 
 # Step 1: Record yourself saying the Wake Word
 # print("record_audio_and_save the Wake Word:\n")
-record_audio_and_save(SAVE_DIR, n_times=150)
+record_audio_and_save(SAVE_DIR, n_times=450)
 
 # Step 2: Record your background sounds (Just let it run, it will automatically record)
 # matically record)

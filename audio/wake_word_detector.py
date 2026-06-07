@@ -22,7 +22,7 @@ class WakeWordDetector:
         # Test metrics: Accuracy: 0.9983, Recall: 1.0000, Precision: 0.95
         # Wake word confidence: 0.989 ± 0.022
         # Background confidence: 0.006 ± 0.044
-        self.optimal_threshold = 0.933
+        self.optimal_threshold = 0.833
         
         # Warmup: Run a dummy prediction to initialize model layers
         print("Warming up wake word detector...")

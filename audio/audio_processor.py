@@ -128,11 +128,6 @@ class AudioProcessors:
         """Set pixel LED controller for visual feedback during speech"""
         self.pixel_led = pixel_led
     
-    def set_template_matcher(self, template_matcher):
-        """Set template matcher for pre-filtering audio stream to speech only"""
-        self._template_matcher = template_matcher
-    
-   
     def set_audio_buffer(self, buffer, buffer_lock):
         """Set external audio buffer for the callback to use
         

@@ -232,6 +232,9 @@ class ReminderManager:
         if self.running and self.reminder_thread and self.reminder_thread.is_alive():
             return  # Thread is already running
         
+        # On startup, reschedule daily reminders for today/tomorrow at same time
+        self._init_daily_reminders_on_startup()
+        
         self.running = True
         self.reminder_thread = threading.Thread(target=self._reminder_check_loop, daemon=True)
         self.reminder_thread.start()
@@ -241,6 +244,48 @@ class ReminderManager:
         """Stop the reminder checker thread."""
         self.running = False
         print("Reminder checker stopped.")
+    
+    def _init_daily_reminders_on_startup(self):
+        """
+        On service startup, reschedule daily reminders for today/tomorrow.
+        This prevents all daily reminders from triggering immediately on startup.
+        """
+        now = datetime.now()
+        changes_made = False
+        
+        for reminder in self.reminders:
+            if reminder.get('recurring') == 'daily' and not reminder['notified']:
+                try:
+                    remind_dt = datetime.fromisoformat(reminder['remind_time'])
+                    
+                    # Extract the time component (hour and minute)
+                    reminder_hour = remind_dt.hour
+                    reminder_minute = remind_dt.minute
+                    
+                    # Create a datetime for today at this time
+                    today_at_time = now.replace(hour=reminder_hour, minute=reminder_minute, second=0, microsecond=0)
+                    
+                    # If that time has already passed today, schedule for tomorrow
+                    if today_at_time <= now:
+                        target_time = today_at_time + timedelta(days=1)
+                    else:
+                        target_time = today_at_time
+                    
+                    # Update the reminder
+                    reminder['remind_time'] = target_time.isoformat()
+                    reminder['notified'] = False  # Ensure it will trigger at the right time
+                    changes_made = True
+                    
+                    print(f"✓ Daily reminder rescheduled: '{reminder['text']}' for {target_time.strftime('%I:%M %p on %B %d')}")
+                    
+                except Exception as e:
+                    print(f"Error rescheduling daily reminder {reminder.get('id')}: {e}")
+        
+        # Save changes if any were made
+        if changes_made:
+            self.save_reminders()
+            print(f"Reminders file updated with rescheduled daily reminders")
+
     
     def _reminder_check_loop(self):
         """Background loop that checks for due reminders every 30 seconds and announces them."""
@@ -263,10 +308,6 @@ class ReminderManager:
                             time_diff = (datetime.now() - datetime.fromisoformat(reminder['remind_time'])).total_seconds()
                             if time_diff > 600 and reminder.get('recurring') != 'daily': 
                                 print("Skipping reminder - more than 10 minutes late")
-                                self.mark_reminded(reminder["id"])
-                                continue
-                            elif time_diff > 1800 and reminder.get('recurring') == 'daily':
-                                print("Skipping daily reminder - more than 30 minutes late")
                                 self.mark_reminded(reminder["id"])
                                 continue
 

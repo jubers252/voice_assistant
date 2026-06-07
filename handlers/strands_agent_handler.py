@@ -162,6 +162,7 @@ class StrandsAgent(Agent):
         )
         
         self.executor = ThreadPoolExecutor(max_workers=3)
+        self._agent_lock = threading.Lock()  # Prevent concurrent LLM calls (not thread-safe)
         self._last_follow_up_question = ""
         self._last_follow_up_question_at = 0.0
      
@@ -1324,70 +1325,48 @@ class StrandsAgent(Agent):
     
    
     @tool
-    async def _create_youtube_music_play_song_tool(self, song_name: str):
+    def _create_youtube_music_play_song_tool(self, song_name: str, volume: int = None):
         """Play a specific song on YouTube Music. Use when: 'play [song name]', 'put on [song]'. Input: song name (e.g., 'Bohemian Rhapsody').
-        Args:    song_name: The name of the song to play on YouTube Music (e.g., 'Bohemian Rhapsody')."""
-    
+        Args:    song_name: The name of the song to play on YouTube Music (e.g., 'Bohemian Rhapsody').
+                 volume: Optional volume level 0-100."""
+
         try:
-            # Set music playing flag immediately
-            # if self.recognizer:
-            #     self.recognizer.set_music_playing(True)
-            loop = asyncio.get_running_loop()
-       
-            
-            # Run YouTube Music in separate thread to avoid audio conflicts
-            # yt_thread = threading.Thread(target=yt_music_thread_func, daemon=True)
-            # yt_thread.start()
-            loop.run_in_executor(
-            self.executor, 
-            self.youtube_music.play, 
-            song_name
-         )
-            
-            return f"Starting song playback: {song_name}"
+            if self.recognizer:
+                self.recognizer.set_music_playing(True)
+
+            self.executor.submit(self.youtube_music.play, song_name, volume)
+            vol_label = f" at {volume}%" if volume is not None else ""
+            return f"Starting song playback: {song_name}{vol_label}"
         except Exception as e:
             return f"YouTube Music song error: {str(e)}"
 
     @tool
-    def _create_youtube_music_play_playlist_tool(self, playlist_name: str):
+    def _create_youtube_music_play_playlist_tool(self, playlist_name: str, volume: int = None):
         """Play a YouTube Music playlist. Use when: 'play playlist [name]', 'play [playlist theme]'. Input: playlist name or theme (e.g., 'romantic songs', 'workout', 'chill vibes').
         Args:    playlist_name: The name or theme of the playlist to play on YouTube Music (e.g., 'chill vibes')."""
 
         try:
-            # Set music playing flag immediately
-            # if self.recognizer:
-            #     self.recognizer.set_music_playing(True)
-            loop = asyncio.get_running_loop()
+            if self.recognizer:
+                self.recognizer.set_music_playing(True)
 
-            loop.run_in_executor(
-            self.executor, 
-            self.youtube_music.play_playlist, 
-            playlist_name
-         )
-                        
-            return f"Starting playlist: {playlist_name}"
+            self.executor.submit(self.youtube_music.play_playlist, playlist_name, volume=volume)
+            vol_label = f" at {volume}%" if volume is not None else ""
+            return f"Starting playlist: {playlist_name}{vol_label}"
         except Exception as e:
             return f"YouTube Music playlist error: {str(e)}"
     
     @tool
-    def _create_youtube_music_play_artist_tool(self, artist_name: str):
+    def _create_youtube_music_play_artist_tool(self, artist_name: str, volume: int = None):
         """Play all available songs by an artist on YouTube Music. Use when: 'play [artist name]', 'put on [artist] music', 'play songs by [artist]'. Input: artist name (e.g., 'The Beatles', 'Taylor Swift').
         Args:    artist_name: The name of the artist whose songs to play on YouTube Music (e.g., 'The Beatles')."""
     
         try:
-            # Set music playing flag immediately
             if self.recognizer:
                 self.recognizer.set_music_playing(True)
-            
-            loop = asyncio.get_running_loop()
 
-            loop.run_in_executor(
-            self.executor, 
-            self.youtube_music.play_all_artist_tracks, 
-            artist_name
-         )
-            
-            return f"Starting artist playlist: {artist_name}"
+            self.executor.submit(self.youtube_music.play_all_artist_tracks, artist_name, volume)
+            vol_label = f" at {volume}%" if volume is not None else ""
+            return f"Starting artist playlist: {artist_name}{vol_label}"
         except Exception as e:
             return f"YouTube Music artist error: {str(e)}"
     
@@ -1478,11 +1457,15 @@ class StrandsAgent(Agent):
             return f"Follow-up error: {str(e)}"
     
 
-    def process_user_command(self, user_command: str):
+    def process_user_command(self, user_command: str, scheduled: bool = False):
             """
             Main method that replaces your original process_user_command
             Now uses intelligent agent instead of manual tool selection
             Includes follow-up conversation support and conversation history awareness
+
+            Args:
+                user_command: The command text to process
+                scheduled: If True, skip instead of blocking when agent is already busy
             
             Returns:
                 dict: Contains 'response' (full response) and 'tts_text' (cleaned for speech)
@@ -1494,7 +1477,14 @@ class StrandsAgent(Agent):
                 # Speak goodbye (LED controlled in audio_processor)
                 self.audio_processors.speak("Goodbye!")
                 return None
-            
+
+            # Scheduled events skip if the agent is already busy (wake-word command in progress)
+            if scheduled and not self._agent_lock.acquire(blocking=False):
+                print(f"[SCHEDULER] Agent busy, skipping scheduled event: {user_command[:50]}")
+                return None
+            elif not scheduled:
+                self._agent_lock.acquire(blocking=True)
+
             try:
                 # Set LED to processing/thinking state (blinking)
                 if self.pixel_led:
@@ -1543,6 +1533,8 @@ class StrandsAgent(Agent):
                     "tts_text": error_msg,
                     "urls": []
                 }
+            finally:
+                self._agent_lock.release()
         
 if __name__ == "__main__":
     # Example of initializing the agent and testing a tool

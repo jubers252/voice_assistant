@@ -82,10 +82,14 @@ class TelegramBot:
                     # Remove from data since it will be sent as files
                     data = {k: v for k, v in data.items() if k != file_field}
             
+            # For long-polling (getUpdates), the HTTP read timeout must exceed the poll timeout
+            poll_timeout = data.get('timeout', 0) if method == 'getUpdates' else 0
+            http_timeout = max(30, poll_timeout + 10)
+
             # Send request with files if provided
             if files:
                 try:
-                    response = requests.post(url, data=data, files=files, timeout=30)
+                    response = requests.post(url, data=data, files=files, timeout=http_timeout)
                     response.raise_for_status()
                     return response.json()
                 finally:
@@ -94,7 +98,7 @@ class TelegramBot:
                         if hasattr(file_obj, 'close'):
                             file_obj.close()
             else:
-                response = requests.post(url, data=data, timeout=30)
+                response = requests.post(url, data=data, timeout=http_timeout)
                 response.raise_for_status()
                 return response.json()
                 
@@ -348,7 +352,8 @@ class TelegramBot:
                     logger.info(f"Received {len(updates)} update(s)")
                 return updates
             else:
-                logger.error(f"Failed to get updates: {response.get('description', 'Unknown error')}")
+                error_msg = response.get('description') or response.get('error', 'Unknown error')
+                logger.error(f"Failed to get updates: {error_msg}")
                 return None
                 
         except Exception as e:
@@ -566,8 +571,8 @@ if __name__ == "__main__":
         chat_id = os.getenv('TELEGRAM_CHAT_ID', '@your_username')  # Replace with your chat ID or username
         
         # Example 1: Send text message
-        # message_text = "Hello from Python Telegram Bot!"
-        # bot.send_message(chat_id, message_text)
+        message_text = "Hello from Python Telegram Bot!"
+        bot.send_message(chat_id, message_text)
         bot.receive_messages()  # Start receiving messages (blocking call)
         # Example 2: Send photo with caption
         # photo_url = "https://m.media-amazon.com/images/I/81QoDTzKadL._SX679_.jpg"

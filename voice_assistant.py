@@ -77,7 +77,7 @@ class VoiceAssistant:
             audio_processors=self.audio_processors,
             recognizer=self.recognizer,
             pixel_led=self.pixel_led,
-            confidence_threshold=0.933,  # Updated: optimal threshold from model evaluation
+            confidence_threshold=0.833,  # Updated: optimal threshold from model evaluation
             templates_dir=os.path.join(current_dir, "model_training/audio_data")
         )
         
@@ -120,7 +120,7 @@ class VoiceAssistant:
     def _find_wake_word_model(self):
         """Find wake word model file"""
         candidates = [
-            f"{model_dir}/WWD_respeaker_model_v13.h5",
+            f"{model_dir}/WWD_respeaker_model_v3.h5",
             f"{model_dir}/WWD_respeaker_model_v10.h5",
             f"{model_dir}/wake_word_model.h5"
         ]
@@ -131,7 +131,7 @@ class VoiceAssistant:
     
     def _setup_recognizer(self, recognizer):
         """Configure speech recognizer"""
-        recognizer.energy_threshold = 200
+        recognizer.energy_threshold = 100
         recognizer.dynamic_energy_threshold = True
         recognizer.pause_threshold = 1.2
         recognizer.phrase_threshold = 0.3
@@ -249,7 +249,7 @@ class VoiceAssistant:
         """Handle scheduled events (runs in executor thread)"""
         try:
             print(f"[SCHEDULER] Event triggered: {event_id}")
-            result = self.command_processor.process_user_command(prompt)
+            result = self.command_processor.process_user_command(prompt, scheduled=True)
             
             if result:
                 response = result.get('response', '')
