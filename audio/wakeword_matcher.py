@@ -95,3 +95,8 @@ class WakeWordMatcher:
             print("No audio recorded")
             return ""
     
+
+obj = WakeWordMatcher()
+
+text = obj.transcribe("model_training/audio_data/wakeword_367.wav")
+print(f"Transcribed text: {text}")

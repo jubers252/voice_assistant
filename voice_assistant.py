@@ -4,28 +4,25 @@ import os
 import time
 import threading
 import json
-import sounddevice as sd
 import speech_recognition as sr
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 from audio.audio_processor import AudioProcessors
-from audio.wake_word_detector import WakeWordDetector
 from speech.speech_recognizer import SpeechRecognizer
 from conversation.conversation_manager import ConversationManager
 from connectors.spotify_connector import SpotifyConnector
 from connectors.reminder_manager import ReminderManager
 from connectors.telegram_bot import TelegramBot
-from handlers.wake_word_manager import WakeWordManager
 from handlers.event_scheduler import EventScheduler
 from gpio_setup import PixelLEDController
 from handlers.strands_agent_handler import StrandsAgent
 from strands.models.openai import OpenAIModel
+from custom_wakeword_vad_capture_threaded import run_custom_wakeword_vad_capture
 
 load_dotenv()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-model_dir = os.path.join(current_dir, 'model')
 
 class VoiceAssistant:
     """Voice Assistant - Main Application Class"""
@@ -63,23 +60,6 @@ class VoiceAssistant:
         self.reminder_manager.set_audio_processors(self.audio_processors)
         self.reminder_manager.start_reminder_checker()
         
-        # Initialize wake word detection
-        ww_model_path = self._find_wake_word_model()
-        try:
-            print(f"[INIT] Loading wake word model from: {ww_model_path}")
-            self.wake_word_detector = WakeWordDetector(model_path=ww_model_path)
-        except Exception as e:
-            print(f"[INIT] Error loading wake word model: {e}")
-            self.wake_word_detector = None
-        
-        self.wake_word_manager = WakeWordManager(
-            wake_word_detector=self.wake_word_detector,
-            audio_processors=self.audio_processors,
-            recognizer=self.recognizer,
-            pixel_led=self.pixel_led,
-            confidence_threshold=0.833,  # Updated: optimal threshold from model evaluation
-            templates_dir=os.path.join(current_dir, "model_training/audio_data")
-        )
         
         # Initialize AI model and command processor
         self.spotify_connector = SpotifyConnector(None)
@@ -117,34 +97,16 @@ class VoiceAssistant:
         print("[INIT] Initialization Complete\n")
 
 
-    def _find_wake_word_model(self):
-        """Find wake word model file"""
-        candidates = [
-            f"{model_dir}/WWD_respeaker_model_v3.h5",
-            f"{model_dir}/WWD_respeaker_model_v10.h5",
-            f"{model_dir}/wake_word_model.h5"
-        ]
-        for path in candidates:
-            if os.path.exists(path):
-                return path
-        return candidates[0]  # Return first choice if none exist
     
     def _setup_recognizer(self, recognizer):
         """Configure speech recognizer"""
-        recognizer.energy_threshold = 100
+        recognizer.energy_threshold = 300
         recognizer.dynamic_energy_threshold = True
         recognizer.pause_threshold = 1.2
         recognizer.phrase_threshold = 0.3
         recognizer.non_speaking_duration = 1.0
     
-    def _cap_energy_threshold(self):
-        """Reduce energy threshold to 60% after dynamic calibration"""
-        current_energy = self.recognizer.recognizer.energy_threshold
-        reduced_energy = current_energy * 0.9
-        if current_energy > self.initial_energy_threshold:
-            self.recognizer.recognizer.energy_threshold = reduced_energy
-            print(f"[RECOGNIZER] Energy reduced: {current_energy:.0f} → {reduced_energy:.0f} (30% of calibrated)")
-    
+
 
     def schedule_event(self, hour, minute, prompt, event_id=None):
         """Schedule a proactive event"""
@@ -267,66 +229,29 @@ class VoiceAssistant:
             print(f"[SCHEDULER] Error: {e}")
     
     def run(self):
-        """Main assistant loop"""
-        print("[MAIN] Listening for wake word...\n")
-        
-        self.wake_word_manager.setup_audio_buffer()
-        self.wake_word_manager.start_detection()
+        """Main assistant loop (VAD/listen-based, no wake-word manager dependency)."""
+        print("[MAIN] Listening for speech commands (VAD-based)...\n")
         
         try:
             self.audio_processors.play_beep_sound(beep_file="beep/startup_sound.wav")
             
-            # Suppress ALSA errors when opening audio stream
-            import os as os_module
-            from contextlib import contextmanager
-            
-            @contextmanager
-            def suppress_alsa_errors():
-                try:
-                    devnull = os_module.open(os_module.devnull, os_module.O_WRONLY)
-                    old_stderr = os_module.dup(2)
-                    os_module.dup2(devnull, 2)
-                    os_module.close(devnull)
-                    yield
-                finally:
-                    os_module.dup2(old_stderr, 2)
-                    os_module.close(old_stderr)
-            
-            with suppress_alsa_errors():
-                stream = sd.InputStream(
-                    samplerate=self.wake_word_manager.sample_rate,
-                    channels=1,
-                    dtype='float32',
-                    callback=self.audio_processors.audio_callback
-                )
-            
-            self.wake_word_manager.set_audio_stream(stream)
-            
-            with stream:
-                # Start wake word detection thread
-                detection_thread = threading.Thread(
-                    target=self.wake_word_manager.main_detection_loop,
-                    args=(self.command_processor.process_user_command,),
+            # Start Telegram receiver thread (if bot available)
+            telegram_thread = None
+            if self.telegram_bot:
+                telegram_thread = threading.Thread(
+                    target=self._telegram_receiver_thread,
                     daemon=True
                 )
-                detection_thread.start()
-                
-                # Start Telegram receiver thread (if bot available)
-                telegram_thread = None
-                if self.telegram_bot:
-                    telegram_thread = threading.Thread(
-                        target=self._telegram_receiver_thread,
-                        daemon=True
-                    )
-                    telegram_thread.start()
-                
-                # Start event scheduler
-                self.event_scheduler.start()
-                
-                # Keep running until interrupted
-                while self.wake_word_manager.detection_running:
-                    time.sleep(1.0)
-              
+                telegram_thread.start()
+            
+            # Start event scheduler
+            self.event_scheduler.start()
+
+            # Main wakeword + VAD recognition loop
+            run_custom_wakeword_vad_capture(
+                speech_recognizer=self.recognizer,
+                process_command=self.command_processor.process_user_command,
+            )
                     
         except KeyboardInterrupt:
             print("\n[MAIN] Stopped by user")
@@ -335,7 +260,6 @@ class VoiceAssistant:
         finally:
             print("[MAIN] Shutting down...")
             self.pixel_led.off()
-            self.wake_word_manager.stop_detection()
             self.event_scheduler.stop()
             self.event_executor.shutdown(wait=True)  # Wait for all pending events to complete
           

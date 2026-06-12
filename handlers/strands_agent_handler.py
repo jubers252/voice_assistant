@@ -638,11 +638,13 @@ class StrandsAgent(Agent):
         Args:    query: The search query string (e.g., 'latest news about AI').
                 text_limit: Maximum number of characters to return in the search result (default: 1000).
         """
-    
         try:
             # Use your existing search connector
-            result =  self.exa_search_connector.quick_search(query) 
-            return result[:text_limit]  # Limit response length
+            result =  self.exa_search_connector.quick_search(query)
+            if len(result)>text_limit:
+                return result[:text_limit]  # Limit response lengt
+            else: 
+                return result
         except Exception as e:
             return f"Search error: {str(e)}"
 

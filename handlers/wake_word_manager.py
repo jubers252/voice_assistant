@@ -9,7 +9,7 @@ class WakeWordManager:
     
     def __init__(self, wake_word_detector, audio_processors, recognizer, 
                  pixel_led=None, sample_rate=16000, energy_threshold=0.0001, 
-                 confidence_threshold=0.85, templates_dir=None):
+                 confidence_threshold=0.75, templates_dir=None):
         """Initialize wake word manager"""
         self.wake_word_detector = wake_word_detector
         self.audio_processors = audio_processors
@@ -20,9 +20,13 @@ class WakeWordManager:
         self.confidence_threshold = confidence_threshold
         self.wakword_matcher = WakeWordMatcher()
         # Detection parameters
-        self.window_duration = 2.0  # seconds
+        self.window_duration =2.0  # seconds
+        self.transcribe_duration = 1.3  # seconds (use first 1s for transcription)
+        self.transcribe_cooldown_sec = 1.2  # debounce repeated transcribe calls
+        self.last_transcribe_time = 0.0
         self.step_duration = 0.02   # seconds
         self.window_samples = int(self.window_duration * self.sample_rate)
+        self.transcribe_samples = int(self.transcribe_duration * self.sample_rate)
         
         # State
         self.detection_running = False
@@ -47,7 +51,9 @@ class WakeWordManager:
             audio_window: Audio data to transcribe
         """
         try:
-            result = self.wakword_matcher.transcribe_chunk(audio_window, sample_rate=self.sample_rate)
+            # Use last 1 second from the detected window for faster transcription
+            transcribe_window = audio_window[-self.transcribe_samples:]
+            result = self.wakword_matcher.transcribe_chunk(transcribe_window, sample_rate=self.sample_rate)
             return result
         except Exception as e:
             print(f"[ERROR] Transcription thread: {e}")
@@ -140,38 +146,51 @@ class WakeWordManager:
             
             # Handle detection
             if detected:
-                # Start transcription in parallel thread
-                text = self._transcribe_in_parallel(audio_window)
-               
-                if getattr(self.audio_processors, 'is_speaking', False):
-                    try:
-                        self.audio_processors.stop_speech()
-                    except Exception:
-                        pass
-                    time.sleep(0.1)
-                
-  
-                print(f"[WWD] Transcribed text: '{text}'")
-                
-                # Check if text contains wake word "sophie"
-                word_list = ["sophie","soapy","Sobe", "Sofew", "Softening", "sobig","Selfie","Something"]  # Can be extended with more wake words
-                contains_sophie = self.check_text_contains_wake_word(text,word_list)
-                           
-                print(f"[WWD] Contains 'sophie': {contains_sophie}")
-            
-                
-               
-                if contains_sophie :
-                    print("[WWD] Valid wake word + command detected!")
-                    # Process wake word event
+                now = time.time()
+                if (now - self.last_transcribe_time) < self.transcribe_cooldown_sec:
+                    time.sleep(self.step_duration)
+                    continue
+                if confidence is not None and confidence > 0.93:
+                    print("[WWD] High confidence wake word detected - processing immediately")
+                    self.last_transcribe_time = now
+                    if getattr(self.audio_processors, 'is_speaking', False):
+                        try:
+                            self.audio_processors.stop_speech()
+                        except Exception:
+                            pass
+                        time.sleep(0.1)
 
                     should_exit = self.handle_wake_word_detection(process_command_callback)
-                    
+                        
                     if should_exit:
                         self.detection_running = False
                         break
+                
                 else:
-                    print("[WWD] Invalid command - ignoring")
+                    self.last_transcribe_time = now
+                    # Start transcription in parallel thread
+                    text = self._transcribe_in_parallel(audio_window)
+                    print(f"[WWD] Transcribed text: '{text}'")
+                
+                # Check if text contains wake word "sophie"
+                    word_list = ["sophie","soapy","Sobe", "Sofew", "Softening", "sobig","Selfie","Something", "sodeep"]  # Can be extended with more wake words
+                    contains_sophie = self.check_text_contains_wake_word(text,word_list)
+                            
+                    print(f"[WWD] Contains 'sophie': {contains_sophie}")
+            
+                
+               
+                    if contains_sophie:
+                        print("[WWD] Valid wake word + command detected!")
+                        # Process wake word event
+
+                        should_exit = self.handle_wake_word_detection(process_command_callback)
+                        
+                        if should_exit:
+                            self.detection_running = False
+                            break
+                    else:
+                        print("[WWD] Invalid command - ignoring")
                 
                 print("[WWD] Listening for wake word...\n")
             

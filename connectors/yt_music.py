@@ -52,7 +52,7 @@ class MusicPlayer:
         """Initialize the MusicPlayer with YouTube Music API and volume control."""
         load_dotenv()
         self.player = None
-        self.default_volume = 80
+        self.default_volume = 70
         self.mpv_path = self._find_mpv_executable()
         if self.mpv_path:
             logger.info(f"Found mpv executable: {self.mpv_path}")
@@ -303,7 +303,7 @@ class MusicPlayer:
             logger.error(f"Error getting artist info: {e}", exc_info=True)
             return None
 
-    def search_playlist(self, query: str, limit: int = 10) -> tuple:
+    def search_playlist(self, query: str, limit: int = 5) -> tuple:
         """
         Search for a playlist on YouTube Music.
         
@@ -332,7 +332,7 @@ class MusicPlayer:
             logger.error(f"Error searching playlist: {e}")
             return None
 
-    def get_playlist_songs(self, playlist_id: str, limit: int = 10) -> list:
+    def get_playlist_songs(self, playlist_id: str, limit: int = 5) -> list:
         """
         Retrieve songs from a YouTube Music playlist.
         
@@ -345,7 +345,7 @@ class MusicPlayer:
         """
         try:
             # Fetch more songs - use 0 for no limit initially, then apply our own limit
-            playlist = self.ytmusic.get_playlist(playlist_id, limit=50)
+            playlist = self.ytmusic.get_playlist(playlist_id, limit=10)
             songs = playlist.get("tracks", [])
             
             # Apply user limit if specified
@@ -819,7 +819,7 @@ if __name__ == "__main__":
     # music.play_playlist("party hindi songs 2026", limit=5)
     music.play("bangles song")  # Play a specific song by name
     # time.sleep(3)
-    music.set_mpv_volume(70)
+    music.set_mpv_volume(80)
     # music.set_mpv_volume(50)
     # print
     # Playback controls:
