@@ -18,7 +18,7 @@ from handlers.event_scheduler import EventScheduler
 from gpio_setup import PixelLEDController
 from handlers.strands_agent_handler import StrandsAgent
 from strands.models.openai import OpenAIModel
-from custom_wakeword_vad_capture_threaded import run_custom_wakeword_vad_capture
+from handlers.wake_word_manager import WakeWordManager
 
 load_dotenv()
 
@@ -232,6 +232,7 @@ class VoiceAssistant:
         """Main assistant loop (VAD/listen-based, no wake-word manager dependency)."""
         print("[MAIN] Listening for speech commands (VAD-based)...\n")
         
+        wake_manager = None
         try:
             self.audio_processors.play_beep_sound(beep_file="beep/startup_sound.wav")
             
@@ -247,11 +248,19 @@ class VoiceAssistant:
             # Start event scheduler
             self.event_scheduler.start()
 
-            # Main wakeword + VAD recognition loop
-            run_custom_wakeword_vad_capture(
-                speech_recognizer=self.recognizer,
-                process_command=self.command_processor.process_user_command,
+            # Main VAD/listen recognition loop (class-based manager, no wakeword model)
+            wake_manager = WakeWordManager(
+                audio_processors=self.audio_processors,
+                recognizer=self.recognizer,
+                pixel_led=self.pixel_led,
+                input_device_index=None,
             )
+            wake_manager.start_detection(
+                process_command_callback=self.command_processor.process_user_command
+            )
+
+            while True:
+                time.sleep(0.5)
                     
         except KeyboardInterrupt:
             print("\n[MAIN] Stopped by user")
@@ -259,6 +268,10 @@ class VoiceAssistant:
             print(f"[MAIN] Error: {e}")
         finally:
             print("[MAIN] Shutting down...")
+            try:
+                wake_manager.stop_detection()
+            except Exception:
+                pass
             self.pixel_led.off()
             self.event_scheduler.stop()
             self.event_executor.shutdown(wait=True)  # Wait for all pending events to complete
