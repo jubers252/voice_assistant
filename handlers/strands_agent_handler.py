@@ -12,8 +12,8 @@ import concurrent.futures
 import queue
 import speech_recognition as sr
 # Ensure project root is in path when running this file directly
-
-# sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import time
@@ -641,11 +641,12 @@ class StrandsAgent(Agent):
         try:
             # Use your existing search connector
             result =  self.exa_search_connector.quick_search(query)
-            if len(result)>text_limit:
-                return result[:text_limit]  # Limit response lengt
+            if int(len(result))> int(text_limit):
+                return result[0:text_limit]  # Limit response lengt
             else: 
                 return result
         except Exception as e:
+            print(e)
             return f"Search error: {str(e)}"
 
         
@@ -1337,6 +1338,7 @@ class StrandsAgent(Agent):
                 self.recognizer.set_music_playing(True)
 
             self.executor.submit(self.youtube_music.play, song_name, volume)
+            self.youtube_music.set_mpv_volume(80)
             vol_label = f" at {volume}%" if volume is not None else ""
             return f"Starting song playback: {song_name}{vol_label}"
         except Exception as e:
@@ -1352,6 +1354,7 @@ class StrandsAgent(Agent):
                 self.recognizer.set_music_playing(True)
 
             self.executor.submit(self.youtube_music.play_playlist, playlist_name, volume=volume)
+            self.youtube_music.set_mpv_volume(80)
             vol_label = f" at {volume}%" if volume is not None else ""
             return f"Starting playlist: {playlist_name}{vol_label}"
         except Exception as e:
@@ -1367,6 +1370,7 @@ class StrandsAgent(Agent):
                 self.recognizer.set_music_playing(True)
 
             self.executor.submit(self.youtube_music.play_all_artist_tracks, artist_name, volume)
+            self.youtube_music.set_mpv_volume(80)
             vol_label = f" at {volume}%" if volume is not None else ""
             return f"Starting artist playlist: {artist_name}{vol_label}"
         except Exception as e:
@@ -1553,5 +1557,5 @@ if __name__ == "__main__":
         }
     )
     my_pi_agent = StrandsAgent(model=model, session_id="pi_01")
-    response = my_pi_agent.process_user_command("i m getting bored what should i do")
+    response = my_pi_agent.process_user_command("search vivo x300 ultra price in web")
     print(response)

@@ -47,7 +47,7 @@ class ExaSearch:
         self.api_key = api_key or os.environ.get("EXA_API_KEY") 
         self.client = Exa(self.api_key)
 
-    def quick_search(self, query: str, lang: Optional[str] = None) -> str:
+    def quick_search(self, query: str) -> str:
         """Fast search returning concise text for voice assistants."""
         try:
             result = self.client.search(

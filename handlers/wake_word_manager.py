@@ -1,4 +1,5 @@
 import queue
+import re
 import sys
 import threading
 import time
@@ -22,23 +23,24 @@ class WakeWordManager:
     DEBUG_SCORES = True
     CUSTOM_MODEL_PATH = "/home/jubers/Documents/voice_assistant/Sofi_20260609_092546.onnx"
 
-    # Wakeword trigger
+    # Wakeword triggers
     WAKEWORD_DETECTION_THRESHOLD = 0.30
-    WAKEWORD_COOLDOWN_MS = 1500
+    WAKEWORD_COOLDOWN_MS = 500
 
     # VAD configuration
     FRAME_MS = 20  # must be 10, 20, or 30 for webrtcvad
-    VAD_AGGRESSIVENESS = 2
+    VAD_AGGRESSIVENESS = 3
     MIN_SPEECH_MS = 250
     MAX_COMMAND_MS = 6000
     PRE_ROLL_MS = 300
-
-    # Hybrid VAD + energy configuration
-    ENERGY_SILENCE_THRESHOLD = 0.010
-    ENERGY_END_MS = 650
+    MAX_SILENCE_MS = 1500
+    ENERGY_SILENCE_THRESHOLD = 0.008
+    NOISE_MULTIPLIER = 3.0
+    NOISE_CALIBRATION_SEC = 2
+    ENERGY_END_MS = 700
     VAD_RATIO_WINDOW_FRAMES = 12
-    VAD_END_RATIO = 0.20
-    HANGOVER_MS = 300
+    VAD_END_RATIO = 0.10
+    HANGOVER_MS = 80
 
     # Wakeword-trimming configuration for STT
     REMOVE_WAKEWORD_FROM_STT = True
@@ -63,7 +65,7 @@ class WakeWordManager:
         self.energy_threshold = energy_threshold
         self.confidence_threshold = confidence_threshold
         self.templates_dir = templates_dir
-
+        self.ambient_noise_floor = 0.003
         self.input_device_index = input_device_index
 
         self.audio_queue = queue.Queue(maxsize=1200)
@@ -89,6 +91,7 @@ class WakeWordManager:
 
         self.shared_state = None
         self.recognition_lock = threading.Lock()
+        self.is_recording = False
 
     def list_input_devices(self):
         print("Available input devices:")
@@ -159,6 +162,39 @@ class WakeWordManager:
             return 0.0
         return float(sum(recent_flags)) / float(len(recent_flags))
 
+    def _calibrate_noise_floor(self):
+        """
+        Measure ambient room noise before starting detection.
+        """
+        samples = []
+
+        print("[CAL] Measuring ambient noise... stay quiet")
+
+        start = time.time()
+
+        while time.time() - start < self.NOISE_CALIBRATION_SEC:
+            try:
+                chunk = self.audio_queue.get(timeout=0.1)
+
+                rms = float(
+                    np.sqrt(
+                        np.mean(chunk.astype(np.float32) ** 2)
+                    )
+                )
+
+                samples.append(rms)
+
+            except queue.Empty:
+                pass
+
+        if samples:
+            self.ambient_noise_floor = float(np.percentile(samples, 20))
+
+        print(
+            f"[CAL] Ambient floor={self.ambient_noise_floor:.6f}",
+            f"Current={rms:.5f}"
+        )
+
     def _remove_wakeword_from_segment(self, segment_float32, first_hit_end_sample):
         if (
             not self.REMOVE_WAKEWORD_FROM_STT
@@ -195,6 +231,8 @@ class WakeWordManager:
         finally:
             if self.recognition_lock.locked():
                 self.recognition_lock.release()
+                if self.pixel_led:
+                    self.pixel_led.off()
 
     def _distributor_loop(self, frame_size):
         while not self.stop_event.is_set():
@@ -281,6 +319,7 @@ class WakeWordManager:
         hangover_ms_left = 0.0
         recent_flags = deque(maxlen=max(self.VAD_RATIO_WINDOW_FRAMES, 35))
         trigger_offset_samples = None
+        recording_elapsed_ms = 0.0
 
         while not self.stop_event.is_set():
             try:
@@ -292,7 +331,11 @@ class WakeWordManager:
             is_speech = vad.is_speech(frame_bytes, self.SAMPLE_RATE)
             recent_flags.append(1 if is_speech else 0)
 
-            peak = float(np.max(np.abs(chunk))) if len(chunk) > 0 else 0.0
+            rms = float(
+            np.sqrt(
+                np.mean(chunk.astype(np.float32) ** 2)
+                )
+            )
             vad_ratio = self._recent_vad_ratio(recent_flags)
 
             if is_speech:
@@ -307,36 +350,49 @@ class WakeWordManager:
                         trigger_global_sample = self.shared_state["trigger_global_sample"]
 
                     recording = True
+                    self.is_recording = True
                     speech_buffer = ring_chunks[-max(1, int(self.PRE_ROLL_MS / chunk_ms)):]
                     speech_buffer.append(chunk)
                     speech_ms = (sum(len(ch) for ch in speech_buffer) / self.SAMPLE_RATE) * 1000.0
+                    recording_elapsed_ms = 0.0
                     silence_ms = 0.0
                     hangover_ms_left = self.HANGOVER_MS
 
                     segment_start_global = global_samples - sum(len(ch) for ch in speech_buffer)
                     trigger_offset_samples = max(0, trigger_global_sample - segment_start_global)
-                    print(f"\n[VAD START] peak={peak:.3f} vad_ratio={vad_ratio:.2f}")
+                    print(f"\n[VAD START] peak={rms:.3f} vad_ratio={vad_ratio:.2f}")
                 continue
 
             speech_buffer.append(chunk)
             speech_ms += chunk_ms
 
-            if peak < self.ENERGY_SILENCE_THRESHOLD and vad_ratio <= self.VAD_END_RATIO and hangover_ms_left <= 0.0:
+            silence_threshold = max(
+                self.ambient_noise_floor * self.NOISE_MULTIPLIER,
+                self.ENERGY_SILENCE_THRESHOLD
+            )
+
+            is_energy_silent = rms < silence_threshold
+
+            if (
+                is_energy_silent
+                and vad_ratio <= self.VAD_END_RATIO
+                and hangover_ms_left <= 0.0
+            ):
                 silence_ms += chunk_ms
             else:
                 silence_ms = 0.0
 
             end_by_energy = silence_ms >= self.ENERGY_END_MS and speech_ms >= self.MIN_SPEECH_MS
             end_by_max = speech_ms >= self.MAX_COMMAND_MS
-
+            end_by_long_silence = silence_ms >= self.MAX_SILENCE_MS
             if self.DEBUG_SCORES:
                 print(
-                    f"[REC] peak={peak:.3f} vad={int(is_speech)} vad_ratio={vad_ratio:.2f} "
-                    f"speech_ms={speech_ms:.0f} silence_ms={silence_ms:.0f}",
-                    end="\r",
+                f"[REC] rms={rms:.5f} "
+                f"noise={self.ambient_noise_floor:.5f} "
+                f"thr={silence_threshold:.5f} "
                 )
 
-            if end_by_energy or end_by_max:
+            if end_by_energy or end_by_max or end_by_long_silence:
                 end_reason = "energy_silence" if end_by_energy else "max_len"
                 segment = np.concatenate(speech_buffer).astype(np.float32)
                 print(f"\n[VAD END] duration={len(segment)/self.SAMPLE_RATE:.2f}s, reason={end_reason}")
@@ -353,8 +409,10 @@ class WakeWordManager:
                 silence_ms = 0.0
                 hangover_ms_left = 0.0
                 trigger_offset_samples = None
+                recording_elapsed_ms = 0.0
+                self.is_recording = False
                 self.shared_state["wakeword_event"].clear()
-
+                recent_flags.clear()
     def start_detection(self, process_command_callback=None):
         if self.detection_running:
             print("[WWD] Detection already running")
@@ -385,7 +443,7 @@ class WakeWordManager:
 
         self.stream = self._create_input_stream(frame_size)
         self.stream.start()
-
+        self._calibrate_noise_floor()
         distributor = threading.Thread(target=self._distributor_loop, args=(frame_size,), daemon=True)
         wake_thread = threading.Thread(target=self._wakeword_loop, daemon=True)
         vad_thread = threading.Thread(target=self._vad_capture_loop, daemon=True)
@@ -417,3 +475,4 @@ class WakeWordManager:
         self.threads = []
 
         print("[WWD] Threaded detection stopped")
+

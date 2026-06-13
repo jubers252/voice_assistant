@@ -100,7 +100,7 @@ class VoiceAssistant:
     
     def _setup_recognizer(self, recognizer):
         """Configure speech recognizer"""
-        recognizer.energy_threshold = 300
+        recognizer.energy_threshold = 200
         recognizer.dynamic_energy_threshold = True
         recognizer.pause_threshold = 1.2
         recognizer.phrase_threshold = 0.3
