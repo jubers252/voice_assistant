@@ -12,8 +12,8 @@ import concurrent.futures
 import queue
 import speech_recognition as sr
 # Ensure project root is in path when running this file directly
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# import sys
+# sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import time
@@ -39,7 +39,7 @@ from connectors.amzon_connector import get_amazon_result
 from connectors.amazon_order_tracker import get_order
 from connectors.spotify_connector import SpotifyConnector
 from connectors.search_engine import ExaSearch
-from connectors.telegram_bot import TelegramBot
+# from connectors.telegram_bot import TelegramBot
 from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
@@ -69,14 +69,13 @@ class StrandsAgent(Agent):
         self.volume_control = VolumeController()
         self.spotify_connector = SpotifyConnector(None)
         self.exa_search_connector = ExaSearch()
-        self.telegram_bot = TelegramBot()
+        # self.telegram_bot = TelegramBot()
         self.reminder_manager = ReminderManager()
         self.bigbasket_tools = BigBasketTools()
         self.zepto_db = ZeptoOrderDatabase()
         self.home_automation = HomeAutomation()
         self.youtube_music = MusicPlayer()
-        self.audio_processors = audio_processors
-        self.audio_processors = AudioProcessors()
+        self.audio_processors = audio_processors or AudioProcessors()
       
         self.pixel_led = pixel_led
         if self.audio_processors:
@@ -136,10 +135,10 @@ class StrandsAgent(Agent):
                 self._create_list_reminders_tool,
                 self._create_cancel_reminder_tool,
                 self._create_check_reminders_tool,
-                self._create_telegram_message_tool,
-                self._create_telegram_photo_tool,
-                self._create_telegram_document_tool,
-                self._create_telegram_video_tool,
+                # self._create_telegram_message_tool,
+                # self._create_telegram_photo_tool,
+                # self._create_telegram_document_tool,
+                # self._create_telegram_video_tool,
                 self._create_volume_control_tool,
                 self._zepto_ordering_tool,
                 self._create_zepto_order_history_tool,

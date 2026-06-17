@@ -14,7 +14,7 @@ from collections import deque
 from contextlib import contextmanager
 from langdetect import detect
 import re
-import azure.cognitiveservices.speech as speechsdk
+from audio.google_tts import generate_speech_with_auto_detect
 # For Hindi transliteration
 
 
@@ -128,17 +128,6 @@ class AudioProcessors:
         """Set pixel LED controller for visual feedback during speech"""
         self.pixel_led = pixel_led
     
-    def set_audio_buffer(self, buffer, buffer_lock):
-        """Set external audio buffer for the callback to use
-        
-        Args:
-            buffer: The deque buffer to store audio data
-            buffer_lock: Threading lock for the buffer
-        """
-        self._external_buffer = buffer
-        self._external_buffer_lock = buffer_lock
-        print(f"External audio buffer configured with capacity: {buffer.maxlen}")
-    
     # Function to record audio (from test_cnn_model.py)
     def record_audio(self, duration, sample_rate, save_path=None, device=None):
         """Record audio with INMP441 support and ALSA error suppression"""
@@ -211,16 +200,6 @@ class AudioProcessors:
             self.stop_speech()
             time.sleep(0.1)  # Brief pause to ensure cleanup
         
-        if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
-            try:
-                with self._external_buffer_lock:
-                    self._external_buffer.clear()
-                    if self.debug_mode:
-                        print("Audio buffer cleared before TTS to prevent false wake word triggers")
-            except Exception as e:
-                if self.debug_mode:
-                    print(f"Warning: Could not clear audio buffer: {e}")
-        
         # Reset interruption flag
         self.speech_interrupted = False
         
@@ -236,74 +215,16 @@ class AudioProcessors:
         # Call speak logic directly (executor handles threading)
         self._speak_threaded(text, prompt, lang)
 
-    def generate_and_play_azure_tts(self, text, speech_file_path=None, lang="en"):
-        """Generate speech with Azure TTS and save to file for playback control.
-        
-        Returns the path to the generated file on success, or None on failure.
-        """
-        start_time = time.time()
-        
-        try:
-            # Get Azure credentials from environment
-            azure_key = os.getenv("tts_key")
-            azure_region = os.getenv("tts_region", "centralindia")
-            
-            if not azure_key:
-                raise ValueError("Azure TTS key not found in environment (tts_key)")
-            
-            if not speech_file_path:
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-                speech_file_path = tmp.name
-                tmp.close()
-            
-            # Select voice based on language
-            if lang == "hi":
-                voice_name = "hi-IN-AartiNeural"
-            else:
-                voice_name =  "en-IN-AartiNeural"
-            
-            # Create Azure speech config
-            azure_config = speechsdk.SpeechConfig(subscription=azure_key, region=azure_region)
-            azure_config.speech_synthesis_voice_name = voice_name
-            
-            # Output to file for playback control (supports interruption)
-            audio_config = speechsdk.audio.AudioOutputConfig(filename=speech_file_path)
-            
-            # Create synthesizer
-            synthesizer = speechsdk.SpeechSynthesizer(speech_config=azure_config, audio_config=audio_config)
-            
-            print(f"Generating Azure TTS (voice={voice_name}, lang={lang})")
-            
-            # Synthesize speech to file
-            result = synthesizer.speak_text_async(text).get()
-            
-            # Check result
-            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                generation_time = time.time() - start_time
-                print(f"Azure TTS generation took: {generation_time:.2f} seconds -> {speech_file_path}")
-                return speech_file_path
-            elif result.reason == speechsdk.ResultReason.Canceled:
-                cancellation_details = result.cancellation_details
-                print(f"Azure TTS canceled: {cancellation_details.reason}")
-                if cancellation_details.error_details:
-                    print(f"Error details: {cancellation_details.error_details}")
-                return None
-            
-        except Exception as e:
-            print(f"Azure TTS error: {e}")
-            return None
-
     def _generate_and_play_simple(self, text, prompt=None, lang="en"):
-        """Generate speech with Azure TTS and play with pygame or system command for interruption support."""
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        """Generate speech and play with pygame or system command for interruption support."""
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
         tmp_file_path = tmp_file.name
         tmp_file.close()
 
         try:
-            # Generate Azure TTS to file
-            gen_path = self.generate_and_play_azure_tts(text, speech_file_path=tmp_file_path, lang=lang)
+            gen_path = generate_speech_with_auto_detect(text, output_filename=tmp_file_path)
             if not gen_path:
-                raise RuntimeError('Azure TTS generation failed')
+                raise RuntimeError('TTS generation failed')
 
             # Play audio with pygame (supports interruption via stop_speech)
             if os.path.exists(tmp_file_path):
@@ -331,16 +252,17 @@ class AudioProcessors:
                 if not played:
                     try:
                         import subprocess
-                        # Try aplay first (default on RPi), then paplay (PulseAudio)
-                        for cmd in ['aplay', 'paplay']:
+                        # Try MP3-capable players first, then raw/system fallbacks.
+                        for cmd in ['mpg123', 'mpg321', 'mpv', 'ffplay', 'paplay', 'aplay']:
                             result = subprocess.run(['which', cmd], capture_output=True)
                             if result.returncode == 0:
-                                subprocess.Popen([cmd, tmp_file_path]).wait()
+                                player_cmd = [cmd, '-nodisp', '-autoexit', tmp_file_path] if cmd == 'ffplay' else [cmd, tmp_file_path]
+                                subprocess.Popen(player_cmd).wait()
                                 played = True
                                 break
                         
                         if not played:
-                            print("No audio player found (aplay/paplay)")
+                            print("No audio player found")
                     except Exception as sys_error:
                         print(f"System audio playback also failed: {sys_error}")
             else:
@@ -498,36 +420,3 @@ class AudioProcessors:
         except Exception as e:
             print(f"Error playing beep: {e}")
             self._system_beep()
-
-
-
-    def audio_callback(self, indata, frames, time_info, status):
-        """Audio callback function - stores raw audio to buffer.
-        
-        All detection logic (VAD or pipeline) happens during processing.
-        """
-        if status:
-            print(f"Audio callback status: {status}")
-        
-        if indata is None or len(indata) == 0:
-            return
-
-        try:
-            # Average both stereo channels
-            if indata.ndim > 1 and indata.shape[1] == 2:
-                audio_samples = np.mean(indata, axis=1)
-            else:
-                audio_samples = indata[:, 0]
-        except Exception:
-            audio_samples = indata.flatten()
-        
-        # Store raw audio in buffer
-        if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
-            try:
-                with self._external_buffer_lock:
-                    self._external_buffer.extend(audio_samples)
-            except Exception:
-                pass
-
-        
- 

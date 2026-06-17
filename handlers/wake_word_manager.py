@@ -24,12 +24,12 @@ class WakeWordManager:
     CUSTOM_MODEL_PATH = "/home/jubers/Documents/voice_assistant/Sofi_20260609_092546.onnx"
 
     # Wakeword triggers
-    WAKEWORD_DETECTION_THRESHOLD = 0.30
+    WAKEWORD_DETECTION_THRESHOLD = 0.40
     WAKEWORD_COOLDOWN_MS = 500
 
     # VAD configuration
     FRAME_MS = 20  # must be 10, 20, or 30 for webrtcvad
-    VAD_AGGRESSIVENESS = 3
+    VAD_AGGRESSIVENESS = 2
     MIN_SPEECH_MS = 250
     MAX_COMMAND_MS = 6000
     PRE_ROLL_MS = 300
