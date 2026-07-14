@@ -14,7 +14,8 @@ from collections import deque
 from contextlib import contextmanager
 from langdetect import detect
 import re
-from audio.google_tts import generate_speech_with_auto_detect
+from audio.azure_tts import generate_azure_tts
+from audio.google_tts import google_detect_language, PROJECT_ID
 # For Hindi transliteration
 
 
@@ -202,14 +203,20 @@ class AudioProcessors:
         
         # Reset interruption flag
         self.speech_interrupted = False
-        
-        # Detect language - if Hindi characters found, use Hindi
-        lang = 'en'
+
+        # Detect language using Google detection (fallback to local detection)
+        lang = "en"
         hindi_pattern = r'[\u0900-\u097F]'  # Hindi Unicode range
         if re.search(hindi_pattern, text):
-            lang = 'hi'
+            lang = "hi"
         else:
-            lang = detect(text) if text.strip() else 'en'
+            if text.strip():
+                try:
+                    detected_lang = google_detect_language(text, PROJECT_ID)
+                    # Azure mapping currently supports Hindi/English in this project.
+                    lang = "hi" if detected_lang.startswith("hi") else "en"
+                except Exception:
+                    lang = detect(text) if text.strip() else "en"
                 
         print(f"Final TTS text (lang={lang}): {text}")
         # Call speak logic directly (executor handles threading)
@@ -217,12 +224,12 @@ class AudioProcessors:
 
     def _generate_and_play_simple(self, text, prompt=None, lang="en"):
         """Generate speech and play with pygame or system command for interruption support."""
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp_file_path = tmp_file.name
         tmp_file.close()
 
         try:
-            gen_path = generate_speech_with_auto_detect(text, output_filename=tmp_file_path)
+            gen_path = generate_azure_tts(text, speech_file_path=tmp_file_path, lang=lang)
             if not gen_path:
                 raise RuntimeError('TTS generation failed')
 

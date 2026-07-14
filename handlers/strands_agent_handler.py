@@ -164,6 +164,28 @@ class StrandsAgent(Agent):
         self._agent_lock = threading.Lock()  # Prevent concurrent LLM calls (not thread-safe)
         self._last_follow_up_question = ""
         self._last_follow_up_question_at = 0.0
+        self.session_id = session_id
+        self.repo = repo
+
+
+    def switch_session(self, new_session_id: str):
+        """Switch to a different user session.
+
+        Args:
+            new_session_id: Unique identifier for the new user session
+        """
+        self.session_id = new_session_id
+        print(f"[AGENT] Session switched to: {new_session_id}")
+
+        # Create new session manager with the new session ID
+        new_session_manager = RepositorySessionManager(
+            session_id=new_session_id,
+            session_repository=self.repo
+        )
+
+        # Update the parent Agent's session manager
+        self.session_manager = new_session_manager
+        self._last_follow_up_question_at = 0.0
      
 
     def _normalize_text(self, text: str) -> str:
@@ -191,6 +213,30 @@ class StrandsAgent(Agent):
 
         similarity = difflib.SequenceMatcher(None, current, previous).ratio()
         return similarity >= 0.68
+
+
+    def _augment_command_with_speaker_hint(self, user_command: str) -> str:
+        """Add explicit runtime hint for likely speaker from camera context block."""
+        if "[CAMERA_CONTEXT]" not in user_command:
+            return user_command
+
+        likely_speaker = None
+        for line in user_command.splitlines():
+            normalized = line.strip().lower()
+            if normalized.startswith("likely_speaker:"):
+                value = line.split(":", 1)[1].strip()
+                if value and value.lower() != "unknown":
+                    likely_speaker = value
+                break
+
+        if not likely_speaker:
+            return user_command
+
+        return (
+            f"{user_command}\n"
+            f"Speaker identity hint: {likely_speaker} is likely speaking now. "
+            "Use this as context for personalization and continuity."
+        )
 
 
     def _setup_zepto_loop(self):
@@ -1496,7 +1542,8 @@ class StrandsAgent(Agent):
                     self.pixel_led.set_processing()
 
                 # Use the current agent instance and the actual user command.
-                raw_response = self(user_command)
+                effective_command = self._augment_command_with_speaker_hint(user_command)
+                raw_response = self(effective_command)
 
                 if isinstance(raw_response, dict):
                     response_text = raw_response.get("response") or str(raw_response)
