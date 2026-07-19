@@ -51,7 +51,7 @@ class VoiceAssistant:
 
 
     def _initialize_hardware(self):
-        self.pixel_led = PixelLEDController(led_count=6, brightness=1.0, simulate=False)
+        self.pixel_led = PixelLEDController(led_count=26, brightness=1.0, simulate=False)
         self.pixel_led.off()
 
 

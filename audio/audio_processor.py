@@ -222,6 +222,16 @@ class AudioProcessors:
         # Call speak logic directly (executor handles threading)
         self._speak_threaded(text, prompt, lang)
 
+    def _get_audio_duration(self, file_path):
+        """Get audio duration in seconds using soundfile"""
+        try:
+            data, samplerate = sf.read(file_path)
+            duration = len(data) / samplerate
+            return duration
+        except Exception as e:
+            print(f"Could not determine audio duration: {e}")
+            return None
+
     def _generate_and_play_simple(self, text, prompt=None, lang="en"):
         """Generate speech and play with pygame or system command for interruption support."""
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
@@ -229,77 +239,141 @@ class AudioProcessors:
         tmp_file.close()
 
         try:
+            print(f"[TTS] Starting Azure TTS generation for text: {text[:50]}...")
             gen_path = generate_azure_tts(text, speech_file_path=tmp_file_path, lang=lang)
             if not gen_path:
+                print("[TTS] ERROR: Azure TTS generation returned None")
                 raise RuntimeError('TTS generation failed')
+
+            print(f"[TTS] Audio generated at: {gen_path}")
 
             # Play audio with pygame (supports interruption via stop_speech)
             if os.path.exists(tmp_file_path):
+                # Get audio duration for better playback monitoring
+                audio_duration = self._get_audio_duration(tmp_file_path)
+                print(f"[TTS] Audio duration: {audio_duration} seconds")
+                
+                if audio_duration is None or audio_duration <= 0:
+                    print("[TTS] WARNING: Could not determine audio duration or file is empty")
+                
                 played = False
                 try:
                     # Ensure mixer is initialized
                     if not pygame.mixer.get_init():
                         self._init_pygame_mixer()
                     
+                    print("[TTS] Loading audio file into pygame mixer...")
                     pygame.mixer.music.load(tmp_file_path)
                     pygame.mixer.music.set_volume(0.8)
                     pygame.mixer.music.play()
+                    print("[TTS] Audio playback started, monitoring until completion...")
+                    
+                    # Small delay to ensure audio playback has actually started
+                    time.sleep(0.1)
 
                     # Play while monitoring for interruption
-                    while pygame.mixer.music.get_busy() and not self.speech_interrupted:
+                    # Use audio duration as fallback if known
+                    start_time = time.time()
+                    min_wait_time = 0.5  # Minimum wait even if pygame reports done
+                    
+                    if audio_duration and audio_duration > 0:
+                        # Add buffer (300ms) to account for initialization delays
+                        timeout = max(audio_duration + 0.3, min_wait_time)
+                    else:
+                        timeout = 120  # 2-minute fallback max
+                    
+                    print(f"[TTS] Monitoring playback with timeout: {timeout:.2f}s")
+                    
+                    # Keep playing until either:
+                    # 1. pygame reports music is not busy AND min_wait_time has passed
+                    # 2. OR we reach the timeout based on audio duration
+                    # 3. OR user interrupts
+                    while not self.speech_interrupted:
+                        elapsed = time.time() - start_time
+                        is_busy = pygame.mixer.music.get_busy()
+                        time_ok = elapsed >= min_wait_time if audio_duration else elapsed < timeout
+                        
+                        if not is_busy and time_ok:
+                            print(f"[TTS] Playback complete after {elapsed:.2f}s")
+                            break
+                        elif elapsed >= timeout:
+                            print(f"[TTS] Timeout reached after {elapsed:.2f}s")
+                            break
+                        
                         time.sleep(0.1)
 
                     pygame.mixer.music.stop()
                     played = True
+                    print("[TTS] Pygame playback stopped cleanly")
                 except Exception as pygame_error:
-                    print(f"Pygame audio failed: {pygame_error}")
+                    print(f"[TTS] Pygame audio failed: {pygame_error}")
                     print("Falling back to system audio playback...")
                 
                 # Fallback: Use system command to play audio
                 if not played:
                     try:
                         import subprocess
+                        print("[TTS] Attempting fallback system player...")
                         # Try MP3-capable players first, then raw/system fallbacks.
                         for cmd in ['mpg123', 'mpg321', 'mpv', 'ffplay', 'paplay', 'aplay']:
                             result = subprocess.run(['which', cmd], capture_output=True)
                             if result.returncode == 0:
+                                print(f"[TTS] Using system player: {cmd}")
                                 player_cmd = [cmd, '-nodisp', '-autoexit', tmp_file_path] if cmd == 'ffplay' else [cmd, tmp_file_path]
                                 subprocess.Popen(player_cmd).wait()
                                 played = True
+                                print(f"[TTS] System playback completed with {cmd}")
                                 break
                         
                         if not played:
-                            print("No audio player found")
+                            print("[TTS] No audio player found")
                     except Exception as sys_error:
-                        print(f"System audio playback also failed: {sys_error}")
+                        print(f"[TTS] System audio playback also failed: {sys_error}")
             else:
                 print(f"[ERROR] Generated file not found: {tmp_file_path}")
 
         except Exception as e:
-            print(f"TTS error: {e}")
+            print(f"[TTS] TTS error: {e}")
         finally:
             # Clean up temp file
             try:
                 if os.path.exists(tmp_file_path):
                     time.sleep(0.2)
                     os.unlink(tmp_file_path)
+                    print(f"[TTS] Cleaned up temp file: {tmp_file_path}")
+            except Exception:
+                pass
             except Exception:
                 pass
     
     
     def _speak_threaded(self, text, prompt, lang="en"):
-        """Threaded speech function with interruption support and improved Hindi processing"""
+        """Threaded speech function with interruption support and improved Hindi processing
+        
+        Ensures LED stays on throughout audio generation and playback.
+        """
         self.is_speaking = True
         self.speech_interrupted = False
         
         # Set LED to green when starting to speak
         if self.pixel_led:
             self.pixel_led.set_speaking()
+            print("[LED] Green light ON - starting audio generation and playback")
         
         try:
             print(f"Speaking with TTS (lang={lang}): {text}")
             # Call the unified generation/play function with language
+            # This will now properly monitor audio playback duration
             self._generate_and_play_simple(text, prompt=prompt, lang=lang)
+            
+            # Give audio a moment to fully complete
+            if pygame.mixer.get_init():
+                # Wait a bit more for pygame to fully stop
+                max_wait = 0.5
+                wait_count = 0
+                while pygame.mixer.music.get_busy() and wait_count < 5:
+                    time.sleep(0.1)
+                    wait_count += 1
                 
         except Exception as e:
             print(f"Edge TTS failed: {e}")
@@ -308,6 +382,7 @@ class AudioProcessors:
             # Turn off LED when done speaking
             if self.pixel_led:
                 self.pixel_led.off()
+                print("[LED] Green light OFF - audio playback completed")
     
 
     

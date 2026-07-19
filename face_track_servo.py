@@ -217,6 +217,62 @@ class FaceTrackServo:
         
         return pan_cmd, tilt_cmd
     
+    def move_pan_to_angle(self, angle):
+        """
+        Move pan motor to a specific angle.
+        
+        Args:
+            angle: Target pan angle in degrees (-MAX_ANGLE_LIMIT to +MAX_ANGLE_LIMIT)
+        
+        Returns:
+            The actual angle commanded to the servo
+        """
+        if not self.initialized:
+            return None
+        
+        # Clamp angle to limits
+        pan_cmd = max(-MAX_ANGLE_LIMIT, min(MAX_ANGLE_LIMIT, angle))
+        
+        # Command servo
+        self.pan_pwm.change_duty_cycle(self.angle_to_duty_cycle(pan_cmd))
+        
+        # Update last commanded angle
+        self.last_pan_angle = pan_cmd
+        
+        # Clear smoothing buffer to avoid stale history
+        self.pan_angle_buffer.clear()
+        self.pan_angle_buffer.append(pan_cmd)
+        
+        if self.verbose:
+            print(f"Pan moved to: {pan_cmd:6.2f}°")
+        
+        return pan_cmd
+    
+    def move_pan_from_sensor(self, x, y, scale=1.0):
+        """
+        Move pan motor based on sensor X, Y coordinates.
+        
+        Calculates angle from atan2(x, y) and applies optional scaling.
+        Useful for RD03D or similar presence sensors that output XY coords.
+        
+        Args:
+            x: Sensor X coordinate (in sensor units)
+            y: Sensor Y coordinate (in sensor units)
+            scale: Scale factor to apply to the calculated angle (default: 1.0)
+                   Use scale < 1.0 to reduce sensitivity, > 1.0 to increase
+        
+        Returns:
+            The actual angle commanded to the servo
+        """
+        if not self.initialized or y == 0:
+            return None
+        
+        # Calculate angle from sensor coordinates (same as RD03D sensor logic)
+        angle = math.degrees(math.atan2(x, y)) * scale
+        
+        # Use the standard move method
+        return self.move_pan_to_angle(angle)
+    
     def center(self):
         """Return servos to the calibrated neutral position."""
         if self.initialized:
@@ -264,21 +320,22 @@ if __name__ == "__main__":
     
     try:
         print("\nTest 1: Face at screen center")
-        bbox = {'x': 280, 'y': 200, 'width': 80, 'height': 80}
-        tracker.track_face(bbox)
-        time.sleep(1)
+        # bbox = {'x': 280, 'y': 200, 'width': 80, 'height': 80}
+        # tracker.track_face(bbox)
+        # time.sleep(1)
         
-        print("\nTest 2: Face at top-right")
-        bbox = {'x': 450, 'y': 100, 'width': 80, 'height': 80}
-        for _ in range(5):
-            tracker.track_face(bbox)
-            time.sleep(0.1)
+        # print("\nTest 2: Face at top-right")
+        # bbox = {'x': 450, 'y': 100, 'width': 80, 'height': 80}
+        # for _ in range(5):
+        #     tracker.track_face(bbox)
+        #     time.sleep(0.1)
         
-        print("\nTest 3: Face at bottom-left")
-        bbox = {'x': 100, 'y': 350, 'width': 80, 'height': 80}
-        for _ in range(5):
-            tracker.track_face(bbox)
-            time.sleep(0.1)
+        # print("\nTest 3: Face at bottom-left")
+        # bbox = {'x': 100, 'y': 350, 'width': 80, 'height': 80}
+        # for _ in range(5):
+        #     tracker.track_face(bbox)
+        tracker.move_pan_to_angle(30)
+        time.sleep(0.1)
         
         print("\nTest 4: Return to center")
         tracker.center()

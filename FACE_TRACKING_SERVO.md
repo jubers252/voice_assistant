@@ -1,188 +1,196 @@
 # Face Tracking with Pan/Tilt Servo
 
-This system integrates face/hand detection with real-time pan/tilt servo control to track detected faces on screen.
+This setup uses MediaPipe face detection plus hardware PWM pan/tilt control to keep the first detected face near the center of a 640x480 frame.
 
-## Files
+## Relevant Files
 
-1. **face_track_servo.py** - Core servo control module
-   - Converts bounding box coordinates to pan/tilt angles
-   - Smooths servo movements to avoid jitter
-   - Provides rate limiting for smooth tracking
-   
-2. **hand_detection_with_servo.py** - Face detection + servo tracking
-   - Extended version of `hand_detection.py` with servo integration
-   - Tracks faces in real-time and commands servos accordingly
-   - Still detects hands and gestures as before
+1. **face_track_servo.py**
+   - Converts a detected face bounding box into pan and tilt corrections
+   - Applies smoothing, rate limiting, and small-angle hysteresis
+   - Exposes `initialize()`, `track_face()`, `center()`, and `stop()`
 
-3. **test_servo.py** - Updated with tilt motor integration
-   - Wave motion mode (synchronized pan/tilt)
-   - Step motion mode (tilt up/down)
+2. **hand_detection_with_servo.py**
+   - Starts the camera stream and runs the MediaPipe detection loop
+   - Tracks the first detected face when servo tracking is enabled
+   - Re-centers the servos when no face is detected
+   - Keeps hand detection optional and disabled by default
 
-## How It Works
+3. **test_servo.py**
+   - Simple pan/tilt hardware motion test
+   - Useful for confirming PWM wiring and basic servo movement before using tracking
 
-### Bounding Box → Servo Angle Conversion
+## Current Tracking Behavior
 
+The active control flow in `face_track_servo.py` is:
+
+```text
+bounding box
+  -> compute face center
+  -> compare against frame center (320, 240)
+  -> apply separate deadzones for pan and tilt
+  -> convert pixel offset to angle delta
+  -> add delta to the last commanded servo angle
+  -> smooth using a 7-sample moving average
+  -> clamp per-update movement to 5 degrees
+  -> ignore changes smaller than 1.5 degrees
+  -> send PWM duty cycle update
 ```
-Screen coordinates (0, 0) at top-left, (640, 480) at bottom-right
-        ↓
-Calculate offset from screen center (320, 240)
-        ↓
-Convert pixel offset to degrees based on calibration
-        ↓
-Apply smoothing filter (5-frame moving average)
-        ↓
-Limit angle change rate (max 3° per frame)
-        ↓
-Command servo with computed angle
-```
 
-### Configuration
+Important detail: when the face is already within the deadzone, the tracker holds the current angle. It does not slowly drift back to neutral unless `center()` is called explicitly.
 
-Edit `face_track_servo.py` constants to adjust behavior:
+## Servo Configuration
+
+These are the current values in `face_track_servo.py`:
 
 ```python
-# Screen dimensions
+MAX_ANGLE_LIMIT = 70
+PAN_SERVO_CHANNEL = 0
+TILT_SERVO_CHANNEL = 1
+PWM_FREQUENCY = 50
+CHIP = 0
+
+PAN_NEUTRAL_ANGLE = 0
+TILT_NEUTRAL_ANGLE = 50
+
 SCREEN_WIDTH = 640
 SCREEN_HEIGHT = 480
 
-# Smoothing window (frames to average)
-SMOOTHING_WINDOW = 5
+SMOOTHING_WINDOW = 7
+DEADZONE_PAN = 50
+DEADZONE_TILT = 70
+MAX_ANGLE_DELTA = 5
 
-# Dead zone (ignore small movements in pixels)
-DEADZONE = 20
-
-# Max angle change per update (degrees)
-MAX_ANGLE_DELTA = 3
-
-# Angle-to-screen mapping (degrees per pixel)
 PAN_DEG_PER_PIXEL = 70.0 / (SCREEN_WIDTH // 2)
 TILT_DEG_PER_PIXEL = 70.0 / (SCREEN_HEIGHT // 2)
-
-# Center offset corrections
-PAN_CENTER_OFFSET = 0.0
-TILT_CENTER_OFFSET = 0.0
 ```
 
-## Usage
+Notes:
 
-### Option 1: Simple Face Tracking
+- Tilt neutral is intentionally offset to `50`, so the mounted camera points correctly at rest.
+- Pan and tilt use separate deadzones because vertical jitter is usually worse than horizontal jitter.
+- Angle commands are clamped to `-70` to `+70` before converting to PWM duty cycle.
+
+## Basic Usage
 
 ```python
 from face_track_servo import FaceTrackServo
 
 tracker = FaceTrackServo(verbose=True)
-tracker.initialize()
 
-# Track a face at given screen position
-bbox = {
-    'x': 300,      # left edge (pixels)
-    'y': 150,      # top edge (pixels)
-    'width': 100,  # bounding box width
-    'height': 120  # bounding box height
-}
+if tracker.initialize():
+        bbox = {
+                'x': 300,
+                'y': 150,
+                'width': 100,
+                'height': 120,
+        }
 
-pan_angle, tilt_angle = tracker.track_face(bbox)
+        pan_angle, tilt_angle = tracker.track_face(bbox)
 
-# Center servos when no face detected
-tracker.center()
-
-# Cleanup
-tracker.stop()
+        # Explicitly return to neutral mount position when needed.
+        tracker.center()
+        tracker.stop()
 ```
 
-### Option 2: Real-time Face Detection with Servo
+`track_face()` expects a dictionary with `x`, `y`, `width`, and `height` in pixels. If the tracker is not initialized, it returns `(None, None)`.
+
+## Integrated Detection Mode
+
+Run the full detector plus servo pipeline with:
 
 ```bash
 python hand_detection_with_servo.py
 ```
 
-This runs the full pipeline:
-- Captures video stream
-- Detects faces using MediaPipe
-- Automatically tracks the first detected face with servos
-- Still detects hand gestures
-- Press 'q' to quit
+Current runtime behavior:
 
-### Option 3: Singleton Access
+- The camera stream is started with `rpicam-vid` at 640x480 and 30 FPS.
+- Face detection runs every 2 frames.
+- MediaPipe face detection uses `min_detection_confidence=0.6`.
+- The first detected face is passed to `FaceTrackServo.track_face()`.
+- If no face is detected on a detection cycle, `servo_tracker.center()` is called.
+- Hand detection support exists, but `DETECT_HANDS` is currently `False` by default.
+
+## Singleton Access
 
 ```python
 from face_track_servo import get_tracker
 
-# Get global tracker instance
 tracker = get_tracker()
-tracker.initialize()
 
-bbox = {'x': 320, 'y': 240, 'width': 80, 'height': 80}
-tracker.track_face(bbox)
+if tracker.initialize():
+        tracker.track_face({'x': 320, 'y': 240, 'width': 80, 'height': 80})
 ```
 
-## Calibration Tips
+## Calibration Guidance
 
-### If servo over-corrects:
-- Reduce `MAX_ANGLE_DELTA` (slower movement)
-- Increase `SMOOTHING_WINDOW` (more averaging)
+If tracking is too aggressive:
 
-### If servo under-corrects:
+- Reduce `MAX_ANGLE_DELTA`
+- Increase `SMOOTHING_WINDOW`
+- Increase `DEADZONE_PAN` or `DEADZONE_TILT`
+
+If tracking reacts too slowly:
+
 - Increase `MAX_ANGLE_DELTA`
 - Reduce `SMOOTHING_WINDOW`
+- Reduce the deadzone values carefully
 
-### If servo drifts from center:
-- Adjust `PAN_CENTER_OFFSET` or `TILT_CENTER_OFFSET`
-- Positive values rotate toward higher angles
-- Negative values rotate toward lower angles
+If the camera points too high or too low at rest:
 
-### If small movements trigger servo jitter:
-- Increase `DEADZONE` (in pixels)
+- Adjust `TILT_NEUTRAL_ANGLE`
 
-### For wide/narrow tracking range:
-- Adjust `PAN_DEG_PER_PIXEL` and `TILT_DEG_PER_PIXEL`
-- These define how many degrees per pixel of screen movement
+If left/right centering is off at rest:
 
-## Hardware Setup
+- Adjust `PAN_NEUTRAL_ANGLE`
 
-### PWM Channels
-- Pan servo: PWM channel 0
-- Tilt servo: PWM channel 1
-- Both on 50Hz frequency
+If the tracker moves in the wrong direction:
 
-### Servo Angle Range
-- Min: -70°
-- Max: +70°
-- Center: 0°
+- Re-check servo mounting orientation
+- If needed, invert the sign in `pan_delta` or `tilt_delta`
+
+## Hardware Notes
+
+- Pan servo uses PWM channel `0`
+- Tilt servo uses PWM channel `1`
+- PWM runs at `50 Hz`
+- PWM chip is `0`
+- The module depends on `rpi_hardware_pwm`
+
+The current duty cycle mapping is based on:
+
+```python
+pulse_ms = 1.5 + (angle / 80.0) * 0.9
+duty_cycle = (pulse_ms / 20.0) * 100
+```
 
 ## Troubleshooting
 
-**Servo not responding:**
-- Check PWM channels and chip number
-- Verify hardware PWM is available
-- Test with `test_servo.py` first
+**Servo does not move**
 
-**Servo moving too jerkily:**
+- Check that hardware PWM is available on the Raspberry Pi
+- Verify the configured PWM channels match your wiring
+- Run `python test_servo.py` first to validate the hardware path
+
+**Servo jitters while the face is almost centered**
+
+- Increase `DEADZONE_PAN` or `DEADZONE_TILT`
 - Increase `SMOOTHING_WINDOW`
-- Reduce `MAX_ANGLE_DELTA`
-- Increase `DEADZONE`
+- Increase the 1.5 degree hysteresis threshold in `track_face()` if needed
 
-**Servo tracks behind face:**
-- Reduce `SMOOTHING_WINDOW` for faster response
+**Tracker keeps lagging behind the face**
+
+- Reduce `SMOOTHING_WINDOW`
 - Increase `MAX_ANGLE_DELTA`
+- Lower `DETECT_EVERY_N_FRAMES` in `hand_detection_with_servo.py`
 
-**Face not being tracked:**
-- Check face detection in `hand_detection_with_servo.py`
-- Verify camera stream is working
-- Check `min_detection_confidence` (default 0.6)
+**Tracker always returns to center**
 
-## Performance Notes
+- That is expected in `hand_detection_with_servo.py` when no face is detected
+- If you want the last angle to be held instead, remove or change the `servo_tracker.center()` call in the no-face branch
 
-- Detection runs every N frames to save CPU (configurable)
-- Servo updates run at camera FPS (~30 FPS)
-- Hand detection is secondary and optional
-- All operations run in main thread
+**Face boxes appear but the servo does nothing**
 
-## Future Enhancements
-
-- [ ] PID controller for smoother tracking
-- [ ] Support for multiple faces
-- [ ] Hand tracking for secondary pan/tilt
-- [ ] Gesture commands (follow hand, etc.)
-- [ ] Servo position feedback
-- [ ] Performance metrics logging
+- Confirm `ENABLE_SERVO_TRACKING = True`
+- Check whether `FaceTrackServo.initialize()` prints a hardware PWM error
+- Verify the bounding boxes are reaching `track_face()`

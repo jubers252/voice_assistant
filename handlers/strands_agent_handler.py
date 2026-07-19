@@ -1468,19 +1468,35 @@ class StrandsAgent(Agent):
             question = input_text.strip()
             print("Follow-up tool asking:", question)
 
-            if self.pixel_led:
-                self.pixel_led.set_speaking()
-
             # Speak question and wait until fully played before opening mic.
+            # Note: LED control is handled by audio_processor.speak() to ensure
+            # the green light stays on throughout audio generation and playback
             self.executor.submit(self.audio_processors.speak, question)
             self._last_follow_up_question = question
             self._last_follow_up_question_at = time.time()
 
-            # Brief pause so executor thread has time to set is_speaking = True
-            time.sleep(0.3)
-            # Poll until TTS finishes
-            while getattr(self.audio_processors, 'is_speaking', False):
-                time.sleep(0.1)
+            # Wait for executor thread to start and audio to be processed
+            # Give it up to 15 seconds (accounting for Azure TTS latency)
+            max_wait_time = 15.0
+            start_wait = time.time()
+            
+            # First, wait for the thread to start (is_speaking becomes True)
+            thread_started = False
+            while not thread_started and (time.time() - start_wait) < 2.0:
+                if getattr(self.audio_processors, 'is_speaking', False):
+                    thread_started = True
+                    break
+                time.sleep(0.05)
+            
+            if thread_started:
+                print("[DEBUG] Speak thread started, waiting for completion...")
+                # Poll until TTS and audio playback finish
+                while getattr(self.audio_processors, 'is_speaking', False) and (time.time() - start_wait) < max_wait_time:
+                    time.sleep(0.1)
+            else:
+                print("[DEBUG] Speak thread didn't start within 2s, using fallback timeout")
+                # Fallback: just wait a bit longer in case it starts late
+                time.sleep(3.0)
 
             time.sleep(0.5)  # Settle so speaker output clears before mic opens
 

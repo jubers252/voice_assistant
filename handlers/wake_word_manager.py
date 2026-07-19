@@ -231,8 +231,8 @@ class WakeWordManager:
         finally:
             if self.recognition_lock.locked():
                 self.recognition_lock.release()
-                if self.pixel_led:
-                    self.pixel_led.off()
+            # Do NOT turn off LED here - audio_processor.speak() will manage it
+            # The speak() call may be submitted to a thread pool and not started yet
 
     def _distributor_loop(self, frame_size):
         while not self.stop_event.is_set():

@@ -1,6 +1,12 @@
+from time import time, sleep
+
 import serial
 import struct
 import math
+from face_track_servo import FaceTrackServo
+
+obj = FaceTrackServo(verbose=True)
+obj.initialize()  # Initialize PWM hardware
 
 def decode_coord(raw):
     if raw >= 0x8000:
@@ -30,6 +36,8 @@ while True:
 
     angle = math.degrees(math.atan2(x, y))
 
+    obj.move_pan_to_angle(angle)
+    # sleep(0.1)
     print(
         f"X={x:5d} "
         f"Y={y:5d} "

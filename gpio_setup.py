@@ -250,7 +250,7 @@ if __name__ == "__main__":
     print()
     obj = PixelLEDController(led_count=26, brightness=0.7, simulate=False)
     obj.set_processing()
-    time.sleep(4)
+    time.sleep(10)
 
     print("Stop + off + cleanup")
     obj.stop_animation()

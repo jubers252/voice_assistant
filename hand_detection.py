@@ -39,7 +39,6 @@ FACE_MOVE_THRESHOLD = 6
 FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 
 
-
 def start_stream():
     cmd = [
         "rpicam-vid",
@@ -418,6 +417,7 @@ def update_servo_tracking(face_result, servo_tracker, frame_shape, now, last_fac
 
         return now, last_tracked_center
 
+    # Face not detected
     if now - last_face_seen_at > FACE_LOST_CENTER_DELAY:
         servo_tracker.center()
 
@@ -540,8 +540,8 @@ def main():
         # Initialize servo tracking (optional - will skip if hardware not available)
         if not servo_tracker.initialize():
             print("[WARNING] Could not initialize servo hardware - face tracking disabled")
-        
         detect_face_and_hands(sock, servo_tracker)
+    
     finally:
         servo_tracker.stop()
         if sock:

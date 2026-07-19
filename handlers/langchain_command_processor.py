@@ -1347,10 +1347,6 @@ class LangChainAgentProcessor:
                     preamble = None
                     question = input_text.strip()
                 
-                # Set LED to speaking state
-                if self.pixel_led:
-                    self.pixel_led.set_speaking()
-                
                 # If there's a preamble, speak it first
                 if preamble:
                     self.audio_processors.speak(preamble)
@@ -1360,6 +1356,8 @@ class LangChainAgentProcessor:
                     time.sleep(0.3)  # Brief pause between preamble and question
                 
                 # Speak the follow-up question (LED controlled in audio_processor)
+                # Note: LED control is handled by audio_processor.speak() to ensure
+                # the green light stays on throughout audio generation and playback
                 self.audio_processors.speak(question)
                 
                 # Wait for speech to complete using is_speaking flag
@@ -1368,7 +1366,7 @@ class LangChainAgentProcessor:
                 
                 time.sleep(0.5)  # Longer buffer to ensure TTS cleanup
                 
-                # Set LED to listening state
+                # Set LED to listening state (audio_processor already turned it off)
                 if self.pixel_led:
                     self.pixel_led.set_listening()
                 
