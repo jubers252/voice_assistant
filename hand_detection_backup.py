@@ -8,9 +8,9 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-from camera_context import write_camera_context, set_wake_request
+from camera_context import set_wake_request, write_camera_context
 from face_track_servo import FaceTrackServo
-from sensor_reader import SensorReader
+from read_serial_simple import SensorReader
 
 try:
     import face_recognition
@@ -26,7 +26,7 @@ CAMERA_INDEX = "0"
 WIDTH = 640
 HEIGHT = 480
 FPS = 30
-DETECT_EVERY_N_FRAMES = 4     # Detect every 4 frames for stable tracking
+DETECT_EVERY_N_FRAMES = 4     # Face and hand detect every 4 frames for stable tracking
 FACE_RECOGNITION_EVERY_N_FRAMES = 30  # Recognize every 30 frames (reduce CPU)
 PROCESS_SCALE = 0.35             # Much smaller = faster (was 0.5)
 FACE_DB_PATH = "my_db"
@@ -35,16 +35,16 @@ CONTEXT_LOG_EVERY_N_FRAMES = 30
 CAMERA_CONTEXT_UPDATE_SECONDS = 2
 FACE_LOST_CENTER_DELAY = 1.5
 FACE_MOVE_THRESHOLD = 6
+
+# Hand gesture constants
+FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 WAKE_GESTURE_PATTERN = ("fist", "open_hand", "fist", "open_hand")
 WAKE_GESTURE_MAX_STEP_SECONDS = 1.2
 WAKE_GESTURE_TRIGGER_COOLDOWN_SECONDS = 2.0
-# Hand gesture constants
-FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 
-# Sensor tracking modes
+# Sensor-assisted tracking
 TRACKING_MODE_FACE = "face"
 TRACKING_MODE_SENSOR = "sensor"
-SENSOR_TIMEOUT = 2.0  # Seconds before sensor data is considered stale
 
 
 def start_stream():
@@ -71,7 +71,16 @@ def start_stream():
     ]
 
     print("Starting camera stream with rpicam-vid...")
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        print(f"Camera process started with PID {process.pid}")
+        return process
+    except FileNotFoundError:
+        print("ERROR: rpicam-vid not found. Install libcamera: sudo apt install -y libcamera-apps")
+        raise
+    except Exception as e:
+        print(f"ERROR: Failed to start camera: {e}")
+        raise
 
 
 def print_stream_logs(process):
@@ -82,8 +91,17 @@ def print_stream_logs(process):
 def connect_stream(process):
     print("Connecting to camera stream...")
 
-    for _ in range(40):
+    for attempt in range(40):
         if process.poll() is not None:
+            # Process died, get stderr for diagnosis
+            print(f"ERROR: Camera process died with exit code {process.returncode}")
+            print("Camera process output:")
+            try:
+                output = process.stdout.read()
+                if output:
+                    print(output.decode(errors='replace'))
+            except:
+                pass
             raise RuntimeError(f"Camera stream stopped with code {process.returncode}")
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -92,13 +110,15 @@ def connect_stream(process):
 
         try:
             sock.connect(("127.0.0.1", STREAM_PORT))
-            print("Camera stream connected.")
+            print(f"Camera stream connected on attempt {attempt + 1}.")
             return sock
-        except OSError:
+        except OSError as e:
             sock.close()
+            if attempt == 0:
+                print(f"[Attempt {attempt + 1}/40] Waiting for camera stream...")
             time.sleep(0.25)
 
-    raise RuntimeError("Could not connect to camera stream.")
+    raise RuntimeError(f"Could not connect to camera stream on port {STREAM_PORT} after 40 attempts.")
 
 
 def read_frames(sock):
@@ -283,7 +303,7 @@ def get_hand_gesture(hand_landmarks):
     gesture = None
     if is_closed:
         gesture = "fist"
-    elif fingers == 5:
+    elif fingers >= 4:
         gesture = "open_hand"
     elif fingers == 2:
         gesture = "peace"
@@ -306,7 +326,6 @@ def reset_wake_gesture_state(wake_gesture_state, clear_center=False):
     wake_gesture_state["sequence"] = []
     wake_gesture_state["last_gesture"] = None
     wake_gesture_state["last_step_at"] = 0.0
-    wake_gesture_state["last_trigger_at"] = 0.0
     if clear_center:
         wake_gesture_state["center"] = None
 
@@ -398,6 +417,7 @@ def detect_wake_gesture(hand_result, wake_gesture_state, now):
         result["center"] = (center_x, center_y)
 
     return result
+
 
 def get_face_bbox(detection, frame_width, frame_height):
     """Convert face detection to bounding box.
@@ -511,23 +531,63 @@ def draw_hand_overlays(frame, hand_result, mp_draw, mp_hands, frame_count):
                   f"gesture={gesture_info['gesture']}")
 
 
-def update_servo_tracking(face_result, servo_tracker, frame_shape, now, last_face_seen_at, last_tracked_center, sensor_reader=None, tracking_mode="face"):
-    """Update servo tracking using face detection or sensor data.
-    
-    Args:
-        face_result: MediaPipe face detection result
-        servo_tracker: FaceTrackServo instance
-        frame_shape: Camera frame shape (height, width, channels)
-        now: Current timestamp
-        last_face_seen_at: When face was last detected
-        last_tracked_center: Last tracked face center coordinates
-        sensor_reader: Optional SensorReader instance for motion tracking
-        tracking_mode: Current tracking mode (face or sensor)
-    
-    Returns:
-        (last_face_seen_at, last_tracked_center, next_tracking_mode)
-    """
-    # Try face tracking first (priority)
+def draw_wake_gesture_overlay(frame, wake_gesture_status, now):
+    if not wake_gesture_status:
+        return
+
+    center = wake_gesture_status.get("center")
+    if center:
+        frame_height, frame_width = frame.shape[:2]
+        x = int(center[0] * frame_width)
+        y = int(center[1] * frame_height)
+        cv2.circle(frame, (x, y), 14, (255, 200, 0), 2)
+
+    if wake_gesture_status.get("detected"):
+        cv2.putText(
+            frame,
+            "Wake gesture detected",
+            (10, HEIGHT - 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 200, 0),
+            2,
+        )
+    elif now - wake_gesture_status.get("last_seen_at", 0.0) < 0.75:
+        matched = " -> ".join(wake_gesture_status.get("matched", [])) or "waiting"
+        cv2.putText(
+            frame,
+            f"Wake watch: {matched}",
+            (10, HEIGHT - 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 200, 0),
+            1,
+        )
+
+
+def initialize_sensor_reader():
+    try:
+        reader = SensorReader(daemon=True)
+        reader.start()
+        return reader
+    except Exception as exc:
+        print(f"[SENSOR] Warning: Could not initialize sensor reader - {exc}")
+        return None
+
+
+def update_servo_tracking(
+    face_result,
+    sensor_sample,
+    sensor_tracking_enabled,
+    servo_tracker,
+    frame_shape,
+    now,
+    last_face_seen_at,
+    last_tracked_center,
+    current_mode,
+):
+    sensor_motion_active = bool(sensor_sample and sensor_sample.get("motion_detected"))
+
     if face_result and face_result.detections:
         primary_face = face_result.detections[0]
         face_bbox = get_face_bbox(primary_face, frame_shape[1], frame_shape[0])
@@ -545,20 +605,15 @@ def update_servo_tracking(face_result, servo_tracker, frame_shape, now, last_fac
             last_tracked_center = (center_x, center_y)
 
         return now, last_tracked_center, TRACKING_MODE_FACE
-    
-    # Fallback to sensor tracking if available
-    if sensor_reader:
-        sensor_sample = sensor_reader.get_latest()
-        if sensor_sample and (now - sensor_sample.get("timestamp", 0)) < SENSOR_TIMEOUT:
-            # Use sensor data to move servo
-            servo_tracker.move_pan_from_sensor(sensor_sample["x"], sensor_sample["y"])
-            return last_face_seen_at, None, TRACKING_MODE_SENSOR
-    
-    # No detection - center servo after delay
-    if now - last_face_seen_at > FACE_LOST_CENTER_DELAY:
+
+    if sensor_motion_active:
+        servo_tracker.move_pan_from_sensor(sensor_sample["x"], sensor_sample["y"])
+        return last_face_seen_at, None, TRACKING_MODE_SENSOR
+
+    if not sensor_tracking_enabled and now - last_face_seen_at > FACE_LOST_CENTER_DELAY:
         servo_tracker.center()
 
-    return last_face_seen_at, None, tracking_mode
+    return last_face_seen_at, None, current_mode
 
 
 def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
@@ -567,7 +622,7 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
     Args:
         sock: Camera stream socket
         servo_tracker: FaceTrackServo instance for face tracking
-        sensor_reader: Optional SensorReader instance for motion-based fallback
+        sensor_reader: Optional sensor reader for motion-based pan fallback
     """
     mp_face_detection = mp.solutions.face_detection
     mp_hands = mp.solutions.hands
@@ -596,8 +651,6 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
     last_face_seen_at = 0.0
     last_tracked_center = None
     tracking_mode = TRACKING_MODE_SENSOR if sensor_reader else TRACKING_MODE_FACE
-
-    # Wake gesture detection state
     wake_gesture_state = {
         "sequence": [],
         "last_gesture": None,
@@ -605,6 +658,7 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
         "last_trigger_at": 0.0,
         "center": None,
     }
+    wake_gesture_status = None
 
     setup_display_window()
 
@@ -621,7 +675,7 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
                     interpolation=cv2.INTER_LINEAR
                 )
 
-            # Run detection every N frames
+            # Run face and hand detection on the same cadence to keep CPU usage stable.
             if frame_count % DETECT_EVERY_N_FRAMES == 0:
                 latest_face_result, latest_hand_result = process_detection_frame(
                     processing_frame,
@@ -636,6 +690,11 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
                     known_names,
                     latest_face_labels,
                 )
+                wake_gesture_status = detect_wake_gesture(latest_hand_result, wake_gesture_state, now)
+                wake_gesture_status["last_seen_at"] = now
+                if wake_gesture_status.get("detected"):
+                    set_wake_request()
+                    print("[HAND] Wake gesture detected")
 
             # Update camera context from the latest detections and labels.
             latest_face_labels, last_context_face_count, last_context_update_at = update_camera_context(
@@ -647,35 +706,34 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
                 last_context_update_at,
             )
 
+            sensor_sample = sensor_reader.get_latest() if sensor_reader else None
+
             # Draw detections and detect gestures
             if latest_face_result:
                 draw_faces(frame, latest_face_result.detections, latest_face_labels)
             draw_hand_overlays(frame, latest_hand_result, mp_draw, mp_hands, frame_count)
+            draw_wake_gesture_overlay(frame, wake_gesture_status, now)
 
-            # Detect wake gesture (fist -> open_hand -> fist -> open_hand sequence)
-            wake_result = detect_wake_gesture(latest_hand_result, wake_gesture_state, now)
-            if wake_result["detected"]:
-                print("[WAKE] Wake gesture detected! Waking up assistant...", flush=True)
-                set_wake_request(source="hand_gesture")
-            
-            # Draw wake gesture progress on screen
-            if wake_result["progress"] > 0:
-                progress_text = f"Wake Gesture: {'/'.join(wake_result['matched'])} ({wake_result['progress']}/{len(WAKE_GESTURE_PATTERN)})"
-                cv2.putText(frame, progress_text, (10, frame.shape[0] - 20),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-
-            # Track face with servo ONLY when face actually moves
-            if frame_count % DETECT_EVERY_N_FRAMES == 0:
-                last_face_seen_at, last_tracked_center, tracking_mode = update_servo_tracking(
+            # Face updates run on the detection cadence; sensor fallback can run every frame.
+            should_update_tracking = (
+                frame_count % DETECT_EVERY_N_FRAMES == 0
+                or bool(sensor_sample and sensor_sample.get("motion_detected"))
+            )
+            if should_update_tracking:
+                last_face_seen_at, last_tracked_center, next_mode = update_servo_tracking(
                     latest_face_result,
+                    sensor_sample,
+                    sensor_reader is not None,
                     servo_tracker,
                     frame.shape,
                     now,
                     last_face_seen_at,
                     last_tracked_center,
-                    sensor_reader=sensor_reader,
-                    tracking_mode=tracking_mode,
+                    tracking_mode,
                 )
+                if next_mode != tracking_mode:
+                    print(f"[TRACKING] Mode -> {next_mode}")
+                tracking_mode = next_mode
             
             # Upscale frame to fill the 720x1280 vertical display
             display_frame = cv2.resize(frame, (720, 1280), interpolation=cv2.INTER_LINEAR)
@@ -694,40 +752,54 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
 
 
 def main():
-    process = start_stream()
-    threading.Thread(target=print_stream_logs, args=(process,), daemon=True).start()
+    process = None
     sock = None
     servo_tracker = FaceTrackServo(verbose=False)
     sensor_reader = None
 
     try:
-        sock = connect_stream(process)
+        # Start camera stream
+        process = start_stream()
+        threading.Thread(target=print_stream_logs, args=(process,), daemon=True).start()
+        time.sleep(0.5)  # Give process time to start
+        
+        # Connect to camera stream
+        try:
+            sock = connect_stream(process)
+        except RuntimeError as e:
+            print(f"\n[ERROR] Camera connection failed: {e}")
+            print("\nTroubleshooting:")
+            print("  1. Check if camera is connected: vcgencmd get_camera")
+            print("  2. Enable camera: sudo raspi-config -> Interface Options -> Camera")
+            print("  3. Check permissions: v4l2-ctl --list-devices")
+            print("  4. Try direct test: rpicam-still -o test.jpg")
+            raise
         
         # Initialize servo tracking (optional - will skip if hardware not available)
         if not servo_tracker.initialize():
             print("[WARNING] Could not initialize servo hardware - face tracking disabled")
-        
-        # Initialize sensor reader (optional - will skip if sensor not available)
-        try:
-            sensor_reader = SensorReader(daemon=True)
-            sensor_reader.start()
-            print("[SENSOR] Motion sensor reader started")
-        except Exception as e:
-            print(f"[SENSOR] Warning: Could not initialize sensor - {e}")
-            sensor_reader = None
-        
+
+        sensor_reader = initialize_sensor_reader()
         detect_face_and_hands(sock, servo_tracker, sensor_reader)
     
+    except Exception as e:
+        print(f"\n[CRITICAL ERROR] {e}")
+        import traceback
+        traceback.print_exc()
+    
     finally:
+        print("\nCleaning up...")
         servo_tracker.stop()
         if sensor_reader:
             sensor_reader.stop()
             sensor_reader.join(timeout=1.0)
         if sock:
             sock.close()
-        process.terminate()
-        process.wait()
+        if process:
+            process.terminate()
+            process.wait(timeout=5)
         cv2.destroyAllWindows()
+        print("Cleanup complete.")
 
 
 if __name__ == "__main__":

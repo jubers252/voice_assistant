@@ -4,6 +4,7 @@ import time
 
 
 CONTEXT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "camera_context.json")
+WAKE_REQUEST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wake_request.json")
 CONTEXT_MAX_AGE_SECONDS = 20
 
 
@@ -87,3 +88,36 @@ def add_camera_context_to_command(command):
         f"{context_block}\n"
         f"User command: {command}"
     )
+
+
+def set_wake_request(source="hand_gesture"):
+    payload = {
+        "source": source,
+        "updated_at": time.time(),
+    }
+
+    temp_path = f"{WAKE_REQUEST_PATH}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as wake_file:
+        json.dump(payload, wake_file)
+    os.replace(temp_path, WAKE_REQUEST_PATH)
+
+
+def get_wake_request(max_age_seconds=5):
+    try:
+        with open(WAKE_REQUEST_PATH, "r", encoding="utf-8") as wake_file:
+            payload = json.load(wake_file)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+    updated_at = payload.get("updated_at")
+    if not updated_at or time.time() - updated_at > max_age_seconds:
+        return {}
+
+    return payload
+
+
+def clear_wake_request():
+    try:
+        os.remove(WAKE_REQUEST_PATH)
+    except FileNotFoundError:
+        pass

@@ -413,6 +413,7 @@ class WakeWordManager:
                 self.is_recording = False
                 self.shared_state["wakeword_event"].clear()
                 recent_flags.clear()
+                
     def start_detection(self, process_command_callback=None):
         if self.detection_running:
             print("[WWD] Detection already running")
@@ -475,4 +476,27 @@ class WakeWordManager:
         self.threads = []
 
         print("[WWD] Threaded detection stopped")
+
+    def trigger_listening(self):
+        """Trigger immediate speech recognition (uses same flow as wakeword detection).
+        
+        Returns:
+            bool: True if successfully triggered, False otherwise
+        """
+        if not self.detection_running or self.shared_state is None:
+            return False
+        
+        if self.is_recording:
+            return False
+        
+        try:
+            self.pixel_led.set_listening()
+            with self.shared_state["lock"]:
+                self.shared_state["trigger_global_sample"] = self.shared_state["global_samples"]
+            self.shared_state["wakeword_event"].set()
+            print("[GESTURE] Listening triggered by hand gesture (same as wakeword)", flush=True)
+            return True
+        except Exception as e:
+            print(f"[GESTURE] Failed to trigger: {e}", flush=True)
+            return False
 

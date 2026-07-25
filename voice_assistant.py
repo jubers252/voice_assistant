@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import json
 import ctypes
@@ -21,7 +22,7 @@ from gpio_setup import PixelLEDController
 from handlers.strands_agent_handler import StrandsAgent
 from strands.models.openai import OpenAIModel
 from handlers.wake_word_manager import WakeWordManager
-from camera_context import add_camera_context_to_command
+from camera_context import add_camera_context_to_command, clear_wake_request, get_wake_request
 
 load_dotenv()
 
@@ -37,6 +38,9 @@ class VoiceAssistant:
         self.camera_process = None
         self.current_user = "default_user"
         self.wake_manager = None
+        self.wake_request_stop_event = threading.Event()
+        self.wake_request_thread = None
+        self.last_wake_request_at = 0.0
 
         self._initialize_hardware()
         self._initialize_audio_and_recognizer()
@@ -226,6 +230,38 @@ class VoiceAssistant:
         )
         print(f"[CAMERA] Camera context process started with PID {self.camera_process.pid}.", flush=True)
 
+    def _wake_request_loop(self):
+        while not self.wake_request_stop_event.is_set():
+            wake_request = get_wake_request()
+            updated_at = wake_request.get("updated_at") if wake_request else None
+            if updated_at and updated_at > self.last_wake_request_at:
+                self.last_wake_request_at = updated_at
+                triggered = bool(self.wake_manager and self.wake_manager.trigger_listening())
+                clear_wake_request()
+                if triggered:
+                    print("[HAND] Wake request forwarded to assistant listening.")
+            self.wake_request_stop_event.wait(0.2)
+
+    def _start_wake_request_listener(self):
+        if self.wake_request_thread and self.wake_request_thread.is_alive():
+            return
+
+        clear_wake_request()
+        self.wake_request_stop_event.clear()
+        self.wake_request_thread = threading.Thread(
+            target=self._wake_request_loop,
+            name="wake-request-listener",
+            daemon=True,
+        )
+        self.wake_request_thread.start()
+
+    def _stop_wake_request_listener(self):
+        self.wake_request_stop_event.set()
+        if self.wake_request_thread and self.wake_request_thread.is_alive():
+            self.wake_request_thread.join(timeout=1.0)
+        self.wake_request_thread = None
+        clear_wake_request()
+
     def _stop_camera_context_process(self):
         """Stop the background camera context process."""
         if not self.camera_process or self.camera_process.poll() is not None:
@@ -255,6 +291,7 @@ class VoiceAssistant:
         self.wake_manager.start_detection(
             process_command_callback=self._process_wake_command_with_camera_context
         )
+        self._start_wake_request_listener()
 
 
     def _shutdown_runtime_services(self):
@@ -263,6 +300,8 @@ class VoiceAssistant:
                 self.wake_manager.stop_detection()
         except Exception:
             pass
+
+        self._stop_wake_request_listener()
 
         self.pixel_led.off()
         self.event_scheduler.stop()
