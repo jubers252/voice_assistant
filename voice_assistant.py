@@ -17,6 +17,7 @@ from speech.speech_recognizer import SpeechRecognizer
 from conversation.conversation_manager import ConversationManager
 from connectors.spotify_connector import SpotifyConnector
 from connectors.reminder_manager import ReminderManager
+from connectors.telegram_bot import TelegramBot
 from handlers.event_scheduler import EventScheduler
 from gpio_setup import PixelLEDController
 from handlers.strands_agent_handler import StrandsAgent
@@ -41,6 +42,10 @@ class VoiceAssistant:
         self.wake_request_stop_event = threading.Event()
         self.wake_request_thread = None
         self.last_wake_request_at = 0.0
+        self.telegram_bot = None
+        self.telegram_stop_event = threading.Event()
+        self.telegram_thread = None
+        self.telegram_last_update_id = 0
 
         self._initialize_hardware()
         self._initialize_audio_and_recognizer()
@@ -262,6 +267,71 @@ class VoiceAssistant:
         self.wake_request_thread = None
         clear_wake_request()
 
+    def _handle_telegram_message(self, message_data):
+        try:
+            msg_type = message_data.get("type")
+            sender = message_data.get("sender_name", "").strip() or "Unknown"
+            content = message_data.get("content", "")
+            chat_id = message_data.get("chat_id")
+
+            print(f"[TELEGRAM] Message from {sender} ({msg_type}): {content}")
+
+            if msg_type == "text" and content:
+                result = self.command_processor.process_user_command(content)
+                response_text = ""
+                if isinstance(result, dict):
+                    response_text = result.get("response", "") or ""
+                if response_text and self.telegram_bot and chat_id is not None:
+                    self.telegram_bot.send_message(chat_id=chat_id, text=response_text)
+        except Exception as e:
+            print(f"[TELEGRAM] Error handling message: {e}")
+
+    def _telegram_loop(self):
+        while not self.telegram_stop_event.is_set():
+            try:
+                updates = self.telegram_bot.get_updates(
+                    offset=self.telegram_last_update_id + 1,
+                    timeout=10,
+                    allowed_updates=["message"],
+                )
+                if updates:
+                    for update in updates:
+                        update_id = update.get("update_id", 0)
+                        if update_id > self.telegram_last_update_id:
+                            self.telegram_last_update_id = update_id
+
+                        message_data = self.telegram_bot.extract_message_data(update)
+                        if message_data:
+                            self._handle_telegram_message(message_data)
+            except Exception as e:
+                print(f"[TELEGRAM] Polling error: {e}")
+
+            self.telegram_stop_event.wait(0.2)
+
+    def _start_telegram_listener(self):
+        if self.telegram_thread and self.telegram_thread.is_alive():
+            return
+
+        try:
+            self.telegram_bot = TelegramBot()
+            self.telegram_stop_event.clear()
+            self.telegram_thread = threading.Thread(
+                target=self._telegram_loop,
+                name="telegram-listener",
+                daemon=True,
+            )
+            self.telegram_thread.start()
+            print("[TELEGRAM] Telegram listener started.")
+        except Exception as e:
+            print(f"[TELEGRAM] Telegram listener disabled: {e}")
+            self.telegram_bot = None
+
+    def _stop_telegram_listener(self):
+        self.telegram_stop_event.set()
+        if self.telegram_thread and self.telegram_thread.is_alive():
+            self.telegram_thread.join(timeout=1.0)
+        self.telegram_thread = None
+
     def _stop_camera_context_process(self):
         """Stop the background camera context process."""
         if not self.camera_process or self.camera_process.poll() is not None:
@@ -292,6 +362,7 @@ class VoiceAssistant:
             process_command_callback=self._process_wake_command_with_camera_context
         )
         self._start_wake_request_listener()
+        self._start_telegram_listener()
 
 
     def _shutdown_runtime_services(self):
@@ -302,6 +373,7 @@ class VoiceAssistant:
             pass
 
         self._stop_wake_request_listener()
+        self._stop_telegram_listener()
 
         self.pixel_led.off()
         self.event_scheduler.stop()

@@ -358,6 +358,15 @@ class MusicPlayer:
             logger.error(f"Error getting playlist songs: {e}")
             return []
 
+    def _resolve_volume(self, volume: int = None) -> int:
+        """Resolve and clamp requested volume to mpv-safe range (0-100)."""
+        level = self.default_volume if volume is None else volume
+        try:
+            level = int(level)
+        except (TypeError, ValueError):
+            level = self.default_volume
+        return max(0, min(100, level))
+
     def play_playlist(self, playlist_query: str, limit: int = 10, volume: int = None) -> None:
         """
         Search for and play a playlist on YouTube Music.
@@ -418,15 +427,17 @@ class MusicPlayer:
         self.stop()
         
         # Start mpv with playlist
+        resolved_volume = self._resolve_volume(volume)
         cmd = [
             self.mpv_path,
             "--no-terminal",
             f"--input-ipc-server={IPC_SOCKET}",
-            "--playlist-start=0"
+            "--playlist-start=0",
+            f"--volume={resolved_volume}",
         ] + audio_urls
         if not self._start_mpv(cmd):
             return
-        self.set_mpv_volume(self.default_volume if volume is None else volume)
+        self.set_mpv_volume(resolved_volume)
 
     def play_by_artist(self, artist_name: str, volume: int = None) -> None:
         """
@@ -471,15 +482,17 @@ class MusicPlayer:
                         return
 
                     self.stop()
+                    resolved_volume = self._resolve_volume(volume)
                     cmd = [
                         self.mpv_path,
                         "--no-terminal",
                         f"--input-ipc-server={IPC_SOCKET}",
+                        f"--volume={resolved_volume}",
                         audio_url
                     ]
                     if not self._start_mpv(cmd):
                         return
-                    self.set_mpv_volume(self.default_volume if volume is None else volume)
+                    self.set_mpv_volume(resolved_volume)
                 else:
                     logger.error(f"Could not get audio URL for {title}")
             else:
@@ -560,15 +573,17 @@ class MusicPlayer:
             return
 
         # Start mpv with IPC enabled
+        resolved_volume = self._resolve_volume(volume)
         cmd = [
             self.mpv_path,
             "--no-terminal",
             f"--input-ipc-server={IPC_SOCKET}",
+            f"--volume={resolved_volume}",
             audio_url
         ]
         if not self._start_mpv(cmd):
             return
-        self.set_mpv_volume(self.default_volume if volume is None else volume)
+        self.set_mpv_volume(resolved_volume)
 
     def play_all_artist_tracks(self, artist_name: str, limit: int = 10, volume: int = None) -> None:
         """
@@ -634,13 +649,14 @@ class MusicPlayer:
         logger.info(f"Starting playlist with {len(audio_urls)} tracks")
         self.stop()
         
-        volume = self.default_volume if volume is None else volume
+        volume = self._resolve_volume(volume)
         # Start mpv with all URLs as playlist
         cmd = [
-            "mpv",
+            self.mpv_path,
             "--no-terminal",
             f"--input-ipc-server={IPC_SOCKET}",
-            "--playlist-start=0"
+            "--playlist-start=0",
+            f"--volume={volume}",
         ] + audio_urls
         
         if not self.mpv_path:
@@ -817,13 +833,13 @@ if __name__ == "__main__":
     # Example usage:
     # music.play_all_artist_tracks("guru randhawa", limit=10)
     # music.play_playlist("party hindi songs 2026", limit=5)
-    music.play("bangles song")  # Play a specific song by name
+    music.play("achhi lagti ho hindi song")  # Play a specific song by name
     # time.sleep(3)
-    music.set_mpv_volume(80)
+    # music.set_mpv_volume(80)
     # music.set_mpv_volume(50)
     # print
     # Playback controls:
-    music.pause()          # Pause playback
+    # music.pause()          # Pause playback
     # time.sleep(2)
     # music.resume()         # Resume playback
     # time.sleep(2)

@@ -39,7 +39,7 @@ from connectors.amzon_connector import get_amazon_result
 from connectors.amazon_order_tracker import get_order
 from connectors.spotify_connector import SpotifyConnector
 from connectors.search_engine import ExaSearch
-# from connectors.telegram_bot import TelegramBot
+from connectors.telegram_bot import TelegramBot
 from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
@@ -69,7 +69,7 @@ class StrandsAgent(Agent):
         self.volume_control = VolumeController()
         self.spotify_connector = SpotifyConnector(None)
         self.exa_search_connector = ExaSearch()
-        # self.telegram_bot = TelegramBot()
+        self.telegram_bot = TelegramBot()
         self.reminder_manager = ReminderManager()
         self.bigbasket_tools = BigBasketTools()
         self.zepto_db = ZeptoOrderDatabase()
@@ -135,10 +135,10 @@ class StrandsAgent(Agent):
                 self._create_list_reminders_tool,
                 self._create_cancel_reminder_tool,
                 self._create_check_reminders_tool,
-                # self._create_telegram_message_tool,
-                # self._create_telegram_photo_tool,
-                # self._create_telegram_document_tool,
-                # self._create_telegram_video_tool,
+                self._create_telegram_message_tool,
+                self._create_telegram_photo_tool,
+                self._create_telegram_document_tool,
+                self._create_telegram_video_tool,
                 self._create_volume_control_tool,
                 self._zepto_ordering_tool,
                 self._create_zepto_order_history_tool,

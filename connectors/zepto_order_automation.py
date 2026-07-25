@@ -5,7 +5,7 @@ import os
 import logging
 import re
 from playwright.async_api import async_playwright
-# from telegram_bot import TelegramBot
+from telegram_bot import TelegramBot
 from zepto_simple_login_async import ZeptoLoginAsync
 from dotenv import load_dotenv  
 
@@ -31,7 +31,7 @@ class ZeptoScraper(ZeptoLoginAsync):
         self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
         self.output_dir = output_dir
         self.session_file = "zepto_playwright_session.json"
-        # self.telegram_bot = TelegramBot()
+        self.telegram_bot = TelegramBot()
         # Create output directory
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -1689,8 +1689,8 @@ class ZeptoScraper(ZeptoLoginAsync):
                 # Send to Telegram
                 if self.chat_id:
                     abs_filepath = os.path.abspath(filepath)
-                    # self.telegram_bot.send_message(self.chat_id, order_message)
-                    # self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto order details")
+                    self.telegram_bot.send_message(self.chat_id, order_message)
+                    self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto order details")
                 else:
                     logger.warning("TELEGRAM_CHAT_ID not set - skipping Telegram notification")
               

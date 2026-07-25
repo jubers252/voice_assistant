@@ -1,3 +1,5 @@
-- [x] Create tilt_45.py script
-- [x] Validate script content for correctness
-- [x] Mark task complete
+- [x] Add TelegramBot integration imports and runtime state fields in VoiceAssistant
+- [x] Implement Telegram polling loop thread methods (start/stop + handler)
+- [x] Wire Telegram thread startup/shutdown into runtime service lifecycle
+- [x] Run syntax validation for voice_assistant.py
+- [x] Mark completed tasks in this TODO
