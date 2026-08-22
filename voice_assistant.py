@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 from audio.audio_processor import AudioProcessors
+from camera.camera_display_control import is_camera_display_enabled, set_camera_display_enabled
 from speech.speech_recognizer import SpeechRecognizer
 from conversation.conversation_manager import ConversationManager
 from connectors.spotify_connector import SpotifyConnector
@@ -23,12 +24,14 @@ from gpio_setup import PixelLEDController
 from handlers.strands_agent_handler import StrandsAgent
 from strands.models.openai import OpenAIModel
 from handlers.wake_word_manager import WakeWordManager
-from camera_context import add_camera_context_to_command, clear_wake_request, get_wake_request
+from camera.camera_context import add_camera_context_to_command, clear_wake_request, get_wake_request, read_tracking_angles
+from anime_face_display import FaceDisplayController
 
 load_dotenv()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_EVENTS_FILE = os.path.join(current_dir, "events.json")
+DISPLAY_SYNC_INTERVAL = 0.2
 
 class VoiceAssistant:
     """Voice Assistant - Main Application Class"""
@@ -37,6 +40,10 @@ class VoiceAssistant:
         """Initialize all components"""
         print("[INIT] Voice Assistant Starting...\n")
         self.camera_process = None
+        self.face_display = None
+        self.camera_display_enabled = False
+        self.display_sync_stop_event = threading.Event()
+        self.display_sync_thread = None
         self.current_user = "default_user"
         self.wake_manager = None
         self.wake_request_stop_event = threading.Event()
@@ -62,11 +69,81 @@ class VoiceAssistant:
     def _initialize_hardware(self):
         self.pixel_led = PixelLEDController(led_count=26, brightness=1.0, simulate=False)
         self.pixel_led.off()
+        set_camera_display_enabled(False)
+        self.face_display = FaceDisplayController(mode="neutral")
+        self.face_display.start()
+        self._start_display_sync()
+
+    def _set_face_mode(self, mode: str):
+        if self.camera_display_enabled:
+            return
+        if self.face_display is None:
+            return
+        try:
+            self.face_display.set_mode(mode)
+        except Exception as e:
+            print(f"[FACE] Failed to set mode '{mode}': {e}")
+
+    def set_camera_display(self, enabled: bool):
+        enabled = bool(enabled)
+        set_camera_display_enabled(enabled)
+        self.camera_display_enabled = enabled
+
+        if enabled:
+            if self.face_display is not None:
+                self.face_display.hide()
+            print("[DISPLAY] Camera tracking window enabled.")
+            return
+
+        if self.face_display is not None:
+            self.face_display.show()
+        print("[DISPLAY] Anime face window enabled.")
+
+    def toggle_camera_display(self):
+        self.set_camera_display(not self.camera_display_enabled)
+
+    def _display_sync_loop(self):
+        while not self.display_sync_stop_event.is_set():
+            enabled = is_camera_display_enabled(default=False)
+            self.camera_display_enabled = enabled
+
+            if self.face_display is not None:
+                tracking_angles = read_tracking_angles()
+                self.face_display.set_pupil_angles(
+                    tracking_angles.get("pupil_pan_angle", 0.0),
+                    tracking_angles.get("pupil_tilt_angle", 0.0),
+                )
+                if enabled:
+                    self.face_display.hide()
+                else:
+                    if not self.face_display.is_running():
+                        self.face_display.start()
+                    self.face_display.show()
+            self.display_sync_stop_event.wait(DISPLAY_SYNC_INTERVAL)
+
+    def _start_display_sync(self):
+        if self.display_sync_thread and self.display_sync_thread.is_alive():
+            return
+
+        self.display_sync_stop_event.clear()
+        self.display_sync_thread = threading.Thread(
+            target=self._display_sync_loop,
+            name="display-sync",
+            daemon=True,
+        )
+        self.display_sync_thread.start()
+
+    def _stop_display_sync(self):
+        self.display_sync_stop_event.set()
+        if self.display_sync_thread and self.display_sync_thread.is_alive():
+            self.display_sync_thread.join(timeout=1.0)
+        self.display_sync_thread = None
 
 
     def _initialize_audio_and_recognizer(self):
         self.audio_processors = AudioProcessors()
         self.audio_processors.set_pixel_led(self.pixel_led)
+        self.audio_processors.set_state_callback(self._set_face_mode)
 
         shared_recognizer = sr.Recognizer()
         self._setup_recognizer(shared_recognizer)
@@ -101,13 +178,20 @@ class VoiceAssistant:
             params={"temperature": 0.7, "max_completion_tokens": 2000},
         )
 
+        print(f"[INIT] Face Display Controller: {self.face_display}")
+        print(f"[INIT] Face Display Running: {self.face_display.is_running() if self.face_display else 'N/A'}")
+        
         self.command_processor = StrandsAgent(
             session_id=self.current_user,
             model=model,
             pixel_led=self.pixel_led,
             recognizer=self.recognizer,
             audio_processors=self.audio_processors,
+            state_callback=self._set_face_mode,
+            face_display=self.face_display,
         )
+        
+        print(f"[INIT] Agent Created with face_display: {self.command_processor.face_display}")
 
 
     def _initialize_scheduling(self):
@@ -228,7 +312,7 @@ class VoiceAssistant:
         preexec = _linux_set_parent_death_signal if sys.platform.startswith("linux") else None
 
         self.camera_process = subprocess.Popen(
-            [sys.executable, os.path.join(current_dir, "hand_detection.py")],
+            [sys.executable, os.path.join(current_dir, "camera", "hand_detection.py")],
             cwd=current_dir,
             start_new_session=True,
             preexec_fn=preexec,
@@ -356,6 +440,7 @@ class VoiceAssistant:
             audio_processors=self.audio_processors,
             recognizer=self.recognizer,
             pixel_led=self.pixel_led,
+            state_callback=self._set_face_mode,
             input_device_index=None,
         )
         self.wake_manager.start_detection(
@@ -376,6 +461,10 @@ class VoiceAssistant:
         self._stop_telegram_listener()
 
         self.pixel_led.off()
+        set_camera_display_enabled(False)
+        self._stop_display_sync()
+        if self.face_display is not None:
+            self.face_display.stop()
         self.event_scheduler.stop()
         self.event_executor.shutdown(wait=True)
         self._stop_camera_context_process()

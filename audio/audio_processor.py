@@ -109,6 +109,7 @@ class AudioProcessors:
         self.speech_interrupted = False
         self.speech_thread = None
         self.pixel_led = None  # Will be set by voice assistant if available
+        self.state_callback = None
         
         # Initialize pygame mixer once to prevent double initialization corruption
         self._init_pygame_mixer()
@@ -128,6 +129,10 @@ class AudioProcessors:
     def set_pixel_led(self, pixel_led):
         """Set pixel LED controller for visual feedback during speech"""
         self.pixel_led = pixel_led
+
+    def set_state_callback(self, callback):
+        """Set callback for runtime state changes like speaking/neutral."""
+        self.state_callback = callback
     
     # Function to record audio (from test_cnn_model.py)
     def record_audio(self, duration, sample_rate, save_path=None, device=None):
@@ -354,6 +359,12 @@ class AudioProcessors:
         """
         self.is_speaking = True
         self.speech_interrupted = False
+
+        if self.state_callback:
+            try:
+                self.state_callback("speaking")
+            except Exception:
+                pass
         
         # Set LED to green when starting to speak
         if self.pixel_led:
@@ -379,6 +390,11 @@ class AudioProcessors:
             print(f"Edge TTS failed: {e}")
         finally:
             self.is_speaking = False
+            if self.state_callback:
+                try:
+                    self.state_callback("neutral")
+                except Exception:
+                    pass
             # Turn off LED when done speaking
             if self.pixel_led:
                 self.pixel_led.off()

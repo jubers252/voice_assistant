@@ -52,6 +52,7 @@ class WakeWordManager:
         audio_processors=None,
         recognizer=None,
         pixel_led=None,
+        state_callback=None,
         sample_rate=16000,
         energy_threshold=0.0001,
         confidence_threshold=0.75,
@@ -61,6 +62,7 @@ class WakeWordManager:
         self.audio_processors = audio_processors
         self.recognizer = recognizer
         self.pixel_led = pixel_led
+        self.state_callback = state_callback
         self.sample_rate = sample_rate
         self.energy_threshold = energy_threshold
         self.confidence_threshold = confidence_threshold
@@ -219,6 +221,7 @@ class WakeWordManager:
         if not self.recognition_lock.acquire(blocking=False):
             print("[INFO] Recognition busy, skipping this segment.")
             return
+        command_dispatched = False
         try:
             stt_segment = self._remove_wakeword_from_segment(segment, trigger_offset_samples)
             clipped = np.clip(stt_segment, -1.0, 1.0)
@@ -227,12 +230,30 @@ class WakeWordManager:
             recognized_command = self.speech_recognizer._recognize_audio(audio_data)
             print(f"🎙️ Recognized command: {recognized_command}")
             if recognized_command and self.process_command_callback:
+                if self.state_callback:
+                    try:
+                        self.state_callback("thinking")
+                    except Exception:
+                        pass
                 self.process_command_callback(recognized_command)
+                command_dispatched = True
+        except Exception as e:
+            print(f"[RECOG] Command recognition/dispatch failed: {e}")
+            if self.pixel_led is not None:
+                try:
+                    self.pixel_led.off()
+                except Exception:
+                    pass
         finally:
             if self.recognition_lock.locked():
                 self.recognition_lock.release()
-            # Do NOT turn off LED here - audio_processor.speak() will manage it
-            # The speak() call may be submitted to a thread pool and not started yet
+
+            # If no valid command was dispatched, ensure listening LED is turned off.
+            if not command_dispatched and self.pixel_led is not None:
+                try:
+                    self.pixel_led.off()
+                except Exception:
+                    pass
 
     def _distributor_loop(self, frame_size):
         while not self.stop_event.is_set():
@@ -299,6 +320,11 @@ class WakeWordManager:
             if best_score >= self.WAKEWORD_DETECTION_THRESHOLD and cooldown_ok:
                 last_trigger_time = now
                 self.pixel_led.set_listening()
+                if self.state_callback:
+                    try:
+                        self.state_callback("listening")
+                    except Exception:
+                        pass
                 with self.shared_state["lock"]:
                     self.shared_state["trigger_global_sample"] = global_samples
                 self.shared_state["wakeword_event"].set()
@@ -491,6 +517,11 @@ class WakeWordManager:
         
         try:
             self.pixel_led.set_listening()
+            if self.state_callback:
+                try:
+                    self.state_callback("listening")
+                except Exception:
+                    pass
             with self.shared_state["lock"]:
                 self.shared_state["trigger_global_sample"] = self.shared_state["global_samples"]
             self.shared_state["wakeword_event"].set()

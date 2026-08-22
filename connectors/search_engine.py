@@ -165,7 +165,7 @@ if __name__ == "__main__":
     try:
         _ensure_exa_api_key()
         gs = ExaSearch()
-        result = gs.quick_search(query, lang=lang)
+        result = gs.quick_search(query)
         print(f"Query: {query}")
         print(f"Result: {result}")
     except Exception as e:

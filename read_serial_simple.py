@@ -3,7 +3,7 @@ from time import time, sleep
 import serial
 import struct
 import math
-from face_track_servo import FaceTrackServo
+from camera.face_track_servo import FaceTrackServo
 
 obj = FaceTrackServo(verbose=True)
 obj.initialize()  # Initialize PWM hardware

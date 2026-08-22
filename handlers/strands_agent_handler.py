@@ -12,8 +12,8 @@ import concurrent.futures
 import queue
 import speech_recognition as sr
 # Ensure project root is in path when running this file directly
-# import sys
-# sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import time
@@ -22,7 +22,10 @@ import difflib
 import warnings
 import urllib3
 import gc
+import cv2
 from connectors.zepto_order_database import ZeptoOrderDatabase
+from connectors.capture_while_running import capture_images_from_running_stream
+
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -61,8 +64,29 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 
 class StrandsAgent(Agent):
     """Strands Agent with tool usage and dynamic prompt generation"""
+
+    FACE_NUMBER_TO_MODE = {
+        "1": "neutral",
+        "2": "happy",
+        "3": "sad",
+        "4": "thinking",
+        "5": "listening",
+        "6": "speaking",
+        "7": "laughing",
+        "8": "dead",
+    }
+    FACE_SUPPORTED_MODES = tuple(FACE_NUMBER_TO_MODE.values())
+    HUMOR_TRIGGER_TERMS = (
+        "joke",
+        "funny",
+        "humor",
+        "humour",
+        "make me laugh",
+        "laugh",
+        "comedy",
+    )
     
-    def __init__(self, session_id: str, model:OpenAIModel, pixel_led=None, recognizer=None, audio_processors=None):
+    def __init__(self, session_id: str, model:OpenAIModel, pixel_led=None, recognizer=None, audio_processors=None, state_callback=None, face_display=None):
         """Initialize the agent with connectors, conversation manager, and dynamic prompt generator."""
         
         # Initialize connectors
@@ -76,6 +100,9 @@ class StrandsAgent(Agent):
         self.home_automation = HomeAutomation()
         self.youtube_music = MusicPlayer()
         self.audio_processors = audio_processors or AudioProcessors()
+        self.state_callback = state_callback
+        self.face_display = face_display
+        print(f"[AGENT INIT] Face Display: {self.face_display}")
       
         self.pixel_led = pixel_led
         if self.audio_processors:
@@ -140,6 +167,7 @@ class StrandsAgent(Agent):
                 self._create_telegram_document_tool,
                 self._create_telegram_video_tool,
                 self._create_volume_control_tool,
+                self.set_face_expression_tool,
                 self._zepto_ordering_tool,
                 self._create_zepto_order_history_tool,
                 self._create_zepto_order_again_tool,
@@ -154,7 +182,7 @@ class StrandsAgent(Agent):
                 self.search_past_conversations,
                 self.get_images_tool,
                 self.get_video_tool,
-
+                self.capture_camera_image_tool,
             ],
             session_manager=session_manager,
             conversation_manager=conv_manager
@@ -213,6 +241,101 @@ class StrandsAgent(Agent):
 
         similarity = difflib.SequenceMatcher(None, current, previous).ratio()
         return similarity >= 0.68
+
+
+    def _should_use_laughing_expression(self, user_command: str) -> bool:
+        """Return True when command is likely requesting humor/jokes."""
+        text = (user_command or "").lower()
+        return any(term in text for term in self.HUMOR_TRIGGER_TERMS)
+
+
+    def _normalize_face_mode(self, mode: str):
+        """Convert numeric or text input into a valid face mode."""
+        value = (mode or "").strip().lower()
+        if value in self.FACE_NUMBER_TO_MODE:
+            return self.FACE_NUMBER_TO_MODE[value]
+        if value in self.FACE_SUPPORTED_MODES:
+            return value
+        return None
+
+
+    def _extract_face_mode_from_command(self, user_command: str):
+        """Detect explicit face-expression requests in user text."""
+        text = (user_command or "").lower().strip()
+        if not text:
+            return None
+
+        # Numeric shortcuts used in your face controller (1-8)
+        for key, mode in self.FACE_NUMBER_TO_MODE.items():
+            if f" {key} " in f" {text} " or text.endswith(f" {key}") or text.startswith(f"{key} "):
+                return mode
+
+        # Explicit mode names
+        for mode in self.FACE_SUPPORTED_MODES:
+            if mode in text:
+                return mode
+
+        # Common synonyms
+        if "smile" in text or "excited" in text or "glad" in text:
+            return "happy"
+        if "depress" in text or "upset" in text or "unhappy" in text:
+            return "sad"
+
+        return None
+
+
+    def _apply_face_mode(self, mode: str) -> str:
+        """Apply face mode to available runtime controllers."""
+        if self.face_display is None and self.state_callback is None:
+            return "Face display is not available in this runtime."
+
+        applied = False
+        errors = []
+
+        if self.face_display is not None:
+            try:
+                self.face_display.show()
+                self.face_display.set_mode(mode)
+                applied = True
+            except Exception as e:
+                errors.append(f"face_display error: {e}")
+
+        if self.state_callback is not None:
+            try:
+                self.state_callback(mode)
+                applied = True
+            except Exception as e:
+                errors.append(f"state_callback error: {e}")
+
+        if applied:
+            return f"Face expression changed to {mode}."
+        return "Failed to set face mode. " + "; ".join(errors)
+
+
+    def _schedule_expression_after_speech(self, mode: str, hold_seconds: float | None = 2.5) -> None:
+        """Apply a face mode after TTS completes.
+
+        If hold_seconds is set, switch back to neutral after that duration.
+        If hold_seconds is None, keep the mode until changed later.
+        """
+        if hold_seconds is not None:
+            hold_seconds = max(1.0, hold_seconds)
+
+        def _worker():
+            try:
+                # Give the speak task a moment to start, then wait until it finishes.
+                time.sleep(0.15)
+                while getattr(self.audio_processors, "is_speaking", False):
+                    time.sleep(0.1)
+
+                self._apply_face_mode(mode)
+                if hold_seconds is not None:
+                    time.sleep(hold_seconds)
+                    self._apply_face_mode("neutral")
+            except Exception as e:
+                print(f"[FACE] Post-speech expression failed: {e}")
+
+        threading.Thread(target=_worker, name="post-speech-face", daemon=True).start()
 
 
     def _augment_command_with_speaker_hint(self, user_command: str) -> str:
@@ -335,7 +458,43 @@ class StrandsAgent(Agent):
         except Exception as e:
             return [f"Error searching videos: {str(e)}"]
 
-    
+    @tool
+    def capture_camera_image_tool(self, note: str = "manual_test") -> str:
+        """
+        Capture a single image frame from the live camera stream and save it locally.
+        Use when user asks: 'take a photo', 'capture image', 'click picture'.
+        
+        Args:
+            note: Optional label to include in filename context.
+        
+        Returns:
+            Status message containing saved file path.
+        """
+        return capture_images_from_running_stream(count=1, note=note)
+
+    @tool
+    def set_face_expression_tool(self, mode: str) -> str:
+        """Set anime face expression.
+
+        Use when user asks to change avatar expression, face mood, or emotion.
+        Accepts either a mode name or number 1-8.
+
+        Supported values:
+            1 neutral
+            2 happy
+            3 sad
+            4 thinking
+            5 listening
+            6 speaking
+            7 laughing
+            8 dead
+        """
+        normalized_mode = self._normalize_face_mode(mode)
+        if normalized_mode is None:
+            options = ", ".join(self.FACE_SUPPORTED_MODES)
+            return f"Unsupported face mode '{mode}'. Supported: {options} or 1-8."
+        return self._apply_face_mode(normalized_mode)
+
     @tool
     def add_event_tool(self, event_time: dt_time, prompt: str, event_id: str = None):
         """Schedule a proactive event to run at a specific time. Use when user says: 'remind me to [do something] at [time]', or schedule an event to perform some action at a specific time. 
@@ -678,18 +837,28 @@ class StrandsAgent(Agent):
         
 
     @tool
-    def _create_search_tool(self, query: str, text_limit =1000):
+    def _create_search_tool(self, query: str, text_limit: int = 1000):
         """Search the internet for LATEST/CURRENT information. MANDATORY for: latest news, current prices, today's info, recent updates, live status. Use when: 'what's latest', 'current', 'today', 'right now', 'latest news about', 'trending'. Input: search query (e.g., 'latest Bitcoin price', 'current weather today', 'trending news')
         Args:    query: The search query string (e.g., 'latest news about AI').
                 text_limit: Maximum number of characters to return in the search result (default: 1000).
         """
         try:
             # Use your existing search connector
-            result =  self.exa_search_connector.quick_search(query)
-            if int(len(result))> int(text_limit):
-                return result[0:text_limit]  # Limit response lengt
-            else: 
-                return result
+            result = self.exa_search_connector.quick_search(query)
+
+            # Some tool runtimes pass numeric args as strings; normalize safely.
+            try:
+                limit = int(text_limit)
+            except (TypeError, ValueError):
+                limit = 1000
+            limit = max(100, limit)
+
+            if isinstance(result, str):
+                return result[:limit]
+
+            # If connector returns structured data, keep it predictable for the model.
+            result_text = str(result)
+            return result_text[:limit]
         except Exception as e:
             print(e)
             return f"Search error: {str(e)}"
@@ -1091,7 +1260,6 @@ class StrandsAgent(Agent):
                 
         except Exception as e:
             return f"Volume control error: {str(e)}"
-    
 
     @tool
     def _zepto_ordering_tool(self, input_str: str):
@@ -1556,6 +1724,18 @@ class StrandsAgent(Agent):
                 # Set LED to processing/thinking state (blinking)
                 if self.pixel_led:
                     self.pixel_led.set_processing()
+                if self.state_callback:
+                    self.state_callback("thinking")
+
+                requested_mode = self._extract_face_mode_from_command(user_command)
+                is_humor_request = self._should_use_laughing_expression(user_command)
+
+                # Reliability fallback: ensure humor requests trigger laughing face.
+                if is_humor_request:
+                    try:
+                        self.set_face_expression_tool("7")
+                    except Exception as face_err:
+                        print(f"[FACE] Failed to set laughing expression: {face_err}")
 
                 # Use the current agent instance and the actual user command.
                 effective_command = self._augment_command_with_speaker_hint(user_command)
@@ -1577,6 +1757,11 @@ class StrandsAgent(Agent):
                 # Avoid speaking the same follow-up question twice (tool already spoke it).
                 if not self._is_repeat_of_recent_follow_up(response_text):
                     self.executor.submit(self.audio_processors.speak, response_text)
+                    if requested_mode is not None:
+                        # Keep explicitly requested expression after TTS completes.
+                        self._schedule_expression_after_speech(requested_mode, hold_seconds=None)
+                    elif is_humor_request:
+                        self._schedule_expression_after_speech("7", hold_seconds=3.0)
                 else:
                     print("Skipping duplicate follow-up question speech from final response")
 
@@ -1606,6 +1791,10 @@ class StrandsAgent(Agent):
         
 if __name__ == "__main__":
     # Example of initializing the agent and testing a tool
+    # NOTE: face_display is provided by VoiceAssistant in normal operation
+    # For standalone testing, create a FaceDisplayController if you want face expressions
+    from anime_face_display import FaceDisplayController
+    
     openai_api_key = os.getenv("OPENAI_API_KEY")
 
     model = OpenAIModel(
@@ -1618,6 +1807,22 @@ if __name__ == "__main__":
             "max_completion_tokens": 2000
         }
     )
-    my_pi_agent = StrandsAgent(model=model, session_id="pi_01")
-    response = my_pi_agent.process_user_command("search vivo x300 ultra price in web")
+    
+    # Initialize face display for testing
+    face_display = FaceDisplayController(mode="neutral")
+    face_display.start()
+    
+    my_pi_agent = StrandsAgent(model=model, session_id="pi_01", face_display=face_display)
+    
+    # Test joke - should trigger show_laughing_expression
+    print("\n=== Testing Joke ===")
+    response = my_pi_agent.process_user_command("Tell me a funny joke")
     print(response)
+    
+    # Test happy expression
+    print("\n=== Testing Happy ===")
+    response2 = my_pi_agent.process_user_command("That's great news!")
+    print(response2)
+    
+    # Clean up
+    face_display.stop()
