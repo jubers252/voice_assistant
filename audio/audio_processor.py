@@ -5,8 +5,6 @@ import time
 from dotenv import load_dotenv
 import sounddevice as sd
 import speech_recognition as sr
-import edge_tts
-import asyncio
 import tempfile
 import pygame
 import soundfile as sf
@@ -14,17 +12,12 @@ import threading
 import numpy as np
 from collections import deque
 from contextlib import contextmanager
-from google.cloud import texttospeech
-from google.oauth2 import service_account
 from langdetect import detect
+import re
+from audio.azure_tts import generate_azure_tts
+from audio.google_tts import google_detect_language, PROJECT_ID
 # For Hindi transliteration
-try:
-    from indic_transliteration import sanscript
-    from indic_transliteration.sanscript import transliterate
-    TRANSLITERATION_AVAILABLE = True
-except ImportError:
-    print("Warning: indic-transliteration not installed. Hindi transliteration disabled.")
-    TRANSLITERATION_AVAILABLE = False
+
 
 # Load environment variables
 load_dotenv()
@@ -48,6 +41,46 @@ def suppress_alsa_errors():
 
 CONVERSATION_FILE = "conversation_history.json"
 
+def clean_text_for_speech(text: str) -> str:
+    """
+    Clean text before passing to speech synthesis.
+    Preserves sentence structure and punctuation needed for natural TTS.
+    
+    Args:
+        text: Text to clean
+        
+    Returns:
+        Cleaned text - keeps punctuation and structure for TTS
+    """
+    
+    
+    # Remove ONLY problematic characters: markdown bullets, angle brackets
+    # KEEP: periods, commas, question marks, exclamation marks (essential for TTS)
+    problematic_chars = ['*', '>', '<']
+    cleaned_text = text
+    for char in problematic_chars:
+        cleaned_text = cleaned_text.replace(char, '')
+
+    # Convert markdown links [label](url) -> label (keep visible text, drop URL)
+    cleaned_text = re.sub(r"\[([^\]]+)\]\((?:http[s]?://[^)]+)\)", r"\1", cleaned_text)
+
+    # Remove standalone URLs (http(s) and www) that may remain
+    cleaned_text = re.sub(r'http[s]?://\S+', '', cleaned_text)
+    cleaned_text = re.sub(r'www\.\S+', '', cleaned_text)
+
+    # Remove markdown list symbols (-, •) at line start
+    cleaned_text = re.sub(r'^[-•]\s+', '', cleaned_text, flags=re.MULTILINE)
+
+    # Clean up leftover parentheses that only contained URLs
+    cleaned_text = re.sub(r"\(\s*\)", '', cleaned_text)
+
+    # Clean up extra spaces but preserve structure
+    lines = cleaned_text.split('\n')
+    lines = [' '.join(line.split()) for line in lines if line.strip()]
+    cleaned_text = ' '.join(lines)
+
+    return cleaned_text
+
 # Wake word detection parameters (matching training)
 n_mfcc = 40
 n_fft = 2048
@@ -61,11 +94,10 @@ class AudioProcessors:
 
         self.recognizer = None  # Will be set by SpeechRecognizer if needed
         self.microphone = None
-        self.audio_channels = 2  # Channel configuration for microphone recording (stereo)
+        self.audio_channels = 1 # Channel configuration for microphone recording (stereo)
         self.tts_speed = 1.3     # Speech speed multiplier (1.0 = normal, 1.3 = 30% faster)
-        self.mic_device_id = 2   # Google voiceHAT with stereo INMP mics (hw:3,0)
+        self.mic_device_id = 0   # Google voiceHAT with stereo INMP mics (hw:3,0)
         self.mic_gain_factor = 1.0  # Increased for voiceHAT stereo INMP mics
-        self.digital_gain = 8.0     # BOOSTED 8x: for quieter speech detection with music playing
 
         # Audio processing
         self.sample_rate = 22050
@@ -77,6 +109,7 @@ class AudioProcessors:
         self.speech_interrupted = False
         self.speech_thread = None
         self.pixel_led = None  # Will be set by voice assistant if available
+        self.state_callback = None
         
         # Initialize pygame mixer once to prevent double initialization corruption
         self._init_pygame_mixer()
@@ -96,22 +129,10 @@ class AudioProcessors:
     def set_pixel_led(self, pixel_led):
         """Set pixel LED controller for visual feedback during speech"""
         self.pixel_led = pixel_led
-    
-    def set_template_matcher(self, template_matcher):
-        """Set template matcher for pre-filtering audio stream to speech only"""
-        self._template_matcher = template_matcher
-    
-   
-    def set_audio_buffer(self, buffer, buffer_lock):
-        """Set external audio buffer for the callback to use
-        
-        Args:
-            buffer: The deque buffer to store audio data
-            buffer_lock: Threading lock for the buffer
-        """
-        self._external_buffer = buffer
-        self._external_buffer_lock = buffer_lock
-        print(f"External audio buffer configured with capacity: {buffer.maxlen}")
+
+    def set_state_callback(self, callback):
+        """Set callback for runtime state changes like speaking/neutral."""
+        self.state_callback = callback
     
     # Function to record audio (from test_cnn_model.py)
     def record_audio(self, duration, sample_rate, save_path=None, device=None):
@@ -139,18 +160,29 @@ class AudioProcessors:
                 sd.wait()
             
             print("Recording complete.")
-            audio_flat = audio.flatten()
             
-            # Apply fixed digital gain
-            if self.digital_gain != 1.0:
-                audio_flat = audio_flat * self.digital_gain
-                # Prevent clipping by normalizing if needed
-                max_val = np.max(np.abs(audio_flat))
-                if max_val > 1.0:
-                    audio_flat = audio_flat / max_val
-                    print(f"Applied digital gain {self.digital_gain}x (normalized to prevent clipping)")
-                else:
-                    print(f"Applied digital gain {self.digital_gain}x")
+            # Balance gain across stereo channels before flattening
+            if self.audio_channels == 2 and audio.ndim == 2:
+                # Normalize each channel to same RMS level
+                channel_left = audio[:, 0]
+                channel_right = audio[:, 1]
+                
+                # Calculate RMS for each channel
+                rms_left = np.sqrt(np.mean(channel_left ** 2))
+                rms_right = np.sqrt(np.mean(channel_right ** 2))
+                
+                if rms_left > 0 and rms_right > 0:
+                    # Gain balance: scale both channels to average RMS
+                    avg_rms = (rms_left + rms_right) / 2
+                    gain_left = avg_rms / rms_left
+                    gain_right = avg_rms / rms_right
+                    
+                    audio[:, 0] = channel_left * gain_left
+                    audio[:, 1] = channel_right * gain_right
+                    
+                    print(f"Balanced stereo gain - Left gain: {gain_left:.3f}, Right gain: {gain_right:.3f}")
+            
+            audio_flat = audio.flatten()
             
             if save_path:
                 sf.write(save_path, audio_flat, sample_rate)
@@ -161,327 +193,215 @@ class AudioProcessors:
             return None
         
 
-    def transliterate_to_devanagari(self, text):
-        """Convert romanized Hindi text to Devanagari script"""
-        if not TRANSLITERATION_AVAILABLE:
-            print("Transliteration unavailable - returning original text")
-            return text
-        
-        try:
-            # Transliterate from ITRANS (common romanization) to Devanagari
-            devanagari_text = transliterate(text, sanscript.ITRANS, sanscript.DEVANAGARI)
-            print(f"Transliterated: '{text}' -> '{devanagari_text}'")
-            return devanagari_text
-        except Exception as e:
-            print(f"Transliteration error: {e}, returning original text")
-            return text
-    
     def speak(self, text, prompt=None, lang=None):
         """
-        Threaded TTS function with interruption support and improved Hindi handling
+        TTS function with interruption support and improved Hindi handling.
+        Designed to be called from executor (thread pool), so no internal threading.
         """
+        # Clean text before processing (remove links/URLs etc.)
+        text = clean_text_for_speech(text)
+        
         # Stop any current speech first
         if self.is_speaking:
             self.stop_speech()
             time.sleep(0.1)  # Brief pause to ensure cleanup
         
-     
-        if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
-            try:
-                with self._external_buffer_lock:
-                    self._external_buffer.clear()
-                    if self.debug_mode:
-                        print("Audio buffer cleared before TTS to prevent false wake word triggers")
-            except Exception as e:
-                if self.debug_mode:
-                    print(f"Warning: Could not clear audio buffer: {e}")
-        
         # Reset interruption flag
         self.speech_interrupted = False
-        
-        lang = detect(text)
-        # if lang != "hi" :
-        #     is_hindi = self.detect_hindi_by_keywords(text)
-        #     if is_hindi:
-        #         text = self.transliterate_to_devanagari(text)
+
+        # Detect language using Google detection (fallback to local detection)
+        lang = "en"
+        hindi_pattern = r'[\u0900-\u097F]'  # Hindi Unicode range
+        if re.search(hindi_pattern, text):
+            lang = "hi"
+        else:
+            if text.strip():
+                try:
+                    detected_lang = google_detect_language(text, PROJECT_ID)
+                    # Azure mapping currently supports Hindi/English in this project.
+                    lang = "hi" if detected_lang.startswith("hi") else "en"
+                except Exception:
+                    lang = detect(text) if text.strip() else "en"
                 
         print(f"Final TTS text (lang={lang}): {text}")
-        # Start new speech thread
-        self.speech_thread = threading.Thread(
-            target=self._speak_threaded, 
-            args=(text, prompt, lang)
-        )
-        self.speech_thread.daemon = True
-        self.speech_thread.start()
+        # Call speak logic directly (executor handles threading)
+        self._speak_threaded(text, prompt, lang)
 
-        
-    def generate_and_play_google_tts(self, text, speech_file_path=None, lang="en"):
-        """Generate speech with Google Cloud TTS and save to `speech_file_path`.
-
-        Returns the path to the generated file on success, or None on failure.
-        """
-        start_time = time.time()
-        
-        # Select voice based on language
-        if lang == "hi":
-            language_code = "hi-IN"
-            voice_name = "hi-IN-Chirp3-HD-Achernar"
-            speaking_rate = 0.90  # Normal rate for natural speech
-        else:
-            language_code = "en-IN"
-            voice_name = "en-IN-Chirp3-HD-Achernar"
-            speaking_rate = 0.95  # Normal rate for natural speech
-        
-        print(f"Generating audio with Google Cloud TTS (voice={voice_name}, lang={lang})")
+    def _get_audio_duration(self, file_path):
+        """Get audio duration in seconds using soundfile"""
         try:
-            if not speech_file_path:
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-                speech_file_path = tmp.name
-                tmp.close()
-
-            # Google TTS has 5000 character limit per synthesis request
-            # Split only if text exceeds limit, otherwise keep it whole for natural flow
-            max_chunk_size = 5000
-            
-            if len(text) <= max_chunk_size:
-                # Text fits in one request - best for natural speech
-                chunks = [text]
-            else:
-                import re
-
-                sentences = re.split(r'(?<=[.!?।])\s+', text)
-                
-                chunks = []
-                current_chunk = ""
-                
-                for sentence in sentences:
-                    sentence = sentence.strip()
-                    if not sentence:
-                        continue
-                    
-                    # If adding this sentence exceeds max size, save and start new chunk
-                    test_chunk = current_chunk + (" " if current_chunk else "") + sentence
-                    if len(test_chunk) > max_chunk_size:
-                        if current_chunk.strip():
-                            chunks.append(current_chunk.strip())
-                        current_chunk = sentence
-                    else:
-                        if current_chunk:
-                            current_chunk += " " + sentence
-                        else:
-                            current_chunk = sentence
-                
-                # Add remaining chunk
-                if current_chunk.strip():
-                    chunks.append(current_chunk.strip())
-                
-                # If no chunks, use original text
-                if not chunks:
-                    chunks = [text]
-
-            print(f"Text length: {len(text)} chars. Chunks: {len(chunks)}")
-
-            # Load credentials from service account file
-            creds = service_account.Credentials.from_service_account_file(
-                "nimble-gate-366207-d1ca63590ec3.json"
-            )
-            
-            # Create client
-            client = texttospeech.TextToSpeechClient(credentials=creds)
-            
-            # Generate TTS for each chunk and combine
-            audio_segments = []
-            for i, chunk in enumerate(chunks):
-                if not chunk.strip():
-                    continue
-                
-                print(f"Generating TTS chunk {i+1}/{len(chunks)}: {len(chunk)} chars")
-                    
-                response = client.synthesize_speech(
-                    input=texttospeech.SynthesisInput(text=chunk),
-                    voice=texttospeech.VoiceSelectionParams(
-                        language_code=language_code,
-                        name=voice_name,
-                    ),
-                    audio_config=texttospeech.AudioConfig(
-                        audio_encoding=texttospeech.AudioEncoding.MP3,
-                        speaking_rate=speaking_rate,
-                        pitch=0.0,  # Normal pitch
-                    )
-                )
-                audio_segments.append(response.audio_content)
-            
-            # Combine all audio segments with small pause between them if multiple chunks
-            if len(audio_segments) > 1:
-                # Add small silence between chunks for natural pause
-                # This is approximately 500ms of silence
-                silence_duration = 0.5
-                combined_audio = audio_segments[0]
-                for segment in audio_segments[1:]:
-                    combined_audio += segment
-            else:
-                combined_audio = audio_segments[0] if audio_segments else b''
-            
-            print(f"Combined {len(audio_segments)} audio segment(s)")
-            
-            # Save to file
-            with open(speech_file_path, 'wb') as out:
-                out.write(combined_audio)
-
-            generation_time = time.time() - start_time
-            print(f"Audio generation took: {generation_time:.2f} seconds -> {speech_file_path}")
-            return speech_file_path
+            data, samplerate = sf.read(file_path)
+            duration = len(data) / samplerate
+            return duration
         except Exception as e:
-            print(f"Google TTS generation error: {e}")
+            print(f"Could not determine audio duration: {e}")
             return None
 
-
     def _generate_and_play_simple(self, text, prompt=None, lang="en"):
-        """Generate speech (Google Cloud TTS preferred; Edge TTS fallback) and play it."""
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        """Generate speech and play with pygame or system command for interruption support."""
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp_file_path = tmp_file.name
         tmp_file.close()
 
         try:
-            # Try Google Cloud TTS first
-            try:
-                gen_path = self.generate_and_play_google_tts(text, speech_file_path=tmp_file_path, lang=lang)
-                if not gen_path:
-                    raise RuntimeError('Google TTS generation failed')
-            except Exception as google_error:
-                print(f"Google TTS failed, falling back to Edge TTS: {google_error}")
-                # Edge TTS fallback with language support
-                if lang == "hi":
-                    voice_to_use = 'hi-IN-SwaraNeural'
-                else:
-                    voice_to_use = 'en-IN-AartiNeural'
-                communicate = edge_tts.Communicate(text, voice_to_use)
-                asyncio.run(communicate.save(tmp_file_path))
+            print(f"[TTS] Starting Azure TTS generation for text: {text[:50]}...")
+            gen_path = generate_azure_tts(text, speech_file_path=tmp_file_path, lang=lang)
+            if not gen_path:
+                print("[TTS] ERROR: Azure TTS generation returned None")
+                raise RuntimeError('TTS generation failed')
 
-            # Play audio with pygame (with fallback)
+            print(f"[TTS] Audio generated at: {gen_path}")
+
+            # Play audio with pygame (supports interruption via stop_speech)
             if os.path.exists(tmp_file_path):
+                # Get audio duration for better playback monitoring
+                audio_duration = self._get_audio_duration(tmp_file_path)
+                print(f"[TTS] Audio duration: {audio_duration} seconds")
+                
+                if audio_duration is None or audio_duration <= 0:
+                    print("[TTS] WARNING: Could not determine audio duration or file is empty")
+                
+                played = False
                 try:
-                    # Ensure mixer is initialized (single initialization per session)
+                    # Ensure mixer is initialized
                     if not pygame.mixer.get_init():
                         self._init_pygame_mixer()
                     
+                    print("[TTS] Loading audio file into pygame mixer...")
                     pygame.mixer.music.load(tmp_file_path)
                     pygame.mixer.music.set_volume(0.8)
                     pygame.mixer.music.play()
+                    print("[TTS] Audio playback started, monitoring until completion...")
+                    
+                    # Small delay to ensure audio playback has actually started
+                    time.sleep(0.1)
 
-                    while pygame.mixer.music.get_busy() and not self.speech_interrupted:
+                    # Play while monitoring for interruption
+                    # Use audio duration as fallback if known
+                    start_time = time.time()
+                    min_wait_time = 0.5  # Minimum wait even if pygame reports done
+                    
+                    if audio_duration and audio_duration > 0:
+                        # Add buffer (300ms) to account for initialization delays
+                        timeout = max(audio_duration + 0.3, min_wait_time)
+                    else:
+                        timeout = 120  # 2-minute fallback max
+                    
+                    print(f"[TTS] Monitoring playback with timeout: {timeout:.2f}s")
+                    
+                    # Keep playing until either:
+                    # 1. pygame reports music is not busy AND min_wait_time has passed
+                    # 2. OR we reach the timeout based on audio duration
+                    # 3. OR user interrupts
+                    while not self.speech_interrupted:
+                        elapsed = time.time() - start_time
+                        is_busy = pygame.mixer.music.get_busy()
+                        time_ok = elapsed >= min_wait_time if audio_duration else elapsed < timeout
+                        
+                        if not is_busy and time_ok:
+                            print(f"[TTS] Playback complete after {elapsed:.2f}s")
+                            break
+                        elif elapsed >= timeout:
+                            print(f"[TTS] Timeout reached after {elapsed:.2f}s")
+                            break
+                        
                         time.sleep(0.1)
 
                     pygame.mixer.music.stop()
+                    played = True
+                    print("[TTS] Pygame playback stopped cleanly")
                 except Exception as pygame_error:
-                    print(f"Pygame audio failed: {pygame_error}")
-                  
+                    print(f"[TTS] Pygame audio failed: {pygame_error}")
+                    print("Falling back to system audio playback...")
+                
+                # Fallback: Use system command to play audio
+                if not played:
+                    try:
+                        import subprocess
+                        print("[TTS] Attempting fallback system player...")
+                        # Try MP3-capable players first, then raw/system fallbacks.
+                        for cmd in ['mpg123', 'mpg321', 'mpv', 'ffplay', 'paplay', 'aplay']:
+                            result = subprocess.run(['which', cmd], capture_output=True)
+                            if result.returncode == 0:
+                                print(f"[TTS] Using system player: {cmd}")
+                                player_cmd = [cmd, '-nodisp', '-autoexit', tmp_file_path] if cmd == 'ffplay' else [cmd, tmp_file_path]
+                                subprocess.Popen(player_cmd).wait()
+                                played = True
+                                print(f"[TTS] System playback completed with {cmd}")
+                                break
+                        
+                        if not played:
+                            print("[TTS] No audio player found")
+                    except Exception as sys_error:
+                        print(f"[TTS] System audio playback also failed: {sys_error}")
+            else:
+                print(f"[ERROR] Generated file not found: {tmp_file_path}")
 
         except Exception as e:
-            print(f"TTS error: {e}")
+            print(f"[TTS] TTS error: {e}")
         finally:
+            # Clean up temp file
             try:
                 if os.path.exists(tmp_file_path):
                     time.sleep(0.2)
                     os.unlink(tmp_file_path)
+                    print(f"[TTS] Cleaned up temp file: {tmp_file_path}")
+            except Exception:
+                pass
             except Exception:
                 pass
     
-    def _play_bluetooth_wakeup(self):
-        """Play a very short, quiet sound to wake up Bluetooth speaker
-        
-        This prevents the first words from being cut off on Bluetooth speakers
-        which have a startup delay.
-        """
-        try:
-            # Generate a longer wakeup sound (300ms) for slower Bluetooth speakers
-            duration = 0.3  # 300 milliseconds - longer for Bluetooth lag
-            frequency = 440  # Hz (A4 note, but will be very quiet)
-            sample_rate = 22050
-            
-            # Generate sine wave
-            t = np.linspace(0, duration, int(sample_rate * duration))
-            waveform = np.sin(2 * np.pi * frequency * t)
-            
-            # Make it very quiet (3% volume) so user barely hears it
-            waveform = waveform * 0.03
-            
-            # Convert to 16-bit PCM
-            waveform_int16 = (waveform * 32767).astype(np.int16)
-            
-            # Create a temporary WAV file
-            import wave
-            temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-            temp_wav_path = temp_wav.name
-            temp_wav.close()
-            
-            with wave.open(temp_wav_path, 'w') as wav_file:
-                wav_file.setnchannels(1)  # Mono
-                wav_file.setsampwidth(2)   # 16-bit
-                wav_file.setframerate(sample_rate)
-                wav_file.writeframes(waveform_int16.tobytes())
-            
-            # Play the wakeup sound
-            sound = pygame.mixer.Sound(temp_wav_path)
-            sound.set_volume(0.03)  # Very quiet
-            sound.play()
-            
-            # Wait for it to finish (300ms + buffer for Bluetooth)
-            time.sleep(0.4)
-            
-            # Clean up
-            try:
-                os.unlink(temp_wav_path)
-            except:
-                pass
-                
-        except Exception as e:
-            # If wakeup fails, just continue - not critical
-            if self.debug_mode:
-                print(f"Bluetooth wakeup sound failed (non-critical): {e}")
     
     def _speak_threaded(self, text, prompt, lang="en"):
-        """Threaded speech function with interruption support and improved Hindi processing"""
+        """Threaded speech function with interruption support and improved Hindi processing
+        
+        Ensures LED stays on throughout audio generation and playback.
+        """
         self.is_speaking = True
         self.speech_interrupted = False
+
+        if self.state_callback:
+            try:
+                self.state_callback("speaking")
+            except Exception:
+                pass
         
         # Set LED to green when starting to speak
         if self.pixel_led:
-            print("[DEBUG] Setting LED to GREEN (speaking)")
             self.pixel_led.set_speaking()
-        else:
-            print("[DEBUG] pixel_led is None - LED not available")
+            print("[LED] Green light ON - starting audio generation and playback")
         
         try:
             print(f"Speaking with TTS (lang={lang}): {text}")
             # Call the unified generation/play function with language
+            # This will now properly monitor audio playback duration
             self._generate_and_play_simple(text, prompt=prompt, lang=lang)
+            
+            # Give audio a moment to fully complete
+            if pygame.mixer.get_init():
+                # Wait a bit more for pygame to fully stop
+                max_wait = 0.5
+                wait_count = 0
+                while pygame.mixer.music.get_busy() and wait_count < 5:
+                    time.sleep(0.1)
+                    wait_count += 1
                 
         except Exception as e:
             print(f"Edge TTS failed: {e}")
         finally:
             self.is_speaking = False
+            if self.state_callback:
+                try:
+                    self.state_callback("neutral")
+                except Exception:
+                    pass
             # Turn off LED when done speaking
             if self.pixel_led:
-                print("[DEBUG] Turning LED OFF (finished speaking)")
                 self.pixel_led.off()
-            else:
-                print("[DEBUG] pixel_led is None - LED not available")
+                print("[LED] Green light OFF - audio playback completed")
     
-    def _clean_hindi_text(self, text):
-        """Clean and prepare Hindi text for better TTS pronunciation"""
-        import re
-        
-        # Remove excessive punctuation that might affect pronunciation
-        text = re.sub(r'[^\w\s\u0900-\u097F.,!?]', '', text)
-        
-        # Add pauses after sentences for better clarity
-        text = re.sub(r'([.!?])', r'\1 ', text)
-        
-        # Ensure proper spacing
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
+
+    
     
     def stop_speech(self):
         """Stop current speech immediately"""
@@ -498,12 +418,13 @@ class AudioProcessors:
             if self.speech_thread and self.speech_thread.is_alive():
                 self.speech_thread.join(timeout=0.5)
     
+
     def wait_for_speech_completion(self, timeout=10):
         """Wait for current speech to complete (optional utility method)"""
         start_time = time.time()
         while self.is_speaking and (time.time() - start_time) < timeout:
             time.sleep(0.1)
-        return not self.is_speaking  # Returns True if speech completed, False if timeout
+        return not self.is_speaking  #
     
     
     def _system_beep(self):
@@ -524,14 +445,6 @@ class AudioProcessors:
         print(f"Pausing listening for {seconds} seconds...")
         time.sleep(seconds)
     
-    def set_digital_gain(self, gain_value):
-        """Set digital gain for MEMS microphone
-        
-        Args:
-            gain_value (float): Gain multiplier (1.0 = no gain, 2.0 = double volume, 0.5 = half volume)
-        """
-        self.digital_gain = max(0.1, min(10.0, gain_value))  # Clamp between 0.1x and 10x
-        print(f"Digital gain set to {self.digital_gain}x")
     
     def check_microphones(self):
         """Check available microphones and their indices"""
@@ -563,12 +476,20 @@ class AudioProcessors:
             print(f"Error with current microphone: {e}")
             print("Consider calling check_microphones() and updating mic_device_id")
     
+
+
     def play_beep_sound(self, beep_file = None):
         """Play a simple beep sound to indicate assistant is listening"""
         try:
             # Use the specific beep file
             if not beep_file:
                 beep_file = "beep/short-beep-tone-47916.mp3"
+            
+            # Convert relative path to absolute if needed
+            if not os.path.isabs(beep_file):
+                script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                beep_file = os.path.join(script_dir, beep_file)
+                print(f"[DEBUG] Resolved beep file path: {beep_file}")
 
             if os.path.exists(beep_file):
                 try:
@@ -590,91 +511,10 @@ class AudioProcessors:
                     self._system_beep()
             else:
                 print(f"Beep file not found: {beep_file}")
+                print(f"[DEBUG] Checked absolute path: {os.path.abspath(beep_file)}")
+                print(f"[DEBUG] Current working directory: {os.getcwd()}")
                 self._system_beep()
 
         except Exception as e:
             print(f"Error playing beep: {e}")
             self._system_beep()
-
-    def audio_callback(self, indata, frames, time_info, status):
-        """Audio callback function - stores raw audio to buffer.
-        
-        All detection logic (VAD or pipeline) happens during processing.
-        """
-        if status:
-            print(f"Audio callback status: {status}")
-        
-        if indata is None or len(indata) == 0:
-            return
-
-        try:
-            # Average both stereo channels
-            if indata.ndim > 1 and indata.shape[1] == 2:
-                audio_samples = np.mean(indata, axis=1)
-            else:
-                audio_samples = indata[:, 0]
-        except Exception:
-            audio_samples = indata.flatten()
-        
-        # Apply digital gain
-        if hasattr(self, 'digital_gain') and self.digital_gain != 1.0:
-            audio_samples = audio_samples * self.digital_gain
-            audio_samples = np.clip(audio_samples, -1.0, 1.0)
-
-        # Store raw audio in buffer
-        if hasattr(self, '_external_buffer') and hasattr(self, '_external_buffer_lock'):
-            try:
-                with self._external_buffer_lock:
-                    self._external_buffer.extend(audio_samples)
-            except Exception:
-                pass
-
-        
-    # Comprehensive list of romanized Hindi words
-   
-
-    def detect_hindi_by_keywords(self, text):
-        """Simple and reliable: detect Hindi by counting Hindi words"""
-        self.HINDI_WORDS = {
-        # Pronouns
-        'main', 'mein', 'hum', 'aap', 'tum', 'tu', 'yeh', 'ye', 'woh', 'wo', 
-        'mera', 'meri', 'mere', 'tera', 'teri', 'tere', 'uska', 'uski', 'uske',
-        'hamara', 'hamari', 'hamare', 'tumhara', 'tumhari', 'tumhare',
-        
-        # Verbs
-        'hai', 'hain', 'ho', 'tha', 'thi', 'the', 'hoga', 'hogi', 'honge',
-        'karna', 'karo', 'kar', 'kiya', 'kiye', 'karta', 'karti', 'karte',
-        'jaana', 'jao', 'gaya', 'gayi', 'gaye', 'aana', 'aao', 'aaya', 'aayi',
-        'rahe', 'raha', 'rahi', 'chahiye', 'chaiye', 'sakta', 'sakti', 'sakte',
-        
-        # Question words
-        'kya', 'kaun', 'kab', 'kahan', 'kaise', 'kaisa', 'kaisi', 'kaise',
-        'kyun', 'kyu', 'kitna', 'kitni', 'kitne',
-        
-        # Common words
-        'abhi', 'aaj', 'kal', 'parso', 'subah', 'shaam', 'raat', 'din',
-        'baje', 'minute', 'ghanta', 'samay', 'waqt',
-        'bahut', 'thoda', 'jyada', 'kam', 'sab', 'kuch', 'koi',
-        'achha', 'acha', 'bura', 'theek', 'thik',
-        
-        # Postpositions
-        'ka', 'ki', 'ke', 'ko', 'se', 'mein', 'par', 'tak', 'ke liye',
-        
-        # Common phrases
-        'namaste', 'namaskar', 'dhanyavad', 'shukriya', 'maaf',
-        'haan', 'nahi', 'naa', 'ji', 'bilkul',
-        
-        # Weather/time
-        'mausam', 'garmi', 'sardi', 'baarish', 'dhoop', 'hawa',
-    }
-        words = text.lower().split()
-        
-        # Count Hindi words
-        hindi_count = sum(1 for word in words if word.strip('.,!?') in  self.HINDI_WORDS)
-        total_words = len(words)
-        
-        if hindi_count >= 3:  # At least 3 Hindi words
-            percentage = (hindi_count / total_words) * 100
-            return True
-        else:
-            return False

@@ -1,158 +1,533 @@
-import time
-import numpy as np
+import queue
+import re
+import sys
 import threading
+import time
+from collections import deque
+
+import numpy as np
+import sounddevice as sd
+import speech_recognition as sr
+import webrtcvad
+from openwakeword.model import Model
+
+from speech.speech_recognizer import SpeechRecognizer
 
 
 class WakeWordManager:
-    """Manages wake word detection and related audio processing"""
-    
-    def __init__(self, wake_word_detector, audio_processors, recognizer, pixel_led=None, sample_rate=22050, energy_threshold=0.0001, confidence_threshold=0.70):
-        """Initialize wake word manager"""
-        self.wake_word_detector = wake_word_detector
+    """Class-based threaded wakeword + VAD manager."""
+
+    # Audio / model configuration
+    SAMPLE_RATE = 16000
+    CHUNK_SIZE = 1280  # 80 ms @ 16 kHz
+    DEBUG_SCORES = True
+    CUSTOM_MODEL_PATH = "/home/jubers/Documents/voice_assistant/Sofi_20260609_092546.onnx"
+
+    # Wakeword triggers
+    WAKEWORD_DETECTION_THRESHOLD = 0.40
+    WAKEWORD_COOLDOWN_MS = 500
+
+    # VAD configuration
+    FRAME_MS = 20  # must be 10, 20, or 30 for webrtcvad
+    VAD_AGGRESSIVENESS = 2
+    MIN_SPEECH_MS = 250
+    MAX_COMMAND_MS = 6000
+    PRE_ROLL_MS = 300
+    MAX_SILENCE_MS = 1500
+    ENERGY_SILENCE_THRESHOLD = 0.008
+    NOISE_MULTIPLIER = 3.0
+    NOISE_CALIBRATION_SEC = 2
+    ENERGY_END_MS = 700
+    VAD_RATIO_WINDOW_FRAMES = 12
+    VAD_END_RATIO = 0.10
+    HANGOVER_MS = 80
+
+    # Wakeword-trimming configuration for STT
+    REMOVE_WAKEWORD_FROM_STT = True
+    POST_WAKE_TRIM_MS = 180
+    MIN_TRIMMED_MS = 250
+
+    def __init__(
+        self,
+        audio_processors=None,
+        recognizer=None,
+        pixel_led=None,
+        state_callback=None,
+        sample_rate=16000,
+        energy_threshold=0.0001,
+        confidence_threshold=0.75,
+        templates_dir=None,
+        input_device_index=None,
+    ):
         self.audio_processors = audio_processors
         self.recognizer = recognizer
         self.pixel_led = pixel_led
+        self.state_callback = state_callback
         self.sample_rate = sample_rate
-        
-        # Wake word detection thresholds (lowered for better sensitivity)
-        self.energy_threshold = energy_threshold  # Lower energy threshold (0.035 vs default 0.050)
-        self.confidence_threshold = confidence_threshold  # Lower confidence for better detection
-        # Wake word detection parameters
-        # Use a 2.0 second analysis window for wake-word detection (sliding window)
-        self.window_duration = 1.0  # seconds (matches training duration)
-        # How often (seconds) to step/check the buffer for a new window
-        self.step_duration = 0.15    # seconds
-        self.window_samples = int(self.window_duration * self.sample_rate)
+        self.energy_threshold = energy_threshold
+        self.confidence_threshold = confidence_threshold
+        self.templates_dir = templates_dir
+        self.ambient_noise_floor = 0.003
+        self.input_device_index = input_device_index
 
-        # State variables
+        self.audio_queue = queue.Queue(maxsize=1200)
+        self.wake_q = queue.Queue(maxsize=400)
+        self.vad_q = queue.Queue(maxsize=400)
+
+        self.stop_event = threading.Event()
         self.detection_running = False
-        self.debug_mode = True
-        self.audio_stream = None  # Will store reference to the audio stream
-    
-    def set_audio_stream(self, stream):
-        """Store reference to audio stream for later control"""
-        self.audio_stream = stream
-    
-    def setup_audio_buffer(self):
-        """Setup audio buffer for wake word detection"""
-        from collections import deque
-        
-        self.audio_buffer = deque(maxlen=self.window_samples)
-        self.buffer_lock = threading.Lock()
-        print(f"Audio buffer created with {self.window_samples} samples ({self.window_duration})")
-        
-        # Configure AudioProcessors to use our buffer
-        self.audio_processors.set_audio_buffer(self.audio_buffer, self.buffer_lock)
-        return self.audio_buffer, self.buffer_lock
-    
-    def handle_wake_word_detection(self, process_command_callback):
-        """Handle actions when wake word is detected"""
-        import time as timing_module
-        
-        t0 = timing_module.time()
-        print("Wake word detected! Listening for command...")
-        
-        # Set LED to red for wake word detected
-        if self.pixel_led:
-            self.pixel_led.set_error()  # Red color
-        time.sleep(0.2)  # Brief pause to show detection
+
+        self.stream = None
+        self.threads = []
+
+        self.shared_recognizer = sr.Recognizer()
+        self.google_speech_recognizer = SpeechRecognizer(
+            recognizer=self.shared_recognizer,
+            audio_processor=None,
+            device_index=None,
+            pixel_led=None,
+        )
+
+        self.speech_recognizer = recognizer if recognizer is not None else self.google_speech_recognizer
+        self.process_command_callback = None
+
+        self.shared_state = None
+        self.recognition_lock = threading.Lock()
+        self.is_recording = False
+
+    def list_input_devices(self):
+        print("Available input devices:")
         try:
-            # Play beep sound asynchronously (non-blocking) to indicate readiness
-            import threading
-            beep_thread = threading.Thread(target=self._play_beep_async, daemon=True)
-            beep_thread.start()
-
-            # Set LED to blue while listening for command
-            if self.pixel_led:
-                self.pixel_led.set_listening()  # Blue color
-            
-            # Start speech recognition immediately without waiting for beep
-            print("Starting speech recognition...")
-
-            user_command = self.recognizer.listen_for_command()
-
-            print(f"Speech recognition result: {user_command}")
-            
-            if user_command:
-                print(f"Processing command: {user_command}")
-                should_exit = process_command_callback(user_command)
-                print(f"Command processing result - should_exit: {should_exit}")
-                if should_exit:
-                    return True  # Signal to break from main loop
-            else:
-                print("No command detected, waiting for next input...")
-            
-            # Set LED back to off after processing
-            if self.pixel_led:
-                self.pixel_led.off()
-            
-            return False  # Continue main loop
-            
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                if dev.get("max_input_channels", 0) > 0:
+                    print(
+                        f"  {i}: {dev['name']} "
+                        f"(inputs={dev['max_input_channels']}, default_sr={dev['default_samplerate']})"
+                    )
         except Exception as e:
-            print(f"Error in handle_wake_word_detection: {e}")
-            import traceback
-            traceback.print_exc()
-            return False  # Continue on error
-            return False  # Continue on error
-    
-    def _play_beep_async(self):
-        """Play beep sound in background without blocking"""
+            print(f"Failed to list devices: {e}")
+
+    def _audio_callback(self, indata, frames, time_info, status):
+        if status and "overflow" not in str(status).lower():
+            print(f"Status flag: {status}", file=sys.stderr)
+
+        chunk = indata[:, 0].copy()
         try:
-            self.audio_processors.play_beep_sound()
-        except Exception as e:
-            print(f"Beep sound error: {e}")
-    
-    def main_detection_loop(self, process_command_callback):
-        """Main wake word detection loop"""
-        print("Wake word detection loop started")
-        
-        while self.detection_running:
-            # Ensure wake word detector and its model are available
-            if not getattr(self, 'wake_word_detector', None) or not getattr(self.wake_word_detector, 'model', None):
-                time.sleep(self.step_duration)
-                continue
-                
-            # Check if we have enough audio data in our buffer
-            if len(self.audio_buffer) < self.window_samples:
-                time.sleep(self.step_duration)
-                continue
+            self.audio_queue.put_nowait(chunk)
+        except queue.Full:
+            try:
+                self.audio_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self.audio_queue.put_nowait(chunk)
+            except queue.Full:
+                pass
 
-            # Wake word detection (now always active, even during speech)
-            audio_window = np.array(self.audio_buffer)
-            detected, energy, confidence = self.wake_word_detector.detect_wakeword(
-                audio_window, self.sample_rate, 
-                energy_threshold=self.energy_threshold, 
-                confidence_threshold=self.confidence_threshold
+    def _load_model(self):
+        print("Loading openWakeWord model...")
+        try:
+            return Model(wakeword_models=[self.CUSTOM_MODEL_PATH], inference_framework="onnx")
+        except Exception as e:
+            print(f"Failed to initialize openWakeWord model: {e}")
+            raise
+
+    def _create_input_stream(self, frame_size):
+        try:
+            return sd.InputStream(
+                samplerate=self.SAMPLE_RATE,
+                channels=1,
+                dtype="float32",
+                blocksize=frame_size,
+                device=self.input_device_index,
+                callback=self._audio_callback,
             )
-            
-            # Show detection attempts with energy > 0.010 for debugging
-            if energy and energy > 0.010 and self.debug_mode:
-                print(f"Wakeword check: Detected={detected}, Energy={energy:.4f}, Confidence={confidence}")
-            
-            # Handle wake word detection
-            if detected:
-                # If we're speaking, interrupt it via audio_processors
-                if getattr(self.audio_processors, 'is_speaking', False):
-                    print("Wake word detected while speaking - interrupting!")
+        except Exception as e:
+            print(f"Failed to open input stream: {e}")
+            print("Tip: set input_device_index to a valid microphone index from the list above.")
+            raise
+
+    @staticmethod
+    def _normalize_chunk(raw_chunk, frame_size):
+        if len(raw_chunk) == frame_size:
+            return raw_chunk
+        if len(raw_chunk) < frame_size:
+            padded = np.zeros(frame_size, dtype=np.float32)
+            padded[: len(raw_chunk)] = raw_chunk
+            return padded
+        return raw_chunk[:frame_size]
+
+    @staticmethod
+    def _recent_vad_ratio(recent_flags):
+        if not recent_flags:
+            return 0.0
+        return float(sum(recent_flags)) / float(len(recent_flags))
+
+    def _calibrate_noise_floor(self):
+        """
+        Measure ambient room noise before starting detection.
+        """
+        samples = []
+
+        print("[CAL] Measuring ambient noise... stay quiet")
+
+        start = time.time()
+
+        while time.time() - start < self.NOISE_CALIBRATION_SEC:
+            try:
+                chunk = self.audio_queue.get(timeout=0.1)
+
+                rms = float(
+                    np.sqrt(
+                        np.mean(chunk.astype(np.float32) ** 2)
+                    )
+                )
+
+                samples.append(rms)
+
+            except queue.Empty:
+                pass
+
+        if samples:
+            self.ambient_noise_floor = float(np.percentile(samples, 20))
+
+        print(
+            f"[CAL] Ambient floor={self.ambient_noise_floor:.6f}",
+            f"Current={rms:.5f}"
+        )
+
+    def _remove_wakeword_from_segment(self, segment_float32, first_hit_end_sample):
+        if (
+            not self.REMOVE_WAKEWORD_FROM_STT
+            or first_hit_end_sample is None
+            or first_hit_end_sample <= 0
+        ):
+            return segment_float32
+
+        trim_extra_samples = int((self.POST_WAKE_TRIM_MS / 1000.0) * self.SAMPLE_RATE)
+        trim_start = max(0, int(first_hit_end_sample) + trim_extra_samples)
+
+        if trim_start >= len(segment_float32):
+            return segment_float32
+
+        trimmed = segment_float32[trim_start:]
+        min_trimmed_samples = int((self.MIN_TRIMMED_MS / 1000.0) * self.SAMPLE_RATE)
+        if len(trimmed) < min_trimmed_samples:
+            return segment_float32
+        return trimmed
+
+    def _recognize_and_dispatch(self, segment, trigger_offset_samples):
+        if not self.recognition_lock.acquire(blocking=False):
+            print("[INFO] Recognition busy, skipping this segment.")
+            return
+        command_dispatched = False
+        try:
+            stt_segment = self._remove_wakeword_from_segment(segment, trigger_offset_samples)
+            clipped = np.clip(stt_segment, -1.0, 1.0)
+            audio_int16 = (clipped * 32767).astype(np.int16)
+            audio_data = sr.AudioData(audio_int16.tobytes(), self.SAMPLE_RATE, 2)
+            recognized_command = self.speech_recognizer._recognize_audio(audio_data)
+            print(f"🎙️ Recognized command: {recognized_command}")
+            if recognized_command and self.process_command_callback:
+                if self.state_callback:
                     try:
-                        self.audio_processors.stop_speech()
+                        self.state_callback("thinking")
                     except Exception:
                         pass
-                    time.sleep(0.1)  # Reduced pause after interruption (was 0.3s)
+                self.process_command_callback(recognized_command)
+                command_dispatched = True
+        except Exception as e:
+            print(f"[RECOG] Command recognition/dispatch failed: {e}")
+            if self.pixel_led is not None:
+                try:
+                    self.pixel_led.off()
+                except Exception:
+                    pass
+        finally:
+            if self.recognition_lock.locked():
+                self.recognition_lock.release()
 
-                should_exit = self.handle_wake_word_detection(process_command_callback)
-                if should_exit:
-                    self.detection_running = False  # Set to False before breaking
-                    break
+            # If no valid command was dispatched, ensure listening LED is turned off.
+            if not command_dispatched and self.pixel_led is not None:
+                try:
+                    self.pixel_led.off()
+                except Exception:
+                    pass
+
+    def _distributor_loop(self, frame_size):
+        while not self.stop_event.is_set():
+            try:
+                raw_chunk = self.audio_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            chunk = self._normalize_chunk(raw_chunk, frame_size)
+
+            with self.shared_state["lock"]:
+                self.shared_state["audio_ring"].append(chunk)
+                self.shared_state["global_samples"] += len(chunk)
+                current_global = self.shared_state["global_samples"]
+
+            try:
+                self.wake_q.put_nowait((chunk, current_global))
+            except queue.Full:
+                try:
+                    self.wake_q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.wake_q.put_nowait((chunk, current_global))
+                except queue.Full:
+                    pass
+
+            try:
+                self.vad_q.put_nowait((chunk, current_global))
+            except queue.Full:
+                try:
+                    self.vad_q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self.vad_q.put_nowait((chunk, current_global))
+                except queue.Full:
+                    pass
+
+    def _wakeword_loop(self):
+        model = self._load_model()
+        last_trigger_time = 0.0
+
+        while not self.stop_event.is_set():
+            try:
+                chunk, global_samples = self.wake_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            clipped = np.clip(chunk, -1.0, 1.0)
+            audio_int16 = (clipped * 32767).astype(np.int16)
+            scores = model.predict(audio_int16)
+
+            best_name = None
+            best_score = 0.0
+            for name, score in scores.items():
+                sc = float(score)
+                if sc > best_score:
+                    best_score = sc
+                    best_name = name
+
+            now = time.time()
+            cooldown_ok = (now - last_trigger_time) * 1000.0 >= self.WAKEWORD_COOLDOWN_MS
+            if best_score >= self.WAKEWORD_DETECTION_THRESHOLD and cooldown_ok:
+                last_trigger_time = now
+                self.pixel_led.set_listening()
+                if self.state_callback:
+                    try:
+                        self.state_callback("listening")
+                    except Exception:
+                        pass
+                with self.shared_state["lock"]:
+                    self.shared_state["trigger_global_sample"] = global_samples
+                self.shared_state["wakeword_event"].set()
+                print(f"\n🔥 Wakeword trigger: model={best_name}, score={best_score:.2f}")
+
+            if self.DEBUG_SCORES and int(now * 10) % 10 == 0:
+                print(f"[WW] best_score={best_score:.2f}", end="\r")
+
+    def _vad_capture_loop(self):
+        frame_size = int(self.SAMPLE_RATE * self.FRAME_MS / 1000)
+        vad = webrtcvad.Vad(self.VAD_AGGRESSIVENESS)
+        chunk_ms = (frame_size / self.SAMPLE_RATE) * 1000.0
+
+        recording = False
+        speech_buffer = []
+        speech_ms = 0.0
+        silence_ms = 0.0
+        hangover_ms_left = 0.0
+        recent_flags = deque(maxlen=max(self.VAD_RATIO_WINDOW_FRAMES, 35))
+        trigger_offset_samples = None
+        recording_elapsed_ms = 0.0
+
+        while not self.stop_event.is_set():
+            try:
+                chunk, global_samples = self.vad_q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            frame_bytes = (np.clip(chunk, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+            is_speech = vad.is_speech(frame_bytes, self.SAMPLE_RATE)
+            recent_flags.append(1 if is_speech else 0)
+
+            rms = float(
+            np.sqrt(
+                np.mean(chunk.astype(np.float32) ** 2)
+                )
+            )
+            vad_ratio = self._recent_vad_ratio(recent_flags)
+
+            if is_speech:
+                hangover_ms_left = self.HANGOVER_MS
+            else:
+                hangover_ms_left = max(0.0, hangover_ms_left - chunk_ms)
+
+            if not recording:
+                if self.shared_state["wakeword_event"].is_set():
+                    with self.shared_state["lock"]:
+                        ring_chunks = list(self.shared_state["audio_ring"])
+                        trigger_global_sample = self.shared_state["trigger_global_sample"]
+
+                    recording = True
+                    self.is_recording = True
+                    speech_buffer = ring_chunks[-max(1, int(self.PRE_ROLL_MS / chunk_ms)):]
+                    speech_buffer.append(chunk)
+                    speech_ms = (sum(len(ch) for ch in speech_buffer) / self.SAMPLE_RATE) * 1000.0
+                    recording_elapsed_ms = 0.0
+                    silence_ms = 0.0
+                    hangover_ms_left = self.HANGOVER_MS
+
+                    segment_start_global = global_samples - sum(len(ch) for ch in speech_buffer)
+                    trigger_offset_samples = max(0, trigger_global_sample - segment_start_global)
+                    print(f"\n[VAD START] peak={rms:.3f} vad_ratio={vad_ratio:.2f}")
+                continue
+
+            speech_buffer.append(chunk)
+            speech_ms += chunk_ms
+
+            silence_threshold = max(
+                self.ambient_noise_floor * self.NOISE_MULTIPLIER,
+                self.ENERGY_SILENCE_THRESHOLD
+            )
+
+            is_energy_silent = rms < silence_threshold
+
+            if (
+                is_energy_silent
+                and vad_ratio <= self.VAD_END_RATIO
+                and hangover_ms_left <= 0.0
+            ):
+                silence_ms += chunk_ms
+            else:
+                silence_ms = 0.0
+
+            end_by_energy = silence_ms >= self.ENERGY_END_MS and speech_ms >= self.MIN_SPEECH_MS
+            end_by_max = speech_ms >= self.MAX_COMMAND_MS
+            end_by_long_silence = silence_ms >= self.MAX_SILENCE_MS
+            if self.DEBUG_SCORES:
+                print(
+                f"[REC] rms={rms:.5f} "
+                f"noise={self.ambient_noise_floor:.5f} "
+                f"thr={silence_threshold:.5f} "
+                )
+
+            if end_by_energy or end_by_max or end_by_long_silence:
+                end_reason = "energy_silence" if end_by_energy else "max_len"
+                segment = np.concatenate(speech_buffer).astype(np.float32)
+                print(f"\n[VAD END] duration={len(segment)/self.SAMPLE_RATE:.2f}s, reason={end_reason}")
+
+                threading.Thread(
+                    target=self._recognize_and_dispatch,
+                    args=(segment, trigger_offset_samples),
+                    daemon=True,
+                ).start()
+
+                recording = False
+                speech_buffer = []
+                speech_ms = 0.0
+                silence_ms = 0.0
+                hangover_ms_left = 0.0
+                trigger_offset_samples = None
+                recording_elapsed_ms = 0.0
+                self.is_recording = False
+                self.shared_state["wakeword_event"].clear()
+                recent_flags.clear()
                 
-                print("Returning to wake word listening...")
-                
-            time.sleep(self.step_duration)
-    
-    def start_detection(self):
-        """Start wake word detection"""
+    def start_detection(self, process_command_callback=None):
+        if self.detection_running:
+            print("[WWD] Detection already running")
+            return
+
+        if self.FRAME_MS not in (10, 20, 30):
+            raise ValueError("FRAME_MS must be one of: 10, 20, 30")
+
+        self.process_command_callback = process_command_callback
+        self.stop_event.clear()
         self.detection_running = True
-    
+
+        frame_size = int(self.SAMPLE_RATE * self.FRAME_MS / 1000)
+        ring_chunks = max(1, int((self.PRE_ROLL_MS / 1000.0) * self.SAMPLE_RATE / frame_size))
+        self.shared_state = {
+            "lock": threading.Lock(),
+            "wakeword_event": threading.Event(),
+            "trigger_global_sample": 0,
+            "global_samples": 0,
+            "audio_ring": deque(maxlen=ring_chunks * 20),
+        }
+
+        self.list_input_devices()
+        print(
+            "Listening with class-based THREADED wakeword+VAD capture... "
+            f"(ww_threshold={self.WAKEWORD_DETECTION_THRESHOLD}, device={self.input_device_index})"
+        )
+
+        self.stream = self._create_input_stream(frame_size)
+        self.stream.start()
+        self._calibrate_noise_floor()
+        distributor = threading.Thread(target=self._distributor_loop, args=(frame_size,), daemon=True)
+        wake_thread = threading.Thread(target=self._wakeword_loop, daemon=True)
+        vad_thread = threading.Thread(target=self._vad_capture_loop, daemon=True)
+
+        self.threads = [distributor, wake_thread, vad_thread]
+        for t in self.threads:
+            t.start()
+
+        print("[WWD] Ready. Speak wakeword now...")
+
     def stop_detection(self):
-        """Stop wake word detection"""
+        if not self.detection_running:
+            return
+
+        self.stop_event.set()
         self.detection_running = False
+
+        if self.stream is not None:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+
+        for t in self.threads:
+            if t.is_alive():
+                t.join(timeout=1.0)
+        self.threads = []
+
+        print("[WWD] Threaded detection stopped")
+
+    def trigger_listening(self):
+        """Trigger immediate speech recognition (uses same flow as wakeword detection).
+        
+        Returns:
+            bool: True if successfully triggered, False otherwise
+        """
+        if not self.detection_running or self.shared_state is None:
+            return False
+        
+        if self.is_recording:
+            return False
+        
+        try:
+            self.pixel_led.set_listening()
+            if self.state_callback:
+                try:
+                    self.state_callback("listening")
+                except Exception:
+                    pass
+            with self.shared_state["lock"]:
+                self.shared_state["trigger_global_sample"] = self.shared_state["global_samples"]
+            self.shared_state["wakeword_event"].set()
+            print("[GESTURE] Listening triggered by hand gesture (same as wakeword)", flush=True)
+            return True
+        except Exception as e:
+            print(f"[GESTURE] Failed to trigger: {e}", flush=True)
+            return False
+

@@ -39,7 +39,7 @@ def extract_features(audio, sr, n_mfcc=40, desired_length=44):
     return features.T  # Shape: (desired_length, 120)
 
 #### LOADING THE VOICE DATA FOR VISUALIZATION ###
-walley_sample = "model_training/background_sound/1.wav"
+walley_sample = "model_training/background_sound/0.wav"
 data, sample_rate = librosa.load(walley_sample)
 
 ##### VISUALIZING WAVE FORM ##
@@ -75,7 +75,7 @@ print(f"Wake word samples: {len(data_path_dict[1])}")
 for class_label, list_of_files in data_path_dict.items():
     for single_file in list_of_files:
         try:
-            audio, sample_rate = librosa.load(single_file, duration=1.0, sr=22050)
+            audio, sample_rate = librosa.load(single_file, duration=2.0, sr=16000)
             # Skip very short audio files
             if len(audio) < 1000:
                 continue

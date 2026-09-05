@@ -12,6 +12,13 @@ except ImportError:
     HAS_SPI = False
     print("Warning: spidev not available, running in simulation mode")
 
+try:
+    import RPi.GPIO as GPIO
+    HAS_GPIO = True
+except ImportError:
+    HAS_GPIO = False
+    print("Warning: RPi.GPIO not available")
+
 
 class PixelLEDController:
     """Control WS2812B RGB pixel LED using SPI interface"""
@@ -122,8 +129,8 @@ class PixelLEDController:
         self.set_all_color(0, 0, 255)
     
     def set_processing(self):
-        """Start blinking animation for processing state in background thread"""
-        self.start_animation(self._blink_animation)
+        """Start multicolor wave animation for processing state in background thread"""
+        self.start_animation(self._processing_wave_animation)
     
     def set_speaking(self):
         """Set green color for speaking state"""
@@ -152,10 +159,10 @@ class PixelLEDController:
                     self.animation_thread.join(timeout=0.5)
     
     def _blink_animation(self):
-        """Blinking animation for processing - runs in background thread"""
+        """Blinking animation for processing - runs in background thread (fallback)"""
         colors = [(0, 0, 255), (255, 0, 0), (0, 255, 0)]  # Blue, Red, Green
         interval = 0.1
-        
+
         while self.animation_running:
             for color in colors:
                 if not self.animation_running:
@@ -166,6 +173,67 @@ class PixelLEDController:
                     break
                 self.off()
                 time.sleep(interval)
+
+    def _processing_wave_animation(self):
+        """Multicolor moving wave animation for processing - runs in background thread."""
+        # Tuned for 26 LEDs, still works for other lengths.
+        # Colors are in RGB space and smoothly interpolated.
+        palette = [
+            (0, 0, 255),    # Blue
+            (0, 255, 255),  # Cyan
+            (0, 255, 0),    # Green
+            (255, 255, 0),  # Yellow
+            (255, 0, 0),    # Red
+            (255, 0, 255),  # Magenta
+        ]
+
+        def lerp(a, b, t):
+            return int(a + (b - a) * t)
+
+        def palette_color(pos):
+            """Get interpolated color from repeating palette for float position."""
+            n = len(palette)
+            pos = pos % n
+            i0 = int(pos)
+            i1 = (i0 + 1) % n
+            t = pos - i0
+            r = lerp(palette[i0][0], palette[i1][0], t)
+            g = lerp(palette[i0][1], palette[i1][1], t)
+            b = lerp(palette[i0][2], palette[i1][2], t)
+            return (r, g, b)
+
+        # Wave parameters (good defaults for 26 LEDs)
+        speed = 0.35          # Higher = faster motion
+        spatial_scale = 0.22  # Color spread across strip
+        tail_length = 7       # Brightness falloff tail size
+        frame_delay = 0.04    # ~25 FPS
+
+        phase = 0.0
+        while self.animation_running:
+            new_pixels = []
+            for i in range(self.LED_COUNT):
+                # Color varies by index + phase to create moving rainbow wave
+                base = palette_color((i * spatial_scale) + phase)
+
+                # Create a moving intensity envelope ("wave head + tail")
+                dist = (i - int(phase * 3)) % self.LED_COUNT
+                if dist < tail_length:
+                    intensity = 1.0 - (dist / max(1, tail_length))
+                else:
+                    intensity = 0.20  # dim background glow
+
+                r = int(base[0] * intensity)
+                g = int(base[1] * intensity)
+                b = int(base[2] * intensity)
+                new_pixels.append((r, g, b))
+
+            self.pixels = new_pixels
+            self.show()
+            time.sleep(frame_delay)
+            phase += speed
+
+        # Clear when animation stops
+        self.off()
     
     def cleanup(self):
         """Clean up - turn off all LEDs and stop animations"""
@@ -174,39 +242,17 @@ class PixelLEDController:
         if self.spi:
             self.spi.close()
 
-
 # Example usage
 if __name__ == "__main__":
-    print("WS2812B LED Controller (SPI Method)")
-    print("Make sure SPI is enabled on your Raspberry Pi")
-    print("Connect LED Data pin to GPIO 10 (Physical pin 19)\n")
-    
-    led = PixelLEDController(led_count=6, brightness=0.5)
-    
-    try:
-        print("Testing LED colors...")
-        
-        print("Red")
-        led.set_error()
-        time.sleep(1)
-        
-        print("Green")
-        led.set_speaking()
-        time.sleep(1)
-        
-        print("Blue")
-        led.set_listening()
-        time.sleep(1)
-        
-        print("Blinking (Processing)")
-        led.set_processing()
-        time.sleep(3)
-        
-        print("Off")
-        led.off()
-        
-    except KeyboardInterrupt:
-        print("\nStopped by user")
-    finally:
-        led.cleanup()
-        print("Cleanup complete")
+    print("HMMD-mmWave Sensor Motion Detection with Red LED")
+    print("=" * 60)
+    print("GPIO 27 (Physical pin 13) <- Sensor OUT")
+    print()
+    obj = PixelLEDController(led_count=26, brightness=0.7, simulate=False)
+    obj.set_processing()
+    time.sleep(10)
+
+    print("Stop + off + cleanup")
+    obj.stop_animation()
+    obj.off()
+    obj.cleanup()

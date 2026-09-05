@@ -7,14 +7,14 @@ Wants=network.target
 Type=simple
 User=jubers
 WorkingDirectory=/home/jubers/Documents/voice_assistant
-Environment="PATH=/home/jubers/ENV/test/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/home/jubers/Documents/ENV/AI/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="PULSE_SERVER=/run/user/1000/pulse/native"
 Environment="XDG_RUNTIME_DIR=/run/user/1000"
 
 # Wait for audio devices to be ready
 ExecStartPre=/bin/sleep 5
 
-ExecStart=/home/jubers/ENV/test/bin/python /home/jubers/Documents/voice_assistant/voice_assistant.py
+ExecStart=/home/jubers/Documents/ENV/AI/bin/python /home/jubers/Documents/voice_assistant/voice_assistant.py
 
 # Restart configuration
 Restart=on-failure

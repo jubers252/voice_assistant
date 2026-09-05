@@ -47,6 +47,7 @@ class ConversationManager:
         os.makedirs(dirpath, exist_ok=True)
 
         # Write using the instance's file path (not a global constant) and use UTF-8
+        # Ensure URLs and all fields are properly preserved
         with open(self.file_path, 'w', encoding='utf-8') as f:
             json.dump(self.conversation_history, f, ensure_ascii=False, indent=2)
 

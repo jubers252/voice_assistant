@@ -5,10 +5,10 @@ import os
 import numpy as np
 
 
-SAMPLE_RATE = 22050  # 22.05 kHz
-RECORD_SECONDS = 1
-DIGITAL_GAIN = 5.0  # Amplify recorded audio (1.0 = no gain, 5.0 = 5x louder)
-SAVE_DIR = os.path.join(os.path.dirname(__file__), "audio_data")  # Always save in model_training/audio
+SAMPLE_RATE = 16000  # 22.05 kHz
+RECORD_SECONDS = 2
+DIGITAL_GAIN = 1.0  # Amplify recorded audio (1.0 = no gain, 5.0 = 5x louder)
+SAVE_DIR = os.path.join(os.path.dirname(__file__), "audio_data")  # Always save in model_training/audio_data
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 
@@ -53,12 +53,12 @@ def record_audio_and_save(save_path, n_times=50):
     """
 
     input("To start recording Wake Word press Enter: ")
-    for i in range(205, n_times):
-        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
+    for i in range(360, n_times):
+        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
         
         # Apply digital gain
-        myrecording = apply_digital_gain(myrecording, gain=DIGITAL_GAIN)
+        # myrecording = apply_digital_gain(myrecording, gain=DIGITAL_GAIN)
         
         filename = f"wakeword_{i}.wav"
         write(os.path.join(save_path, filename), SAMPLE_RATE, myrecording)
@@ -81,17 +81,17 @@ def record_background_sound(save_path, n_times=2500):
     """
 
     input("To start recording your background sounds press Enter: ")
-    for i in range(2000, n_times):
-        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2)
+    for i in range(4304, n_times):
+        myrecording = sd.rec(int(RECORD_SECONDS * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1)
         sd.wait()
         write(os.path.join(save_path, str(i) + ".wav"), SAMPLE_RATE, myrecording)
         print(f"Currently on {i+1}/{n_times}")
 
 # Step 1: Record yourself saying the Wake Word
-# print("Recording the Wake Word:\n")
-record_audio_and_save(SAVE_DIR, n_times=2500) 
+# print("record_audio_and_save the Wake Word:\n")
+record_audio_and_save(SAVE_DIR, n_times=450)
 
-# Step 2: Record your background sounds (Just let it run, it will auto
+# Step 2: Record your background sounds (Just let it run, it will automatically record)
 # matically record)
 # print("Recording the Background sounds:\n")
 # record_audio_and_save(SAVE_DIR, n_times=400)

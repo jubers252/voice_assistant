@@ -56,8 +56,15 @@ class ReminderManager:
         with open(REMINDERS_FILE, 'w') as f:
             json.dump(self.reminders, f, indent=2)
     
-    def add_reminder(self, text: str, remind_time: str, description: str = "") -> str:
-        """Add a new reminder with natural language time parsing."""
+    def add_reminder(self, text: str, remind_time: str, description: str = "", recurring: str = "once") -> str:
+        """Add a new reminder with natural language time parsing.
+        
+        Args:
+            text: Reminder text
+            remind_time: When to remind (e.g., '5 PM', 'in 30 minutes')
+            description: Optional description
+            recurring: 'once', 'daily', 'weekly' (default: 'once')
+        """
         try:
             remind_datetime = self._parse_time(remind_time)
             
@@ -71,7 +78,8 @@ class ReminderManager:
                 "remind_time": remind_datetime.isoformat(),
                 "created_time": datetime.now().isoformat(),
                 "active": True,
-                "notified": False
+                "notified": False,
+                "recurring": recurring
             }
             
             self.reminders.append(reminder)
@@ -174,6 +182,23 @@ class ReminderManager:
                 break
         self.save_reminders()
     
+    def _reschedule_daily_reminder(self, reminder: Dict):
+        """Reschedule a daily reminder for the next day at the same time."""
+        try:
+            current_time = datetime.fromisoformat(reminder["remind_time"])
+            next_day = current_time + timedelta(days=1)
+            
+            # Update the reminder for next day
+            for r in self.reminders:
+                if r["id"] == reminder["id"]:
+                    r["remind_time"] = next_day.isoformat()
+                    r["notified"] = False
+                    self.save_reminders()
+                    print(f"Daily reminder rescheduled for {next_day.strftime('%I:%M %p on %B %d')}")
+                    break
+        except Exception as e:
+            print(f"Error rescheduling daily reminder: {e}")
+    
     def cancel_reminder(self, reminder_id: int) -> str:
         """Cancel a specific reminder."""
         for reminder in self.reminders:
@@ -207,6 +232,9 @@ class ReminderManager:
         if self.running and self.reminder_thread and self.reminder_thread.is_alive():
             return  # Thread is already running
         
+        # On startup, reschedule daily reminders for today/tomorrow at same time
+        self._init_daily_reminders_on_startup()
+        
         self.running = True
         self.reminder_thread = threading.Thread(target=self._reminder_check_loop, daemon=True)
         self.reminder_thread.start()
@@ -216,6 +244,48 @@ class ReminderManager:
         """Stop the reminder checker thread."""
         self.running = False
         print("Reminder checker stopped.")
+    
+    def _init_daily_reminders_on_startup(self):
+        """
+        On service startup, reschedule daily reminders for today/tomorrow.
+        This prevents all daily reminders from triggering immediately on startup.
+        """
+        now = datetime.now()
+        changes_made = False
+        
+        for reminder in self.reminders:
+            if reminder.get('recurring') == 'daily' and not reminder['notified']:
+                try:
+                    remind_dt = datetime.fromisoformat(reminder['remind_time'])
+                    
+                    # Extract the time component (hour and minute)
+                    reminder_hour = remind_dt.hour
+                    reminder_minute = remind_dt.minute
+                    
+                    # Create a datetime for today at this time
+                    today_at_time = now.replace(hour=reminder_hour, minute=reminder_minute, second=0, microsecond=0)
+                    
+                    # If that time has already passed today, schedule for tomorrow
+                    if today_at_time <= now:
+                        target_time = today_at_time + timedelta(days=1)
+                    else:
+                        target_time = today_at_time
+                    
+                    # Update the reminder
+                    reminder['remind_time'] = target_time.isoformat()
+                    reminder['notified'] = False  # Ensure it will trigger at the right time
+                    changes_made = True
+                    
+                    print(f"✓ Daily reminder rescheduled: '{reminder['text']}' for {target_time.strftime('%I:%M %p on %B %d')}")
+                    
+                except Exception as e:
+                    print(f"Error rescheduling daily reminder {reminder.get('id')}: {e}")
+        
+        # Save changes if any were made
+        if changes_made:
+            self.save_reminders()
+            print(f"Reminders file updated with rescheduled daily reminders")
+
     
     def _reminder_check_loop(self):
         """Background loop that checks for due reminders every 30 seconds and announces them."""
@@ -234,17 +304,31 @@ class ReminderManager:
                         
                         # Check if TTS is not currently speaking
                         if not getattr(self.audio_processors, 'is_speaking', False) and reminder["notified"] == False:
-                            # Play beep sound first
-                            self.audio_processors.play_beep_sound()
+                           
+                            time_diff = (datetime.now() - datetime.fromisoformat(reminder['remind_time'])).total_seconds()
+                            if time_diff > 600 and reminder.get('recurring') != 'daily': 
+                                print("Skipping reminder - more than 10 minutes late")
+                                self.mark_reminded(reminder["id"])
+                                continue
+
+                            for _ in range(3):
+                                self.audio_processors.play_beep_sound(beep_file ="beep/japan-eas-alarm-277877.mp3")
+                                time.sleep(0.2)
                             time.sleep(0.3)
                             
                             # Speak the reminder
-                            reminder_message = f"Reminder: {reminder['text']}"
+                            recurring_text = " (Daily Alarm)" if reminder.get('recurring') == 'daily' else ""
+                            reminder_message = f"Reminder{recurring_text}: {reminder['text']}"
                             self.audio_processors.speak(reminder_message)
                             print("✓ Reminder announced successfully")
                             
-                            # Mark as notified
-                            self.mark_reminded(reminder["id"])
+                            # Handle recurring reminders
+                            if reminder.get('recurring') == 'daily':
+                                # Schedule for next day at the same time
+                                self._reschedule_daily_reminder(reminder)
+                            else:
+                                # Mark one-time reminder as notified
+                                self.mark_reminded(reminder["id"])
                         else:
                             print("Assistant is speaking, will retry reminder later")
                 

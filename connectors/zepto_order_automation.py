@@ -5,9 +5,11 @@ import os
 import logging
 import re
 from playwright.async_api import async_playwright
-from bs4 import BeautifulSoup
+from telegram_bot import TelegramBot
 from zepto_simple_login_async import ZeptoLoginAsync
+from dotenv import load_dotenv  
 
+load_dotenv()
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -26,9 +28,10 @@ class ZeptoScraper(ZeptoLoginAsync):
         super().__init__(phone_number, headless)
         
         # Additional scraper-specific attributes
+        self.chat_id = os.getenv('TELEGRAM_CHAT_ID')
         self.output_dir = output_dir
         self.session_file = "zepto_playwright_session.json"
-        
+        self.telegram_bot = TelegramBot()
         # Create output directory
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -270,32 +273,124 @@ class ZeptoScraper(ZeptoLoginAsync):
         logger.info("Starting delivery address selection")
         
         try:
-            await self.page.wait_for_timeout(1000)
+            await self.page.wait_for_timeout(3000)
             
-            # Check if address selection is required
-            page_text = await self.page.evaluate("() => document.body.innerText.toLowerCase()")
-            address_keywords = ['select address', 'delivery address', 'choose address', 'saved address']
-            
-            if not any(keyword in page_text for keyword in address_keywords):
-                logger.info("Address already selected or not required")
-                return True
-                
-            logger.info("Address selection required - looking for saved addresses")
-            
-            # Primary address selection selectors
-            address_selectors = [
-                "[data-testid='address-item']",
-                "button:has-text('Deliver here')",
-                "button:has-text('Select')",
-                "[data-testid*='address-select']"
+            # First try to click on the location/address button to open address selection
+            location_button_selectors = [
+                "button:has-text('Select location')",
+                "button:has-text('Change location')",
+                "[data-testid*='location-button']",
+                "[data-testid*='address-button']",
+                "button:has(svg):has-text('Select')"
             ]
             
-            # Try to select address using primary selectors
-            if await self._select_address_with_selectors(address_selectors):
-                logger.info("Address selected successfully")
+            for selector in location_button_selectors:
+                try:
+                    btn = await self.page.wait_for_selector(selector, timeout=2000)
+                    if btn and await btn.is_visible():
+                        await btn.click()
+                        logger.info(f"Clicked location button to open address selection: {selector}")
+                        await self.page.wait_for_timeout(2000)
+                        break
+                except:
+                    continue
+            
+            # Check if address list container exists
+            address_list = await self.page.query_selector("[data-testid='saved-address-list']")
+            
+            if not address_list:
+                logger.info("No address selection popup found - address may already be selected")
                 return True
             
-            # Fallback: Try clicking address cards directly
+            logger.info("Address selection popup found - proceeding with selection")
+            
+            # Find and click the first address item (div.cGWaaV with data-testid='address-item')
+            address_clicked = False
+            
+            # Method 1: Click using data-testid
+            try:
+                first_address = await self.page.query_selector("[data-testid='saved-address-list'] [data-testid='address-item']")
+                if first_address and await first_address.is_visible():
+                    logger.info("Found address item, attempting to click")
+                    await first_address.scroll_into_view_if_needed()
+                    await self.page.wait_for_timeout(500)
+                    await first_address.click(force=True)
+                    logger.info("Clicked address item")
+                    address_clicked = True
+                    await self.page.wait_for_timeout(2000)
+            except Exception as e:
+                logger.error(f"Method 1 failed: {e}")
+            
+            # Method 2: Try clicking with class selector
+            if not address_clicked:
+                try:
+                    first_address = await self.page.query_selector(".jZD0p .cGWaaV")
+                    if first_address and await first_address.is_visible():
+                        logger.info("Found address via class selector, attempting to click")
+                        await first_address.click(force=True)
+                        logger.info("Clicked address item via class")
+                        address_clicked = True
+                        await self.page.wait_for_timeout(2000)
+                except Exception as e:
+                    logger.error(f"Method 2 failed: {e}")
+            
+            # Method 3: JavaScript click
+            if not address_clicked:
+                try:
+                    result = await self.page.evaluate("""
+                        () => {
+                            const addressItem = document.querySelector('[data-testid="saved-address-list"] [data-testid="address-item"]');
+                            if (addressItem) {
+                                addressItem.click();
+                                return true;
+                            }
+                            return false;
+                        }
+                    """)
+                    if result:
+                        logger.info("Clicked address using JavaScript")
+                        address_clicked = True
+                        await self.page.wait_for_timeout(2000)
+                except Exception as e:
+                    logger.error(f"Method 3 failed: {e}")
+            
+            if address_clicked:
+                await self.page.wait_for_timeout(2000)
+                
+                # Look for confirmation/select button after clicking address
+                confirm_selectors = [
+                    "button:has-text('Deliver here')",
+                    "button:has-text('Confirm')",
+                    "button:has-text('Select')",
+                    "button:has-text('Continue')"
+                ]
+                
+                for selector in confirm_selectors:
+                    try:
+                        confirm_btn = await self.page.wait_for_selector(selector, timeout=2000)
+                        if confirm_btn and await confirm_btn.is_visible():
+                            await confirm_btn.click()
+                            logger.info(f"Clicked confirmation button: {selector}")
+                            await self.page.wait_for_timeout(1500)
+                            break
+                    except:
+                        continue
+                
+                # Close the address selection popup using back button
+                try:
+                    back_btn = await self.page.wait_for_selector("button[aria-label='Back button']", timeout=2000)
+                    if back_btn and await back_btn.is_visible():
+                        await back_btn.click()
+                        logger.info("Closed address selection popup")
+                        await self.page.wait_for_timeout(1000)
+                except Exception as e:
+                    logger.debug(f"Back button not found or already closed: {e}")
+                
+                return True
+            else:
+                logger.error("Failed to click address item")
+                return False
+            
         except Exception as e:
             logger.error(f"Failed to select delivery address: {e}")
             return False
@@ -502,6 +597,14 @@ class ZeptoScraper(ZeptoLoginAsync):
             list: List of product dicts with name, price, quantity, etc.
         """
         logger.info(f"Searching and extracting up to {max_products} products for: {product_name}")
+
+        # Check if browser is initialized
+        if self.page is None:
+            logger.warning("Browser not initialized, setting up now...")
+            result = await self.setup_browser()
+            if result is None:
+                logger.error("Failed to setup browser for product search")
+                return []
 
         # First search for the product
         search_success = await self.search_products(product_name)
@@ -735,7 +838,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             await self.page.wait_for_timeout(2000)
             if isinstance(product_index, int):
                 logger.info(f"Using product index: {product_index}")    
-                product_index = product_index -1
+                # product_index = product_index 
             # Get all product anchors
             anchors = await self.page.query_selector_all("a[href*='/pn/']")
             logger.info(f"Found {len(anchors)} product anchors")
@@ -820,6 +923,20 @@ class ZeptoScraper(ZeptoLoginAsync):
         logger.info("Navigating to cart")
         
         try:
+            # Check if browser is initialized
+            if self.page is None:
+                logger.warning("Browser not initialized, setting up now...")
+                result = await self.setup_browser()
+                if result is None:
+                    logger.error("Failed to setup browser for cart navigation")
+                    return False
+            
+            # Check if already on cart page
+            current_url = self.page.url
+            if 'cart=open' in current_url or '/cart' in current_url or '/checkout' in current_url:
+                logger.info(f"Already on cart page: {current_url}")
+                return True
+            
             # Wait for page to be ready
             await self.page.wait_for_load_state('domcontentloaded')
             await self.page.wait_for_timeout(2000)
@@ -870,6 +987,14 @@ class ZeptoScraper(ZeptoLoginAsync):
         logger.info("Navigating to account/profile page")
         
         try:
+            # Check if browser is initialized
+            if self.page is None:
+                logger.warning("Browser not initialized, setting up now...")
+                result = await self.setup_browser()
+                if result is None:
+                    logger.error("Failed to setup browser for account navigation")
+                    return False
+            
             # Wait for page to be ready
             await self.page.wait_for_load_state('domcontentloaded')
             await self.page.wait_for_timeout(2000)
@@ -1070,7 +1195,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             
             # Take screenshot of order details page
             if self.headless:
-                await self.page.screenshot(path=os.path.join(self.output_dir, f'order_details_{order_index}.png'))
+                await self.page.screenshot(path=os.path.join(self.output_dir, f'order_details.png'))
                 logger.info(f"Saved order details screenshot for index {order_index}")
             
             return order_details
@@ -1078,6 +1203,100 @@ class ZeptoScraper(ZeptoLoginAsync):
         except Exception as e:
             logger.error(f"Failed to navigate to order details: {e}")
             return None
+
+
+    
+    async def order_again(self, order_index=0):
+        """Reorder a previous order by clicking 'Order Again' button.
+        
+        Args:
+            order_index (int): Index of order to reorder (0 = most recent)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Navigate to account page
+            await self.goto_account()
+            await self.page.wait_for_timeout(2000)
+            
+            # Get all orders
+            order_links = await self.page.query_selector_all('a[href*="/order/"]')
+            if not order_links or order_index >= len(order_links):
+                logger.error(f"Order index {order_index} not found")
+                return False
+            
+            # Find and click "Order Again" button
+            target_order = order_links[order_index]
+            order_btn = await target_order.query_selector("button:has-text('Order Again')")
+            
+            if not order_btn:
+                logger.error("Order Again button not found")
+                return False
+            
+            await order_btn.click()
+            await self.page.wait_for_timeout(3000)
+            
+            logger.info(f"Successfully reordered order at index {order_index}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Order again failed: {e}")
+            return False
+
+    async def track_recent_orders(self, max_orders=3, get_details_for_index=None):
+        """Track recent orders with optional detailed info for specific order.
+        
+        Args:
+            max_orders (int): Number of recent orders to fetch (default 3)
+            get_details_for_index (int): Optional - Get detailed info for order at this index
+            
+        Returns:
+            dict: {
+                'orders': list of order summaries,
+                'detailed_order': detailed info if index specified,
+                'total_orders': count of orders found
+            }
+        """
+        logger.info(f"Tracking recent orders (max: {max_orders})")
+        
+        try:
+            # Get order history
+            orders = await self.get_order_history(max_orders=max_orders)
+            
+            if not orders:
+                logger.info("No orders found")
+                return {
+                    'orders': [],
+                    'detailed_order': None,
+                    'total_orders': 0
+                }
+            
+            result = {
+                'orders': orders,
+                'detailed_order': None,
+                'total_orders': len(orders)
+            }
+            
+            # If specific order details requested
+            if get_details_for_index is not None:
+                if 0 <= get_details_for_index < len(orders):
+                    logger.info(f"Getting detailed info for order at index {get_details_for_index}")
+                    detailed_order = await self.goto_order_details(order_index=get_details_for_index)
+                    result['detailed_order'] = detailed_order
+                else:
+                    logger.warning(f"Invalid order index: {get_details_for_index}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to track recent orders: {e}")
+            return {
+                'orders': [],
+                'detailed_order': None,
+                'total_orders': 0
+            }
+        
 
     async def _extract_order_details_from_page(self):
         """Extract order details using known HTML structure."""
@@ -1163,7 +1382,7 @@ class ZeptoScraper(ZeptoLoginAsync):
             logger.error(f"Failed to extract order details: {e}")
             return {}
 
-    async def clear_cart(self, ):
+    async def clear_cart(self ):
         """Clear all items from cart."""
         logger.info("Clearing cart")
         try:
@@ -1171,6 +1390,16 @@ class ZeptoScraper(ZeptoLoginAsync):
             if not await self.goto_cart():
                 logger.error("Failed to navigate to cart")
                 return False
+            
+            # Verify we're on cart page
+            current_url = self.page.url
+            if 'cart=open' not in current_url and '/cart' not in current_url and '/checkout' not in current_url:
+                logger.warning(f"Not on cart page, current URL: {current_url}. Retrying...")
+                await self.page.wait_for_timeout(2000)
+                if not await self.goto_cart():
+                    logger.error("Failed to navigate to cart on retry")
+                    return False
+            
             is_high_demand = await self.check_high_demand_flag()
             if is_high_demand:
                 logger.warning("High demand - try again later")
@@ -1348,6 +1577,14 @@ class ZeptoScraper(ZeptoLoginAsync):
         """
         logger.info("Getting order details (compact)")
         try:
+            # Check if browser is initialized
+            if self.page is None:
+                logger.warning("Browser not initialized, setting up now...")
+                result = await self.setup_browser()
+                if result is None:
+                    logger.error("Failed to setup browser for order details")
+                    return None
+            
             if not ensure_cart:
                 await self.goto_cart()
 
@@ -1433,12 +1670,33 @@ class ZeptoScraper(ZeptoLoginAsync):
             try:
                 if not os.path.exists(self.output_dir):
                     os.makedirs(self.output_dir, exist_ok=True)
-                filename = f"order_details_{int(time.time())}.png"
+                filename = f"order_details.png"
                 filepath = os.path.join(self.output_dir, filename)
                 await self.page.screenshot(path=filepath, full_page=True)
                 logger.info(f"Saved order details screenshot: {filepath}")
+                # Send screenshot to Telegram for debugging/audit
+
+                # Format order details message properly
+                order_message = (
+                    f"Zepto Order Details:\n\n"
+                    f"Item Total: {item_total or 'N/A'}\n"
+                    f"Handling Fee: {handling_fee or 'N/A'}\n"
+                    f"Delivery Fee: {delivery_fee or 'N/A'}\n"
+                    f"To Pay: {to_pay or 'N/A'}\n"
+                    f"Total Items: {cart.get('total_items', 0)}"
+                )
+                
+                # Send to Telegram
+                if self.chat_id:
+                    abs_filepath = os.path.abspath(filepath)
+                    self.telegram_bot.send_message(self.chat_id, order_message)
+                    self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto order details")
+                else:
+                    logger.warning("TELEGRAM_CHAT_ID not set - skipping Telegram notification")
+              
+             
             except Exception as e:
-                logger.debug(f"Failed to save order details screenshot: {e}")
+                logger.error(f"Failed to send order details to Telegram: {e}")
 
             return {
                 'item_total': item_total,
@@ -1714,6 +1972,20 @@ class ZeptoScraper(ZeptoLoginAsync):
 
             await self.page.wait_for_timeout(300)
 
+            # Ensure output directory exists
+            if not os.path.exists(self.output_dir):
+                os.makedirs(self.output_dir, exist_ok=True)
+            
+            # Take screenshot and send to Telegram
+            filename = f"final_checkout.png"
+            filepath = os.path.join(self.output_dir, filename)
+            await self.page.screenshot(path=filepath, full_page=True)
+            logger.info(f"Saved final checkout screenshot: {filepath}")
+            
+            if self.chat_id:
+                abs_filepath = os.path.abspath(filepath)
+                self.telegram_bot.send_photo(self.chat_id, abs_filepath, caption="Zepto Final Checkout")
+          
             clicked = await self._click_proceed_if_present(self.page)
             if clicked:
                 logger.info("Proceed button clicked (final)")
@@ -1822,64 +2094,60 @@ class ZeptoScraper(ZeptoLoginAsync):
 
     
     # Example usage
-    async def main(self):   
-        await self.cleanup()
-        await self.setup_browser()
+    async def main(self):
+        try:
+            await self.cleanup()
+            await self.setup_browser()
+            
+            address_selected = await self.select_delivery_address()
+            if address_selected:
+                logger.info("Address selected successfully")
+            else:
+                logger.error("Failed to select address")
+
+
+
+            # is_high_demand = await self.check_high_demand_flag()
+            # if is_high_demand:
+            #     print("High demand - try again later")
+            #     return 0
+            # await self.clear_cart()
+
+          
+            # result = await self.get_order_history()
+            # print(result)
+            # await self.order_again(order_index=0)
+            # product = await self.search_and_extract_products("milk")
+            # print(f"Product: {product}")
+            # await self.add_product_to_cart(product_index=0)
+            cart_info = await self.get_order_details()
+            print(f"Cart Info: {cart_info}")
+            payment_url = await self.go_to_payment()
+            print(f"Payment URL: {payment_url}")
+            methods = await self.list_payment_methods()
+            print(f"Payment Methods: {methods}")
+            check_cod_status= self.check_cod_availability(methods)
       
-        location_selected = await self.select_current_location()
-        if location_selected:
-            logger.info("Location selected successfully")
-        else:
-            logger.error("Failed to select location")
-        
-        address_selected = await self.select_delivery_address()
-        if address_selected:
-            logger.info("Address selected successfully")
-        else:
-            logger.error("Failed to select address")
-
-
-
-        is_high_demand = await self.check_high_demand_flag()
-        if is_high_demand:
-            print("High demand - try again later")
-            return 0
-        await self.clear_cart()
-
-        # Example: Find nearest product match from search results
-        await self.search_and_extract_products("toast")
-    
-        
-      
-        await self.add_product_to_cart(product_name="brown toast", quantity=2, product_index=1)
-        
-   
-      
-        cart_info = await self.get_order_details()
-        print(f"Cart Info: {cart_info}")
-        payment_url = await self.go_to_payment()
-        print(f"Payment URL: {payment_url}")
-        methods = await self.list_payment_methods()
-        print(f"Payment Methods: {methods}")
-        check_cod_status= self.check_cod_availability(methods)
-  
-        if check_cod_status:
-            logger.info("Proceeding with Cash On Delivery (COD) option")    
-            select_method = await self.select_payment_method("Pay On Delivery")  
-            if select_method:
-                logger.info("COD method selected successfully")
-                # await self.click_proceed_final()
-        else:
-            logger.info("COD not available — please add more items upto minimum order value 100rs.")
-        await self.goto_account()
-        result = await self. get_order_history()
-        order_details = await self.goto_order_details(1)
-     
-        print(f"Order History: {order_details}")
+            if check_cod_status:
+                logger.info("Proceeding with Cash On Delivery (COD) option")    
+                select_method = await self.select_payment_method("Pay On Delivery")  
+                if select_method:
+                    logger.info("COD method selected successfully")
+                    # await self.click_proceed_final()
+            else:
+                logger.info("COD not available — please add more items upto minimum order value 100rs.")
+          
+            # result = await self. get_order_history()
+            # order_details = await self.goto_order_details(1)
+         
+            # print(f"Order History: {order_details}")
+        finally:
+            # Ensure proper cleanup of browser resources to prevent asyncio subprocess errors
+            await self.cleanup()
         
         
 if __name__ == "__main__":
     phone_number = "9028129764"
-    scraper = ZeptoScraper(phone_number, headless=True)
+    scraper = ZeptoScraper(phone_number, headless=False)
     
     asyncio.run(scraper.main())

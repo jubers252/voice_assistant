@@ -19,6 +19,16 @@ class SpotifyConnector:
     def __init__(self, spotify: Spotify):
         self.spotify = spotify
         self.device_id = None
+        self.speech_recognizer = None  # Reference to speech recognizer for music flag updates
+    
+    def set_speech_recognizer(self, recognizer):
+        """Set reference to speech recognizer for updating music playing flag"""
+        self.speech_recognizer = recognizer
+    
+    def _update_music_flag(self, is_playing: bool):
+        """Update the music playing flag in speech recognizer"""
+        if self.speech_recognizer:
+            self.speech_recognizer.set_music_playing(is_playing)
         
 
     def _find_device(self, preferred_device_name=None):
@@ -212,6 +222,10 @@ class SpotifyConnector:
             bool: True if music is playing on the Raspberry Pi device, False otherwise
         """
         try:
+            # Check if Spotify client is initialized
+            if self.spotify is None:
+                return False
+            
             # Get current playback across all devices
             playback = self.spotify.current_playback()
             
@@ -341,6 +355,7 @@ class SpotifyConnector:
                     result = self.smart_play_by_keyword(name, device_id=device_id)
                     
                     if result['success']:
+                        self._update_music_flag(True)  # Music started playing
                         message = result['message']
                         # Add alternatives if available
                         if result.get('alternatives'):
@@ -353,12 +368,14 @@ class SpotifyConnector:
                             print(f"Track search failed, trying album search for: {name}")
                             uri = self.get_album_uri(name)
                             self.play_album(device_id=device_id, uri=uri)
+                            self._update_music_flag(True)  # Music started playing from album fallback
                             return f"Couldn't find the exact song, but playing album: {name}"
                         except:
                             try:
                                 print(f"Album search failed, trying artist search for: {name}")
                                 uri = self.get_artist_uri(name)
                                 self.play_artist(device_id=device_id, uri=uri)
+                                self._update_music_flag(True)  # Music started playing from artist fallback
                                 return f"Couldn't find the song or album, but playing music by artist: {name}"
                             except:
                                 return result['message'] + " " + result.get('suggestion', '')
@@ -385,9 +402,11 @@ class SpotifyConnector:
                     
             elif tool_info.get("action") == "stop":
                 self.stop_playback(device_id=device_id)
+                self._update_music_flag(False)  # Music stopped
                 return "Playback stopped"
             elif tool_info.get("action") == "resume":
                 self.resume_playback(device_id=device_id)
+                self._update_music_flag(True)  # Music resumed
                 return "Playback resumed"
             elif tool_info.get("action") == "next":
                 self.play_next(device_id=device_id)
@@ -468,13 +487,13 @@ class SpotifyConnector:
                 # Additional context for certain actions
                 action = tool_response.get("action", "")
                 if action == "play":
-                    return result  # Return the actual result (e.g., "Playing 'Song Name' by Artist")
+                    return result  
                 elif action == "stop":
-                    return result  # Return the actual result (e.g., "Playback stopped")
+                    return result 
                 elif action == "resume":
-                    return result  # Return the actual result (e.g., "Playback resumed")
+                    return result 
                 elif action == "next":
-                    return result  # Return the actual result (e.g., "Playing next song")
+                    return result  
                 else:
                     return result
             else:
@@ -489,7 +508,7 @@ class SpotifyConnector:
 if __name__ == "__main__":
     # Test: Check if music is playing
     # Use the existing main() method which handles setup.txt and OAuth
-    test_data = {"action": "current_track", "target": "track", "name": "shape of you"}
+    test_data = {"action": "stop", "target": "track", "name": "shape of you"}
     # Uncomment to test:
     result = SpotifyConnector(None).main(test_data)  # Won't work without proper spotify object
     # print("To test, use voice_assistant.py which properly initializes SpotifyConnector")

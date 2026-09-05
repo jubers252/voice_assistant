@@ -12,12 +12,22 @@ from keras.utils import to_categorical
 from keras.models import Sequential
 from keras.layers import Conv1D, MaxPooling1D, Flatten, Dense, Dropout
 from keras.callbacks import EarlyStopping
+from keras.metrics import Precision, Recall
 from sklearn.metrics import confusion_matrix, classification_report
 from plot_cm import plot_confusion_matrix
 import librosa
 import tensorflow as tf
 import tensorflow_hub as hub
 import glob
+import random
+
+####### SET RANDOM SEEDS FOR REPRODUCIBILITY #############
+# This ensures the same results every time you run the training script
+# RANDOM_SEED = 42
+# random.seed(RANDOM_SEED)
+# np.random.seed(RANDOM_SEED)
+# tf.random.set_seed(RANDOM_SEED)
+
 ##### 1. Load Preprocessed Data (MFCC features) #####
 # This file is created by your PreprocessingData.py script
 # Each sample is a matrix: (time_steps, 120 features - MFCC + deltas)
@@ -74,7 +84,7 @@ from keras.optimizers import Adam
 model.compile(
     loss="binary_crossentropy",  # Binary classification loss
     optimizer=Adam(learning_rate=0.001),  # Lower learning rate for better convergence
-    metrics=['accuracy', 'precision', 'recall']  # Track multiple metrics
+    metrics=['accuracy', Precision(), Recall()]  # Track multiple metrics
 )
 
 # Enhanced callbacks for better training control
@@ -89,7 +99,7 @@ checkpoint = ModelCheckpoint(os.path.join("model_training", "saved_model", "best
 print("Training Model with Enhanced Regularization: \n")
 history = model.fit(
     X_train, y_train,
-    epochs=50,  # Reduced epochs
+    epochs=40,  # Increased epochs
     batch_size=16,                 # Smaller batch size for better generalization
     validation_data=(X_val, y_val), # Use separate validation set
     callbacks=[early_stop, reduce_lr, checkpoint],  # Multiple callbacks
@@ -100,7 +110,7 @@ history = model.fit(
 model.load_weights(os.path.join("model_training", "saved_model", "best_model.keras"))
 
 # Save the final model
-model.save(os.path.join("model_training", "saved_model", "WWD_mems_new_model.h5"))
+model.save(os.path.join("model_training", "saved_model", "WWD_respeaker_model_v4.h5"))
 
 # Evaluate on test set
 print("\n=== Final Model Evaluation ===")
@@ -140,72 +150,8 @@ print(f"Suggested optimal threshold: {optimal_threshold:.3f}")
 plot_confusion_matrix(cm, classes=["Background", "Wake Word"])
 
 print("\n=== Model Training Complete ===")
-print("Improved model saved as 'WWD_improved.h5'")
+print("Improved model saved as 'WWD_respeaker_model_v11.h5'")
 print("Use this model with the suggested threshold for better performance!")
 
-# --- End of script ---
-
-# YAMNet Wake Word Detection Pipeline
-
-# Load YAMNet model from TensorFlow Hub
-yamnet_model = hub.load('https://tfhub.dev/google/yamnet/1')
-
-# Function to preprocess audio
-def preprocess_audio(file_path):
-    audio_tensor, sample_rate = librosa.load(file_path, sr=16000)
-    return audio_tensor, sample_rate
-
-# Function to extract embeddings using YAMNet
-def extract_embeddings(audio_tensor, sample_rate):
-    audio_tensor = tf.constant(audio_tensor, dtype=tf.float32)
-    scores, embeddings, spectrogram = yamnet_model(audio_tensor)
-    # Average embeddings over time to get a single vector per audio clip
-    mean_embedding = tf.reduce_mean(embeddings, axis=0)
-    return mean_embedding
-
-# Example pipeline for fine-tuning
-def fine_tune_yamnet(wakeword_data, background_data):
-    # Prepare dataset
-    X = []
-    y = []
-
-    for audio_path in wakeword_data:
-        audio_tensor, sample_rate = preprocess_audio(audio_path)
-        embedding = extract_embeddings(audio_tensor, sample_rate)
-        X.append(embedding.numpy())
-        y.append(1)  # Label for wake word
-
-    for audio_path in background_data:
-        audio_tensor, sample_rate = preprocess_audio(audio_path)
-        embedding = extract_embeddings(audio_tensor, sample_rate)
-        X.append(embedding.numpy())
-        y.append(0)  # Label for background noise
-
-    X = np.array(X)
-    y = np.array(y)
-
-    # Define a simple classifier
-    model = tf.keras.Sequential([
-        tf.keras.layers.Input(shape=(X.shape[1],)),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(1, activation='sigmoid')
-    ])
-
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-
-    # Train the model
-    model.fit(X, y, epochs=10, batch_size=32, validation_split=0.2)
-
-    return model
-
-
-# Dynamically load all wake word and background audio files
-wakeword_data = glob.glob('model_training/audio_data/*.wav')  # Wake word directory
-background_data = glob.glob('model_training/background_sound/*.wav')  # Background directory
-
-# Fine-tune YAMNet
-fine_tuned_model = fine_tune_yamnet(wakeword_data, background_data)
-
-# Save the fine-tuned model
-fine_tuned_model.save('model_training/saved_model/fine_tuned_yamnet_model.keras')
+print("\n=== Model Training Complete ===")
+print("CNN model saved as 'WWD_respeaker_model_v10.h5'")

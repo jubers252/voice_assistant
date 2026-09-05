@@ -1,0 +1,9 @@
+- [x] Add laugh animation phase state in `anime_face_display_test.py`
+- [x] Update laugh phase each frame in render loop
+- [x] Animate laughing eyes (arc motion/thickness)
+- [x] Animate laughing mouth (vertical bob + opening change)
+- [ ] Run/verify behavior in mode 7
+- [x] Add animated `dead` expression mode (key 8)
+- [x] Animate dead eyes (X-eyes pulse/jitter)
+- [x] Animate dead mouth (flat wobble)
+- [ ] Verify mode switching includes new dead mode

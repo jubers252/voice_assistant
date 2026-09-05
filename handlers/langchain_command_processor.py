@@ -4,27 +4,39 @@ This replaces your current CommandProcessor with an intelligent agent
 """
 
 
+from asyncio.log import logger
 import os
 import threading
 import json
+
+from datetime import datetime
 import time
-import speech_recognition as sr
 from typing import Dict, Any
 from dotenv import load_dotenv
+from audio.audio_processor import clean_text_for_speech
 import re
 import warnings
 import urllib3
 import gc
-
+from connectors.zepto_order_database import ZeptoOrderDatabase
 # Suppress urllib3 warnings from Selenium WebDriver connections
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
-# LangChain imports (install with: pip install langchain langchain-openai)
-from langchain.agents import AgentExecutor, create_openai_functions_agent
-from langchain.memory import ConversationBufferWindowMemory
+# LangChain imports (install with: pip install langchain langchain-openai langchain-community langgraph)
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.tools import Tool
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import Tool, StructuredTool, BaseTool
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from typing import TypedDict, Annotated
+import operator
+# Import system prompt
+from handlers.system_prompt import SOFI_SYSTEM_PROMPT
+
+# Import dynamic prompt generator
+# from handlers.dynamic_prompt_generator import DynamicPromptGenerator
 
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
@@ -39,25 +51,11 @@ from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
 from connectors.zepto_order_automation import ZeptoScraper
 from connectors.home_automation import HomeAutomation
+from connectors.yt_music import MusicPlayer
+from connectors.map import get_travel_time_with_traffic
 import asyncio
 
 load_dotenv()
-
-
-# Comprehensive Roman to Devanagari mapping
-ROMAN_TO_DEVANAGARI_COMPREHENSIVE = {
-    # Common words
-    'aur': 'और', 'hai': 'है', 'band': 'बंद', 'on': 'ऑन', 'off': 'ऑफ',
-    'light': 'लाइट', 'fan': 'फैन', 'zero': 'ज़ीरो', 'device': 'डिवाइस',
-    'kiya': 'किया', 'kar': 'कर', 'diya': 'दिया', 'hain': 'हैं', 'ho': 'हो',
-    'abhi': 'अभी', 'ab': 'अब', 'karo': 'करो', 'turn': 'टर्न', 'on': 'ऑन',
-    # Common verbs and adjectives
-    'chalau': 'चलाऊ', 'band': 'बंद', 'khola': 'खोला', 'bandh': 'बंध',
-    # Articles and prepositions
-    'mein': 'में', 'ko': 'को', 'se': 'से', 'par': 'पर', 'tak': 'तक',
-    # Verb forms
-    'kar': 'कर', 'dena': 'देना', 'lena': 'लेना', 'jana': 'जाना',
-}
 
 
 def detect_language(text: str) -> str:
@@ -72,39 +70,13 @@ def detect_language(text: str) -> str:
     return 'english'
 
 
-def is_roman_hindi(text: str) -> bool:
-    """Check if text contains Roman transliterated Hindi"""
-    # Check for common Roman Hindi patterns
-    roman_patterns = [
-        r'\b(aur|hai|band|light|fan|zero|device|kiya|kar|diya|hain|ho|abhi)\b',
-        r'\b(mein|ko|se|par|tak|dena|lena|jana)\b',
-    ]
-    text_lower = text.lower()
-    for pattern in roman_patterns:
-        if re.search(pattern, text_lower):
-            return True
-    return False
-
-
-def convert_roman_to_devanagari_smart(text: str) -> str:
-    """Smart conversion from Roman to Devanagari"""
-    # First, do direct word replacements
-    result = text
-    for roman, devanagari in ROMAN_TO_DEVANAGARI_COMPREHENSIVE.items():
-        # Case-insensitive replacement with word boundaries
-        result = re.sub(r'\b' + roman + r'\b', devanagari, result, flags=re.IGNORECASE)
-    
-    return result
-
-
-
 class LangChainAgentProcessor:
     """
     LangChain-based replacement for CommandProcessor
     This intelligently decides which tools to use based on user input
     """
     
-    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None):
+    def __init__(self, conversation_history, audio_processors, conversation_manager=None, pixel_led=None, recognizer=None, use_dynamic_prompts=False):
         """
         Initialize LangChain Agent Processor
         
@@ -112,29 +84,52 @@ class LangChainAgentProcessor:
         - conversation_history: List to store conversation history
         - audio_processors: Handler for speech/TTS functionality
         - pixel_led: Optional PixelLEDController for visual feedback
+        - recognizer: Optional SpeechRecognizer instance (for follow-up questions)
+        
+        Optional parameters:
+        - use_dynamic_prompts: Whether to use dynamic prompt generation (default: True)
         """
         
         # Store the handlers that are actually used
-        self.conversation_history = conversation_history
         self.audio_processors = audio_processors
         self.pixel_led = pixel_led
+        self.recognizer = recognizer  # Store recognizer for follow-up questions
         self.reminder_manager = ReminderManager()
         # Optional ConversationManager instance to persist history
         self.conversation_manager = conversation_manager
+        
+        # Dynamic prompt configuration
+        self.use_dynamic_prompts = use_dynamic_prompts
+        self.prompt_generator = DynamicPromptGenerator() if use_dynamic_prompts else None
+        
+        # Load conversation history from manager if provided, otherwise use provided history
+        if conversation_manager:
+            self.conversation_history = conversation_manager.conversation_history
+        else:
+            self.conversation_history = conversation_history if conversation_history else []
         self.volume_controller = VolumeController()
         # Initialize connectors (same as original)
         self.spotify_connector = SpotifyConnector(None)
+        if recognizer:
+            self.spotify_connector.set_speech_recognizer(recognizer)
+
         self.search_connector = GeminiSearch()
         self.telegram_bot = TelegramBot()
         self.big_basket_connector = BigBasketTools()
         zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
         # Set headless=False for Windows Firefox stability
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
+        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=False)
         self.home_automation = HomeAutomation()
         # Create a persistent event loop for Zepto in a dedicated thread
         self._zepto_loop = None
         self._zepto_thread = None
         self._setup_zepto_loop()
+        
+        # Initialize YouTube Music player
+        self.youtube_music = MusicPlayer()
+        
+        # Initialize Zepto Order Database
+        self.zepto_db = ZeptoOrderDatabase()
         
         # LangChain-specific setup
         self.agent_executor = None
@@ -204,6 +199,42 @@ class LangChainAgentProcessor:
             name="get_current_weather",
             description="Get current weather. Use when: 'what is the weather', 'is it raining', 'temperature'. Input: city name",
             func=current_weather_function
+        )
+    
+
+    def _create_travel_time_tool(self) -> Tool:
+        """Get travel time and traffic information between two locations"""
+        def travel_time_function(origin_destination: str) -> str:
+            try:
+                # Parse origin and destination from input
+                parts = origin_destination.split(" to ")
+                if len(parts) != 2:
+                    # Try alternate format: origin | destination
+                    parts = origin_destination.split("|")
+                    if len(parts) != 2:
+                        return "Please provide origin and destination. Format: 'origin to destination' or 'origin | destination'"
+                
+                origin = parts[0].strip()
+                destination = parts[1].strip()
+                
+                result = get_travel_time_with_traffic(origin, destination)
+                
+                # Format the response
+                response = f"Travel Information from {origin} to {destination}:\n"
+                response += f"Distance: {result['distance']}\n"
+                response += f"Travel time (no traffic): {result['standard_duration']}\n"
+                response += f"Travel time (in traffic): {result['duration_in_traffic']}\n"
+                response += f"Traffic delay: {result['traffic_delay_seconds']} seconds\n"
+                response += f"Traffic impact: +{result['traffic_impact_percent']}%"
+                
+                return response
+            except Exception as e:
+                return f"Travel time error: {str(e)}"
+        
+        return Tool(
+            name="get_travel_time",
+            description="Get travel time and traffic information between two locations. Use when: 'how long to reach', 'travel time', 'distance', 'how far is', 'what's the traffic'. Input: 'origin to destination' (e.g., 'Pisoli Pune to Kondhwa Pune')",
+            func=travel_time_function
         )
     
     def _create_home_automation_tool(self) -> Tool:
@@ -300,6 +331,10 @@ class LangChainAgentProcessor:
         """Play a specific track on Spotify"""
         def play_track_function(track_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -329,6 +364,10 @@ class LangChainAgentProcessor:
         """Play a specific album on Spotify"""
         def play_album_function(album_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -358,6 +397,10 @@ class LangChainAgentProcessor:
         """Play music by a specific artist on Spotify"""
         def play_artist_function(artist_name: str) -> str:
             try:
+                # Set music playing flag immediately (before async thread)
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
                 def spotify_thread_func():
                     tool_response = {
                         "tool": "spotify",
@@ -391,10 +434,17 @@ class LangChainAgentProcessor:
                 
                 if action_lower in ['pause', 'stop']:
                     spotify_action = "stop"
+                    # Set music flag to False immediately
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(False)
                 elif action_lower in ['resume', 'continue', 'play']:
                     spotify_action = "resume"
+                    # Set music flag to True immediately
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(True)
                 elif action_lower in ['next', 'skip']:
                     spotify_action = "next"
+                    # Music keeps playing, flag stays True
                 else:
                     return "Use: pause, resume, or next"
                 
@@ -442,39 +492,51 @@ class LangChainAgentProcessor:
         """Search Amazon for detailed information about a single product"""
         def single_product_function(query: str) -> str:
             try:
+                # Sanitize query - remove any index prefixes like "1|", "2|" etc
+                query = query.strip()
+                if '|' in query:
+                    # Remove anything before the first pipe that looks like an index
+                    parts = query.split('|', 1)
+                    if parts[0].strip().isdigit():
+                        query = parts[1].strip()
+                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "single_product_search",
                     "query": query
                 }
                 result = get_amazon_result(tool_request)
-                # Format the result nicely for the LLM
-                if isinstance(result, dict):
+                
+                # Return data directly to agent with full URL
+                if isinstance(result, dict) and result.get('title'):
                     title = result.get('title', 'Unknown Product')
                     price = result.get('price', 'Price not available')
                     rating = result.get('rating', 'No rating')
+                    reviews = result.get('reviews_count', 'No reviews')
                     url = result.get('url', 'N/A')
-                    asin = result.get('asin', 'N/A')
+                    sales_volume = result.get('sales_volume')
                     
-                    # Include more details if available
-                    response = f"Product: {title}\n Price: {price}\n Rating: {rating}/5\n Link: {url}"
+                    # Return formatted data directly - agent will speak naturally
+                    product_data = f"""Product: {title}
+                    Price: {price}
+                    Rating: {rating} out of 5 stars
+                    Reviews: {reviews}"""
+                            
+                    if sales_volume:
+                        product_data += f"\nSales Volume: {sales_volume}"
                     
-                    # Add image if available
-                    if result.get('image'):
-                        response += f"\n Image: {result.get('image')}"
+                    product_data += f"\nURL: {url}"
                     
-                    # Add ASIN for reference
-                    if asin != 'N/A':
-                        response += f"\nASIN: {asin}"
-                    
-                    return response
-                return f"Single product result: {str(result)[:800]}..."
+                    return product_data
+                elif isinstance(result, dict):
+                    return "Sorry, I couldn't find detailed information about that product. Please try another search."
+                return f"Amazon search result: {str(result)[:500]}"
             except Exception as e:
-                return f"Amazon single product search error: {str(e)}"
+                return f"Sorry, I encountered an error while searching Amazon. Please try again."
         
         return Tool(
             name="search_amazon_single_product",
-            description="Search Amazon for detailed information about a specific single product with price, rating, and direct product link. Use when user wants detailed info about one product.",
+            description="Search Amazon for detailed information about a specific single product with price, rating, and direct product link. Use when user wants detailed info about one product. Input: product name only (e.g., 'iphone 15' NOT '1|iphone 15').",
             func=single_product_function
         )
     
@@ -482,6 +544,14 @@ class LangChainAgentProcessor:
         """Search Amazon for multiple products (comparison/browse)"""
         def multi_product_function(query: str) -> str:
             try:
+                # Sanitize query - remove any index prefixes like "1|", "2|" etc
+                query = query.strip()
+                if '|' in query:
+                    # Remove anything before the first pipe that looks like an index
+                    parts = query.split('|', 1)
+                    if parts[0].strip().isdigit():
+                        query = parts[1].strip()
+                
                 tool_request = {
                     "tool": "amazon", 
                     "action": "multi_product_search",
@@ -489,26 +559,30 @@ class LangChainAgentProcessor:
                     "max_results": 5
                 }
                 result = get_amazon_result(tool_request)
-                # Format multiple products nicely
-                if isinstance(result, list):
-                    formatted_results = []
+                
+                # Return data directly to agent with full URLs
+                if isinstance(result, list) and len(result) > 0:
+                    product_list = []
                     for i, product in enumerate(result[:3], 1):  # Limit to top 3 for readability
                         title = product.get('title', 'Unknown Product')
                         price = product.get('price', 'Price not available')
-                        url = product.get('url', 'N/A')
                         rating = product.get('rating', 'No rating')
+                        reviews = product.get('reviews_count', 'No reviews')
+                        url = product.get('url', 'URL not available')
                         
-                        product_info = f"{i}.  {title}\n    {price}\n   {rating}/5\n   {url}"
-                        formatted_results.append(product_info)
+                        product_summary = f"Product {i}: {title}\nPrice: {price}\nRating: {rating} out of 5 stars\nReviews: {reviews}\nURL: {url}"
+                        product_list.append(product_summary)
                     
-                    return f"🛒 Amazon Search Results:\n\n" + "\n\n".join(formatted_results)
-                return f"Multiple products result: {str(result)[:800]}..."
+                    # Return directly - agent will format naturally for speech
+                    return "\n\n".join(product_list)
+                else:
+                    return "Sorry, I couldn't find any products matching your search. Please try a different search term."
             except Exception as e:
-                return f"Amazon multi-product search error: {str(e)}"
+                return f"Sorry, I encountered an error while searching Amazon. Please try again."
         
         return Tool(
             name="search_amazon_multiple_products",
-            description="Search Amazon for multiple products to compare options with prices, ratings, and direct product links. Use when user wants to see several product choices or browse options.",
+            description="Search Amazon for multiple products to compare options with prices, ratings, and direct product links. Use when user wants to see several product choices or browse options. Input: product name only (e.g., 'iphone 15' NOT '1|iphone 15').",
             func=multi_product_function
         )
     
@@ -531,7 +605,7 @@ class LangChainAgentProcessor:
                 result = get_order(tool_request)
                 
                 if isinstance(result, list) and result:
-                    return f"Found {len(result)} orders from last {days} days: {str(result)[:400]}..."
+                    return f"Found {len(result)} orders from last {days} days: {str(result)}..."
                 elif isinstance(result, list):
                     return f"No orders found from the last {days} days."
                 else:
@@ -549,30 +623,26 @@ class LangChainAgentProcessor:
         """Set a reminder tool"""
         def set_reminder_function(reminder_input: str) -> str:
             try:
-                # Parse reminder input - expected format: "text|time" or just "text"
-                parts = reminder_input.split('|', 1) if '|' in reminder_input else [reminder_input, ""]
+                # Parse reminder input - expected format: "text|time|recurring" or "text|time" or just "text"
+                parts = reminder_input.split('|')
                 text = parts[0].strip()
                 time_str = parts[1].strip() if len(parts) > 1 else "in 5 minutes"  # Default time
+                recurring = parts[2].strip() if len(parts) > 2 else "once"  # Default: one-time reminder
                 
-                action_data = {
-                    "action": "set",
-                    "text": text,
-                    "time": time_str
-                }
-                result = self.reminder_manager.handle_reminder_action(action_data)
+                result = self.reminder_manager.add_reminder(text, time_str, recurring=recurring)
                 return result
             except Exception as e:
                 return f"Set reminder error: {str(e)}"
         
         return Tool(
             name="set_reminder",
-            description="Set a reminder for the user. Input format: 'reminder text|time' (e.g., 'Call mom|in 30 minutes' or 'Meeting|tomorrow at 2 PM'). If no time specified, defaults to 5 minutes.",
+            description="Set a TEMPORARY notification/alarm - deleted after triggered or when cleared. Use for: one-time alerts, time-based notifications, meeting reminders. Input: 'text|time|recurring' (recurring='once' or 'daily'). Examples: 'Call mom|in 30 minutes|once', 'Take medicine|2:00 PM|once', 'Gym|6 AM|daily'. Default time: 5 minutes. IMPORTANT: This is NOT for permanent daily events - use schedule_event for that.",
             func=set_reminder_function
         )
     
-    def _create_list_reminders_tool(self) -> Tool:
+    def _create_list_reminders_tool(self) -> StructuredTool:
         """List all active reminders tool"""
-        def list_reminders_function(query: str) -> str:
+        def list_reminders_function() -> str:
             try:
                 action_data = {"action": "list"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
@@ -580,10 +650,10 @@ class LangChainAgentProcessor:
             except Exception as e:
                 return f"List reminders error: {str(e)}"
         
-        return Tool(
+        return StructuredTool.from_function(
+            func=list_reminders_function,
             name="list_reminders",
-            description="List all active reminders. No input required.",
-            func=list_reminders_function
+            description="List all active reminders. No input required."
         )
     
     def _create_cancel_reminder_tool(self) -> Tool:
@@ -611,9 +681,9 @@ class LangChainAgentProcessor:
             func=cancel_reminder_function
         )
     
-    def _create_check_reminders_tool(self) -> Tool:
+    def _create_check_reminders_tool(self) -> StructuredTool:
         """Check for due reminders tool"""
-        def check_reminders_function(query: str) -> str:
+        def check_reminders_function() -> str:
             try:
                 action_data = {"action": "check"}
                 result = self.reminder_manager.handle_reminder_action(action_data)
@@ -621,10 +691,86 @@ class LangChainAgentProcessor:
             except Exception as e:
                 return f"Check reminders error: {str(e)}"
         
-        return Tool(
+        return StructuredTool.from_function(
+            func=check_reminders_function,
             name="check_reminders",
-            description="Check for any due reminders right now. No input required.",
-            func=check_reminders_function
+            description="Check for any due reminders right now. No input required."
+        )
+    
+    def _create_schedule_event_tool(self) -> Tool:
+        """Add a scheduled event tool"""
+        def schedule_event_function(event_input: str) -> str:
+            """
+            Schedule an event. Input format: 'time|prompt|event_id'
+            Examples: '9:00 AM|Good morning!|morning', '2:30 PM|Afternoon check|afternoon'
+            """
+            try:
+              
+                
+                # Parse input format: "HH:MM|prompt|event_id" or "HH:MM AM/PM|prompt|event_id"
+                parts = event_input.split('|')
+                if len(parts) < 3:
+                    return "Invalid format. Use: 'time|prompt|event_id'. Example: '9:00 AM|Good morning!|morning'"
+                
+                time_str = parts[0].strip()
+                prompt = parts[1].strip()
+                event_id = parts[2].strip()
+                
+                # Parse time
+                try:
+                    # Handle both "9:00 AM" and "09:00" formats
+                    if 'AM' in time_str.upper() or 'PM' in time_str.upper():
+                        time_obj = datetime.strptime(time_str, "%I:%M %p").time()
+                    else:
+                        time_obj = datetime.strptime(time_str, "%H:%M").time()
+                    
+                    hour = time_obj.hour
+                    minute = time_obj.minute
+                except ValueError:
+                    return f"Invalid time format: {time_str}. Use: '9:00 AM' or '09:00' (24-hour)"
+                
+                # Find events.json
+                current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                events_file = os.path.join(current_dir, 'events.json')
+                
+                # Read existing events
+                try:
+                    if os.path.exists(events_file):
+                        with open(events_file, 'r') as f:
+                            data = json.load(f)
+                    else:
+                        data = {"events": []}
+                except json.JSONDecodeError:
+                    data = {"events": []}
+                
+                # Check if event already exists
+                for event in data.get("events", []):
+                    if event.get("event_id") == event_id:
+                        return f"Event '{event_id}' already exists. Try a different event_id."
+                
+                # Add new event
+                new_event = {
+                    "hour": hour,
+                    "minute": minute,
+                    "prompt": prompt,
+                    "event_id": event_id
+                }
+                
+                data["events"].append(new_event)
+                
+                # Write back to file
+                with open(events_file, 'w') as f:
+                    json.dump(data, f, indent=2)
+                
+                return f"Event scheduled! '{event_id}' at {time_str} with message: '{prompt}'"
+                
+            except Exception as e:
+                return f"Schedule event error: {str(e)}"
+        
+        return Tool(
+            name="schedule_event",
+            description="Schedule a PERMANENT daily event that runs automatically every day at a specific time (saved to events.json). Use ONLY when user says 'schedule event', 'add daily event', 'set up a recurring event'. Input: 'time|prompt|event_id'. Examples: '9:00 AM|Good morning say wake up|morning', '2:30 PM|Afternoon break reminder|afternoon', '6:00 PM|Evening reminder|evening'. Time formats: 24hr (09:00) or 12hr (9:00 AM/PM). Do NOT use for temporary reminders.",
+            func=schedule_event_function
         )
     
     def _create_telegram_message_tool(self) -> Tool:
@@ -779,53 +925,167 @@ class LangChainAgentProcessor:
         )
     
     def _zepto_ordering_tool(self) -> Tool:
-        """Zepto grocery ordering tool (placeholder)"""
+        """Zepto grocery ordering tool with database tracking"""
         def zepto_function(input_str: str) -> str:
             try:
+                # Parse from RIGHT to handle product names with pipes
+                # Format: action|product_name|quantity|product_index
+                # Example: add_product|Maccain French Fires | Crispy $ ready to cook|2|4
+                
                 parts = input_str.split("|")
+              
                 action = parts[0].lower().strip()
-                product = parts[1].strip() if len(parts) > 1 else ""
-                quantity = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
-                product_index = int(parts[3].strip()) if len(parts) > 3 and parts[3].strip().isdigit() else 0
+                
+                # NEW: Check latest incomplete order from database
+                if action == "get_latest":
+                    latest_order = self.zepto_db.get_latest_order()
+                    
+                    if not latest_order:
+                        return "No incomplete Zepto orders found in the database. Ready to start a fresh order!"
+                    
+                    # Format the order for the agent to understand and act on
+                    order_id = latest_order.get('id', 'N/A')
+                    status = latest_order.get('status', 'unknown')
+                    current_task = latest_order.get('current_task', 'order_details')
+                    items = latest_order.get('items', [])
+                    total_price = latest_order.get('total_price', 0)
+                    created_at = latest_order.get('created_at', 'N/A')
+                    if "payment" in current_task.lower() or "checkout" in current_task.lower():
+                        current_task = "order_details"
+                    # Format items list
+                    items_str = ', '.join(items) if items else 'No items'
+                   
+                    result = f"""INCOMPLETE ZEPTO ORDER FOUND:
+                    Order ID: {order_id}
+                    Status: {status}
+                    Current Task: {current_task}
+                    Items: {items_str}
+                    Total Price: ₹{total_price}
+                    Created: {created_at}
+
+                    DO NOT START FRESH. This order must be resumed. Ask user: "I found your incomplete order with {items_str} at ₹{total_price}. Should I continue from where we left off?"
+
+                    If user says YES: Call zepto_ordering with action "{current_task}" to resume
+                    If user says NO: Call zepto_ordering with "clear_cart" to start fresh"""
+                    return result
+
+                quantity = 1
+                product_index = 0
+                product = ""
+                
+                if len(parts) >= 4:
+                    last_part = parts[-1].strip()
+                    if last_part.isdigit():
+                        product_index = int(last_part)
+                    else:
+                        pass
+                    
+                    second_last = parts[-2].strip()
+                    if second_last.isdigit():
+                        quantity = int(second_last)
+                    else:
+                        pass
+                    
+                    product = "|".join(parts[1:-2]).strip()
+                    
+                elif len(parts) >= 3:
+                    last_part = parts[-1].strip()
+                    if last_part.isdigit():
+                        quantity = int(last_part)
+                    else:
+                        pass
+                    
+                    product = "|".join(parts[1:-1]).strip()
+                    
+                elif len(parts) >= 2:
+                    product = parts[1].strip()
+                
+                # Validate for add_product action
+                if action == "add_product":
+                    if not product:
+                        return "Error: Product name is empty. Format: add_product|product_name|quantity|index"
+                    if quantity < 1:
+                        return f"Error: Invalid quantity {quantity}. Must be >= 1"
+                    if product_index < 0:
+                        return f"Error: Invalid product index {product_index}. Must be >= 0"
                 
                 if action == "login":
                     self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
+                    # Save initial order state
+                    order_id = self.zepto_db.save_order(status="pending", current_task="login", items=[], total_price=0.0, error=False)
                     return "Zepto login initiated."
-                if action == "clear_cart":
+                elif action == "clear_cart":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     result = self._run_in_zepto_loop(self.zepto_scraper.clear_cart())
                     return f"Zepto clear cart result: {result}"
                 elif action == "search":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     product_list = self._run_in_zepto_loop(self.zepto_scraper.search_and_extract_products(product))
+                    # Update order task to searching
+                    latest_order = self.zepto_db.get_latest_order()
+                    if latest_order:
+                        self.zepto_db.update_task(latest_order['id'], "searching", f"Searched for: {product}")
+                    else:
+                        order_id = self.zepto_db.save_order(status="pending", current_task="searching", items=[], error=False, context=f"Searched for: {product}")
                     return f"Zepto search results: {product_list}"
                 elif action == "add_product":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     result = self._run_in_zepto_loop(self.zepto_scraper.add_product_to_cart(product, quantity, product_index))
+                    
+                    # Update order with new item
+                    latest_order = self.zepto_db.get_latest_order()
+                    if latest_order:
+                        items = latest_order.get('items', [])
+                        # Add or update item in list
+                        item_str = f"{product} x{quantity}"
+                        if item_str not in items:
+                            items.append(item_str)
+                        self.zepto_db.update_items(latest_order['id'], items)
+                        self.zepto_db.update_task(latest_order['id'], "item_added", f"Added: {product} x{quantity}")
+                    else:
+                        order_id = self.zepto_db.save_order(status="pending", current_task="item_added", items=[f"{product} x{quantity}"], error=False, context=f"Added: {product} x{quantity}")
+                    
                     return f"Zepto add product result: {result}"
                 elif action == "order_details":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     order_info = self._run_in_zepto_loop(self.zepto_scraper.get_order_details())
                     return f"Zepto order details: {order_info}"
                 elif action == "checkout":
                     if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                        print("Not logged in - try logging in first.")
                         self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
                     payment_result = self._run_in_zepto_loop(self.zepto_scraper.checkout())
-                    return f"Zepto payment result: {payment_result}"
+                    
+                    # Update order status to payment
+                    latest_order = self.zepto_db.get_latest_order()
+                    if latest_order:
+                        self.zepto_db.update_task(latest_order['id'], "payment_confirmation", "Checkout initiated")
+                    
+                    # Add confirmation prompt for COD payment
+                    if payment_result.get('cod_available'):
+                        methods_str = ', '.join(payment_result.get('payment_methods', ['Cash on Delivery']))
+                        return (f"Payment page is ready. Cash on Delivery (COD) has been selected. "
+                                f"Payment methods available: {methods_str}. "
+                                f"Do you want to confirm and proceed with Cash on Delivery payment?")
+                    else:
+                        return f"Zepto payment result: {payment_result}"
                 elif action == "place_order":
                     result = self._run_in_zepto_loop(self.zepto_scraper.click_proceed_final())
                     if result and result.get("status") == "clicked":
-                        print("Order placed successfully.") 
+                        # Update order to completed
+                        latest_order = self.zepto_db.get_latest_order()
+                        if latest_order:
+                            self.zepto_db.update_status(latest_order['id'], "completed")
+                            self.zepto_db.update_task(latest_order['id'], "order_placed", "Order successfully placed")
                         return "Zepto order placed successfully."
+                    else:
+                        # Set error flag
+                        latest_order = self.zepto_db.get_latest_order()
+                        if latest_order:
+                            self.zepto_db.set_error(latest_order['id'], True, "Failed to place order")
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
                 elif action == "cleanup":
                     self._run_in_zepto_loop(self.zepto_scraper.cleanup())
@@ -833,174 +1093,315 @@ class LangChainAgentProcessor:
                 else:
                     return f"Unknown action: {action}. Supported: login, search, add_product, order_details, checkout, place_order, cleanup"
             except Exception as e:
+                # Set error flag when exception occurs
+                latest_order = self.zepto_db.get_latest_order()
+                if latest_order:
+                    self.zepto_db.set_error(latest_order['id'], True, str(e))
                 return f"Zepto tool error: {str(e)}"
         
         return Tool(
             name="zepto_ordering_tool",
-            description="Zepto grocery shopping. Workflow: 1) login 2)clear_cart 3)search|product_name 4) add_product|product_name|quantity|index 5) order_details 6) checkout (auto-selects COD) 7) ask confirmation 8) place_order 9) cleanup. Format: 'action|product|quantity|index'. ALWAYS ask user confirmation before place_order using ask_follow_up_question tool.",
+            description="Zepto grocery ordering and database check. ACTIONS: 1) get_latest - check for incomplete order in database (CALL THIS FIRST), 2) login, 3) clear_cart, 4) search|product_name, 5) add_product|product_name|quantity|index, 6) order_details, 7) checkout, 8) place_order, 9) cleanup. Format: 'action|product|quantity|index'. ALWAYS use get_latest first when user mentions Zepto/order. ALWAYS ask user confirmation before place_order.",
             func=zepto_function
         )
 
+    def _create_zepto_order_history_tool(self) -> Tool:
+        """Get recent Zepto order history"""
+        def order_history_function(max_orders: str = "3") -> str:
+            try:
+                # Parse max_orders
+                try:
+                    max_orders_int = int(max_orders.strip())
+                except:
+                    max_orders_int = 3
+                
+                # Get order history
+                orders = self._run_in_zepto_loop(
+                    self.zepto_scraper.get_order_history(max_orders=max_orders_int)
+                )
+                
+                if not orders:
+                    return "No orders found in your Zepto order history."
+                
+                # Format response
+                result = f"Found {len(orders)} recent orders:\n"
+                for order in orders:
+                    result += f"\n{order['order_number']}. {order['status']} - {order['amount']}"
+                    result += f"\n   Date: {order['date']}"
+                    result += f"\n   Items: {order['item_count']}"
+                    result += f"\n   Order ID: {order['order_id'][:16]}..."
+                
+                return result
+            except Exception as e:
+                return f"Failed to get order history: {str(e)}"
+        
+        return Tool(
+            name="zepto_order_history",
+            description="Get recent Zepto order history. Input: number of orders to fetch (default 3). Returns list of recent orders with status, date, amount, and item count.",
+            func=order_history_function
+        )
+    
+    def _create_zepto_order_again_tool(self) -> Tool:
+        """Reorder a previous Zepto order"""
+        def order_again_function(order_index: str = "0") -> str:
+            try:
+                # Parse order index
+                try:
+                    index = int(order_index.strip())
+                except:
+                    return "Invalid order index. Please provide a number (0 for most recent order)."
+                
+                # Reorder
+                success = self._run_in_zepto_loop(
+                    self.zepto_scraper.order_again(order_index=index)
+                )
+                
+                if success:
+                    return f"Successfully added order {index} to cart! Use order_details to see cart contents, then checkout to proceed."
+                else:
+                    return f"Failed to reorder. Please check if order index {index} exists using order_history first."
+            except Exception as e:
+                return f"Failed to reorder: {str(e)}"
+        
+        return Tool(
+            name="zepto_order_again",
+            description="Reorder a previous Zepto order. Input: order index (0 for most recent, 1 for second most recent, etc.). This adds all items from that order to your cart.",
+            func=order_again_function
+        )
+    
+    def _create_zepto_track_orders_tool(self) -> Tool:
+        """Track recent orders with optional detailed info"""
+        def track_orders_function(params: str = "3|none") -> str:
+            try:
+                # Parse params: "max_orders|detail_index" or just "max_orders"
+                parts = params.split('|')
+                max_orders = int(parts[0].strip()) if parts[0].strip().isdigit() else 3
+                detail_index = int(parts[1].strip()) if len(parts) > 1 and parts[1].strip().isdigit() else None
+                
+                # Track orders
+                result = self._run_in_zepto_loop(
+                    self.zepto_scraper.track_recent_orders(
+                        max_orders=max_orders,
+                        get_details_for_index=detail_index
+                    )
+                )
+                
+                if result['total_orders'] == 0:
+                    return "No orders found."
+                
+                # Format response
+                response = f"Found {result['total_orders']} orders:\n"
+                for order in result['orders']:
+                    response += f"\n[{order['order_number']-1}] {order['status']} - {order['amount']}"
+                    response += f"\n    {order['date']} | {order['item_count']} items"
+                
+                # Add detailed info if requested
+                if result['detailed_order']:
+                    details = result['detailed_order']
+                    response += f"\n\nDetailed info for order {detail_index}:"
+                    response += f"\n  Status: {details.get('status', 'N/A')}"
+                    response += f"\n  Amount: {details.get('total_amount', 'N/A')}"
+                    response += f"\n  Order Date: {details.get('order_date', 'N/A')}"
+                    if details.get('arriving_in'):
+                        response += f"\n  Arriving in: {details['arriving_in']}"
+                
+                return response
+            except Exception as e:
+                return f"Failed to track orders: {str(e)}"
+        
+        return Tool(
+            name="zepto_track_orders",
+            description="Track recent Zepto orders with optional detailed info. Input format: 'max_orders|detail_index' (e.g., '5|0' to get 5 orders with details for first one) or just 'max_orders' (e.g., '3'). Returns order summaries with status, date, amount. If detail_index provided, includes tracking info for that order.",
+            func=track_orders_function
+        )
+
+    def _create_youtube_music_play_song_tool(self) -> Tool:
+        """Play a specific song on YouTube Music"""
+        def play_song_function(song_name: str, volume: int = None) -> str:
+            try:
+                # Set music playing flag immediately
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
+                def yt_music_thread_func():
+                    self.youtube_music.play(song_name, volume=volume)
+                
+                # Run YouTube Music in separate thread to avoid audio conflicts
+                yt_thread = threading.Thread(target=yt_music_thread_func, daemon=True)
+                yt_thread.start()
+                
+                vol_label = f" at {volume}%" if volume is not None else ""
+                return f"Starting song playback: {song_name}{vol_label}"
+            except Exception as e:
+                return f"YouTube Music song error: {str(e)}"
+        
+        return Tool(
+            name="play_youtube_music_song",
+            description="Play a specific song on YouTube Music. Use when: 'play [song name]', 'put on [song]'. Input: song name (e.g., 'Bohemian Rhapsody')",
+            func=play_song_function
+        )
+    
+    def _create_youtube_music_play_playlist_tool(self) -> Tool:
+        """Play a YouTube Music playlist"""
+        def play_playlist_function(playlist_name: str, volume: int = None) -> str:
+            try:
+                # Set music playing flag immediately
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
+                def yt_playlist_thread_func():
+                    self.youtube_music.play_playlist(playlist_name, volume=volume)
+                
+                # Run in separate thread
+                yt_thread = threading.Thread(target=yt_playlist_thread_func, daemon=True)
+                yt_thread.start()
+                
+                vol_label = f" at {volume}%" if volume is not None else ""
+                return f"Starting playlist: {playlist_name}{vol_label}"
+            except Exception as e:
+                return f"YouTube Music playlist error: {str(e)}"
+        
+        return Tool(
+            name="play_youtube_music_playlist",
+            description="Play a YouTube Music playlist. Use when: 'play playlist [name]', 'play [playlist theme]'. Input: playlist name or theme (e.g., 'romantic songs', 'workout', 'chill vibes')",
+            func=play_playlist_function
+        )
+    
+    def _create_youtube_music_play_artist_tool(self) -> Tool:
+        """Play all tracks by a specific artist on YouTube Music"""
+        def play_artist_function(artist_name: str, volume: int = None) -> str:
+            try:
+                # Set music playing flag immediately
+                if self.recognizer:
+                    self.recognizer.set_music_playing(True)
+                
+                def yt_artist_thread_func():
+                    self.youtube_music.play_all_artist_tracks(artist_name, volume=volume)
+                
+                # Run in separate thread
+                yt_thread = threading.Thread(target=yt_artist_thread_func, daemon=True)
+                yt_thread.start()
+                
+                vol_label = f" at {volume}%" if volume is not None else ""
+                return f"Starting artist playlist: {artist_name}{vol_label}"
+            except Exception as e:
+                return f"YouTube Music artist error: {str(e)}"
+        
+        return Tool(
+            name="play_youtube_music_artist",
+            description="Play all available songs by an artist on YouTube Music. Use when: 'play [artist name]', 'put on [artist] music', 'play songs by [artist]'. Input: artist name (e.g., 'The Beatles', 'Taylor Swift')",
+            func=play_artist_function
+        )
+    
+    def _create_youtube_music_control_tool(self) -> Tool:
+        """Control YouTube Music playback"""
+        def control_function(action: str) -> str:
+            try:
+                action_lower = action.lower().strip()
+                
+                if action_lower in ['pause', 'stop']:
+                    self.youtube_music.pause()
+                    # Set music flag to False
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(False)
+                    return "YouTube Music paused"
+                
+                elif action_lower in ['resume', 'continue', 'play']:
+                    self.youtube_music.resume()
+                    # Set music flag to True
+                    if self.recognizer:
+                        self.recognizer.set_music_playing(True)
+                    return "YouTube Music resumed"
+                
+                elif action_lower in ['next', 'skip']:
+                    self.youtube_music.next()
+                    return "Skipped to next track"
+                
+                elif action_lower in ['previous', 'prev', 'back']:
+                    self.youtube_music.previous()
+                    return "Skipped to previous track"
+                
+                else:
+                    return "Use: pause, stop, resume, next, previous"
+                
+            except Exception as e:
+                return f"YouTube Music control error: {str(e)}"
+        
+        return Tool(
+            name="control_youtube_music_playback",
+            description="Control YouTube Music playback. Actions: pause, stop, resume, next, previous. Use when: 'pause', 'stop', 'play', 'resume', 'next song', 'skip', 'previous'. Input: action name (e.g., 'pause', 'stop', 'next', 'resume')",
+            func=control_function
+        )
 
     def _create_follow_up_question_tool(self) -> Tool:
         """Tool for the AI to ask follow-up questions and continue listening"""
-        def ask_follow_up_function(question: str) -> str:
+        def ask_follow_up_function(input_text: str) -> str:
             try:
+                # Parse input - format: "preamble|question" or just "question"
+                # Preamble is optional context/information to speak before asking the question
+                parts = input_text.split('|', 1)
+                if len(parts) == 2:
+                    preamble = parts[0].strip()
+                    question = parts[1].strip()
+                else:
+                    preamble = None
+                    question = input_text.strip()
+                
+                # If there's a preamble, speak it first
+                if preamble:
+                    self.audio_processors.speak(preamble)
+                    # Wait for preamble to complete
+                    while hasattr(self.audio_processors, 'is_speaking') and self.audio_processors.is_speaking:
+                        time.sleep(0.1)
+                    time.sleep(0.3)  # Brief pause between preamble and question
+                
                 # Speak the follow-up question (LED controlled in audio_processor)
+                # Note: LED control is handled by audio_processor.speak() to ensure
+                # the green light stays on throughout audio generation and playback
                 self.audio_processors.speak(question)
                 
                 # Wait for speech to complete using is_speaking flag
-                print("Waiting for speech to complete...")
                 while hasattr(self.audio_processors, 'is_speaking') and self.audio_processors.is_speaking:
                     time.sleep(0.1)
                 
-                print("Speech completed, ready for follow-up...")
                 time.sleep(0.5)  # Longer buffer to ensure TTS cleanup
                 
-                # Now listen for follow-up response
-                print(f"AI asked: {question}")
-                print("Now listening for follow-up response...")
+                # Set LED to listening state (audio_processor already turned it off)
+                if self.pixel_led:
+                    self.pixel_led.set_listening()
                 
-                # Create recognizer with better microphone handling
-                recognizer = SpeechRecognizer(self.audio_processors)
+                # Now listen for follow-up response
+                # Use existing recognizer (with Spotify connector and Google Cloud v2 config)
+                # If no recognizer provided, create a basic one
+                if self.recognizer:
+                    recognizer = self.recognizer
+                else:
+                    recognizer = SpeechRecognizer(self.audio_processors)
 
                 self.audio_processors.play_beep_sound()
                 time.sleep(0.2)
                 
                 # Listen with longer timeout for follow-up
-                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=1)
+                # Music detection happens inside listen_for_command, which will reduce timeout to 5s if music is playing
+                follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0)
                 
                 if follow_up_command:
-                    print(f"Received follow-up response: '{follow_up_command}'")
-                    return f"User responded: {follow_up_command}"
+                    # Return the response in a way that makes it clear this is answering the question
+                    return f"User's answer to your question: '{follow_up_command}'. Now complete the original task based on this answer without searching again."
                 else:
-                    return "No follow-up response received"
+                    
+                    return "User did not respond to the question. Proceed with default action or inform user."
                     
             except Exception as e:
                 return f"Follow-up error: {str(e)}"
         
         return Tool(
             name="ask_follow_up_question",
-            description="Ask clarifying questions when needed: volume direction, device selection, product/quantity choice, confirmation, payment method, time setup. Use for any ambiguous user input. Format: natural question text.",
+            description="MANDATORY tool when you need to ask ANY question or need clarification from user. Format: 'information to speak first|your question' or just 'your question'. Use the pipe separator to provide context/information BEFORE asking the question. Example: 'Three products found: Product A ₹100, Product B ₹200, Product C ₹300|Which one would you like to purchase?' This will speak the product info FIRST, then ask the question. If your response would have a question mark '?', you MUST use this tool. NEVER ask questions in your text response.",
             func=ask_follow_up_function
         )
     
-    def _create_bigbasket_tool(self) -> Tool:
-        """BigBasket shopping tool: add products, clear cart, checkout, place order"""
-        def bigbasket_function(input_str: str) -> str:
-            try:
-                # Parse input - handle formats: "action", "action|product", "action|product|quantity"
-                parts = input_str.split("|")
-                action = parts[0].lower().strip()
-                product = parts[1].strip() if len(parts) > 1 else ""
-                quantity = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 1
-                
-                if action == "login":
-                    result = self.big_basket_connector.login_to_bigbasket()
-                    return f"BigBasket login: {result}"
-                elif action == "search":
-                    if not product:
-                        return "Please specify a product to search."
-                    result = self.big_basket_connector.search_product_info(product)
-                    return f"BigBasket search results: {result}"
-                elif action == "clear_cart":
-                    result = self.big_basket_connector.clear_cart()
-                    return f"BigBasket clear cart: {result}"
-                elif action == "add_product":
-                    if not product:
-                        return "Please specify a product to add."
-                    result = self.big_basket_connector.add_product_to_cart(product, quantity)
-                    
-                    # Handle different result statuses
-                    if result.get('status') == 'success':
-                        msg = f"Added {quantity} x {product} to cart"
-                        
-                        # Use actual cart item details if available
-                        if result.get('added_item'):
-                            item = result['added_item']
-                            msg = f"Added {item['quantity']} x {item['name']}"
-                            if item.get('price'):
-                                msg += f" at {item['price']}"
-                        
-                        return msg + "."
-                    elif result.get('status') == 'out_of_stock':
-                        msg = result.get('message', f"{product} is out of stock")
-                        alternatives = result.get('alternatives', [])
-                        if alternatives:
-                            alt_list = "\n".join([f"{i+1}. {alt.get('name', alt)}" for i, alt in enumerate(alternatives[:5])])
-                            return f"{msg}\n\nAvailable alternatives:\n{alt_list}\n\nWould you like to add any of these alternatives instead?"
-                        return f"{msg}. No alternatives found."
-                    elif result.get('status') == 'alternatives':
-                        msg = result.get('message', 'Product not found')
-                        alternatives = result.get('alternatives', [])
-                        if alternatives:
-                            alt_list = "\n".join([f"{i+1}. {alt.get('name', alt)}" for i, alt in enumerate(alternatives[:5])])
-                            return f"{msg}\n\nDid you mean:\n{alt_list}\n\nPlease confirm which product you want."
-                        return f"{msg}"
-                    else:
-                        error = result.get('error', 'Unknown error')
-                        return f"Failed to add {product}: {error}"
-                elif action == "add_multiple":
-                    if not product:
-                        return "Please specify products to add in format: product1:qty1,product2:qty2"
-                    result = self.big_basket_connector.add_multiple_products(product)
-                    
-                    # Format response for multiple products
-                    if result.get('status') in ['success', 'partial', 'failed']:
-                        summary = result.get('summary', {})
-                        results_list = result.get('results', [])
-                        
-                        # Build summary message
-                        msg = f"Added {summary.get('successful', 0)} out of {summary.get('total_products', 0)} products.\n\n"
-                        
-                        # List successes
-                        successes = [r for r in results_list if r['status'] == 'added']
-                        if successes:
-                            msg += "✓ Successfully added:\n"
-                            for r in successes:
-                                msg += f"  - {r['product']} (qty: {r['quantity']})\n"
-                        
-                        # List out-of-stock items
-                        out_of_stock = [r for r in results_list if r['status'] == 'out_of_stock']
-                        if out_of_stock:
-                            msg += "\n⚠ Out of stock:\n"
-                            for r in out_of_stock:
-                                msg += f"  - {r['product']}\n"
-                                if r.get('alternatives'):
-                                    msg += f"    Alternatives available: {len(r['alternatives'])} options\n"
-                        
-                        # List failures
-                        failures = [r for r in results_list if r['status'] not in ['added', 'out_of_stock']]
-                        if failures:
-                            msg += "\n✗ Could not add:\n"
-                            for r in failures:
-                                msg += f"  - {r['product']}: {r.get('message', 'Not found')}\n"
-                        
-                        # Ask for confirmation if there are out-of-stock items
-                        if out_of_stock:
-                            msg += "\nWould you like to see alternatives for out-of-stock items?"
-                        
-                        return msg
-                    else:
-                        return f"BigBasket add multiple error: {result.get('error', 'Unknown error')}"
-                elif action == "checkout":
-                    result = self.big_basket_connector.proceed_to_checkout()
-                    return f"BigBasket checkout: {result}"
-                elif action == "place_order":
-                    result = self.big_basket_connector.place_order_cod()
-                    return f"BigBasket place order: {result}"
-                elif action == "close_browser":
-                    self.big_basket_connector.close_browser()
-                    return f"BigBasket browser session closed."
-                else:
-                    return "Supported actions: login, search, clear_cart, add_product, add_multiple, checkout, place_order, close_browser"
-            except Exception as e:
-                return f"BigBasket tool error: {str(e)}"
-        return Tool(
-            name="bigbasket_tool",
-            description="BigBasket grocery shopping. When user wants to ORDER/BUY groceries: 1) login 2) clear_cart 3) add_product/add_multiple 4) ask confirmation using ask_follow_up_question 5) checkout 6) place_order 7) close_browser. Format: 'action|product|quantity' for add_product, 'add_multiple|product1:qty1,product2:qty2' for multiple items, or just 'action' for login/checkout/place_order. ALWAYS ask user confirmation before checkout using ask_follow_up_question tool.",
-            func=bigbasket_function
-        )
+
 
     def _setup_langchain_agent(self):
         """Setup the LangChain agent with tools and memory"""
@@ -1023,184 +1424,261 @@ class LangChainAgentProcessor:
             self._create_list_reminders_tool(),
             self._create_cancel_reminder_tool(),
             self._create_check_reminders_tool(),
+            self._create_schedule_event_tool(),
             self._create_telegram_message_tool(),
             self._create_telegram_photo_tool(),
             self._create_telegram_document_tool(),
             self._create_telegram_video_tool(),
             self._create_volume_control_tool(),
+            self._create_youtube_music_play_song_tool(),
+            self._create_youtube_music_play_playlist_tool(),
+            self._create_youtube_music_play_artist_tool(),
+            self._create_youtube_music_control_tool(),
             self._create_follow_up_question_tool(),
-            self._create_bigbasket_tool(),
-            self._zepto_ordering_tool()
+            self._zepto_ordering_tool(),
+            self._create_zepto_order_history_tool(),
+            self._create_zepto_order_again_tool(),
+            self._create_travel_time_tool(),
+            self._create_zepto_track_orders_tool()
         ]
+        
+        # Log available tools
+        if self.use_dynamic_prompts:
+           print(f"Dynamic Prompts ENABLED - Available Tools: {[t.name for t in self.tools]}")
+        else:
+            print(f"System Prompt Mode - Available Tools: {[t.name for t in self.tools]}")
         
         # Initialize LLM
         llm = ChatOpenAI(
-            model="gpt-4.1",
-            temperature=0.7,
-            openai_api_key=os.getenv('OPENAI_API_KEY')
+            model="gpt-4.1-mini",
+            temperature=1,  
+            openai_api_key=os.getenv('OPENAI_API_KEY'),
         )
         
-        # Setup memory for conversation context
-        memory = ConversationBufferWindowMemory(
-            memory_key="chat_history",
-            return_messages=True,
-            k=10  # Remember last 10 exchanges
-        )
+        # Setup memory for conversation context using simple message list
+        class WindowedChatHistory(BaseChatMessageHistory):
+            """Simple in-memory chat history with windowing (keeps last k exchanges)"""
+            def __init__(self, k: int = 10):
+                self.messages: list[BaseMessage] = []
+                self.k = k
+            
+            @property
+            def messages_windowed(self):
+                """Return only last k*2 messages (k exchanges = k*2 messages)"""
+                return self.messages[-self.k*2:] if len(self.messages) > self.k*2 else self.messages
+            
+            def add_message(self, message: BaseMessage) -> None:
+                self.messages.append(message)
+            
+            def clear(self) -> None:
+                self.messages = []
         
-        # Create system prompt
-        system_prompt = """You are Sofi, a female voice assistant in Pune, India.
-
-**LANGUAGE:**
-- Hindi input → respond in हिंदी देवनागरी only (never roman transliteration)
-- English input → respond in English only
-
-**RULES:**
-- Keep responses SHORT and conversational
-- Use ask_follow_up_question tool when clarification needed
-- No special characters, simple spoken language
-
-**SPOTIFY PLAYBACK CONTROL - MUST USE TOOL:**
-When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
-→ ALWAYS call control_spotify_playback tool with: pause|resume|next|skip
-→ Examples: 
-  - "play song" or "resume" → use control_spotify_playback with "resume"
-  - "pause" → use control_spotify_playback with "pause"
-  - "next song" or "skip" → use control_spotify_playback with "next"
-  - "pause music" → use control_spotify_playback with "pause"
-
-**KEY TOOLS:**
-- HOME AUTOMATION: control|device:true/false (e.g., control|light:true)
-- VOLUME: increase/decrease/mute/set
-- SEARCH: news, prices, weather, web queries
-- SPOTIFY CONTROL: pause, resume, next, skip (use control_spotify_playback tool)
-- SPOTIFY PLAY: play specific track/album/artist (use play_spotify_track/album/artist tools)
-- TELEGRAM: send message, photo, document, video
-- ZEPTO: login, search, add_product, checkout, place_order
-- REMINDERS: set, list, cancel, check
-
-**QUESTION RULE:**
-- NEVER ask questions in your response text
-- If you need to ask anything, always use ask_follow_up_question tool for clarification
-- Any response with "?" must use the tool instead
-
-**Zepto ORDERING (IMPORTANT):**
- For product information presented via TTS, summarize key details as short, spoken-friendly bullet points (2-4 concise items).
-        Zepto Shopping:
-        - Workflow: login -> clear_cart -> search|product_name -> add_product|product_name|quantity|index -> order_details -> checkout -> ask user confirmation -> place_order → cleanup
-        - For 'search': pass action|product_name format
-        - explain search results to user and ask which product to add
-        - For 'add_product': pass action|product_name|quantity|product_index format (index from search results)
-        - checkout action automatically selects COD payment method
-        - ALWAYS get confirmation from user before calling 'place_order' using ask_follow_up_question tool
-        - After order placed, call cleanup to close browser
-        - Always clean the browser session after processing order or failed attempts to avoid multiple logins.
-
-**WEB SEARCH FOR LATEST UPDATES (MANDATORY):**
-- ALWAYS use search_web tool when user asks for: latest news, current prices, today's information, recent updates, live info, what's trending, current status
-- Use when: "what's the latest", "current", "today", "right now", "latest news about", "what's new", "latest updates", "current price of"
-- NEVER answer from knowledge cutoff - always search for current information
-- Format: Just the search query (e.g., "latest Bitcoin price", "current weather in Mumbai", "trending news today")
-- Examples: "latest iPhone price", "today's stock market updates", "current COVID cases in India"
-
-**CAPABILITIES:** Weather, Timezone, Spotify, Web Search, Amazon, Reminders, Telegram, Volume, Zepto, Home Automation"""
+        memory_interface = WindowedChatHistory(k=10)
         
-        # Create prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad")
-        ])
+        # Use the system prompt from system_prompt.py
+        system_prompt = SOFI_SYSTEM_PROMPT
         
-        # Create agent
-        agent = create_openai_functions_agent(
-            llm=llm,
-            tools=self.tools,
-            prompt=prompt
-        )
+        # Setup LangGraph agent (modern approach for LangChain v1.2.7+)
+        # Define the agent state
+        class AgentState(TypedDict):
+            messages: Annotated[list[BaseMessage], operator.add]
         
-        # Create agent executor
-        self.agent_executor = AgentExecutor(
-            agent=agent,
-            tools=self.tools,
-            memory=memory,
-            verbose=False,  # Disabled to prevent double response output
-            handle_parsing_errors=True,
-            max_iterations=25  # Increased for complex workflows like BigBasket ordering
-            # Removed early_stopping_method as it's deprecated in newer versions
-        )
+        # Create the LLM with tool binding
+        tool_list = self.tools
         
-        print("LangChain agent initialized with tools:", [tool.name for tool in self.tools])
+        # Build the agent graph
+        workflow = StateGraph(AgentState)
+        
+        # Define the agent node
+        def agent_node(state: AgentState):
+            # Create prompt with system message
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                MessagesPlaceholder(variable_name="messages"),
+            ])
+            
+            chain = prompt | llm.bind_tools(tool_list)
+            result = chain.invoke({"messages": state["messages"]})
+            return {"messages": [result]}
+        
+        # Add nodes to graph
+        workflow.add_node("agent", agent_node)
+        
+        # Add tool node for tool calls
+        tools_node = ToolNode(tool_list)
+        workflow.add_node("tools", tools_node)
+        
+        # Define routing logic
+        def route_tools(state: AgentState):
+            if isinstance(state["messages"][-1], AIMessage):
+                if hasattr(state["messages"][-1], "tool_calls") and state["messages"][-1].tool_calls:
+                    return "tools"
+            return END
+        
+        # Add edges
+        workflow.add_conditional_edges("agent", route_tools, {"tools": "tools", END: END})
+        workflow.add_edge("tools", "agent")
+        workflow.set_entry_point("agent")
+        
+        # Compile the graph
+        self.agent_executor = workflow.compile()
     
+    def _create_focused_agent_executor(self, user_command: str):
+        """Create a focused agent executor with custom prompt and filtered tools"""
+        if not self.use_dynamic_prompts:
+            return self.agent_executor
+        
+        try:
+            custom_prompt, tool_names, language = self.prompt_generator.generate_custom_prompt(user_command)
+            filtered_tools = self.prompt_generator.create_filtered_tool_list(self.tools, tool_names)
+            
+           
+            print(f"Filtered Tools: {[t.name for t in filtered_tools]}")
+            print(f"Language Detected: {language}")
+            
+            llm = ChatOpenAI(model="gpt-4.1-mini", temperature=1, openai_api_key=os.getenv('OPENAI_API_KEY'))
+            
+            class AgentState(TypedDict):
+                messages: Annotated[list[BaseMessage], operator.add]
+            
+            def agent_node(state: AgentState):
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", custom_prompt),
+                    MessagesPlaceholder(variable_name="messages"),
+                ])
+                chain = prompt | llm.bind_tools(filtered_tools)
+                return {"messages": [chain.invoke({"messages": state["messages"]})]}
+            
+            def route_tools(state: AgentState):
+                msg = state["messages"][-1]
+                if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+                    return "tools"
+                return END
+            
+            workflow = StateGraph(AgentState)
+            workflow.add_node("agent", agent_node)
+            workflow.add_node("tools", ToolNode(filtered_tools))
+            workflow.add_conditional_edges("agent", route_tools, {"tools": "tools", END: END})
+            workflow.add_edge("tools", "agent")
+            workflow.set_entry_point("agent")
+            
+            return workflow.compile()
+        except Exception:
+            return self.agent_executor
 
         
-    def process_user_command(self, user_command: str) -> bool:
+    def process_user_command(self, user_command: str):
         """
         Main method that replaces your original process_user_command
         Now uses intelligent agent instead of manual tool selection
-        Includes follow-up conversation support
+        Includes follow-up conversation support and conversation history awareness
+        
+        Returns:
+            dict: Contains 'response' (full response) and 'tts_text' (cleaned for speech)
+            or None if command was exit
         """
         
         # Check for exit commands (same as original)
         if any(word in user_command.lower() for word in ["exit", "quit", "goodbye", "bye"]):
             # Speak goodbye (LED controlled in audio_processor)
             self.audio_processors.speak("Goodbye!")
-            return True
+            return None
         
         try:
             # Set LED to processing/thinking state (blinking)
             if self.pixel_led:
                 self.pixel_led.set_processing()
             
-            # Define the agent processing function
-            def agent_processing():
-                result = self.agent_executor.invoke({"input": user_command})
-                response = result["output"]
-                print(response)
-                
-                # Detect input language
-                input_lang = detect_language(user_command)
-                
-                # Fix Roman Hindi to Devanagari if input was Hindi and output is Roman
-                if input_lang == 'hindi' and is_roman_hindi(response):
-                    response = convert_roman_to_devanagari_smart(response)
-                    print(f"Converted to Devanagari: {response}")
-                
-                # Add to conversation history
-                self.conversation_history.append({"role": "user", "content": user_command})
-                self.conversation_history.append({"role": "assistant", "content": response})
-
-                # Persist conversation history if a ConversationManager is provided
-                try:
-                    if getattr(self, 'conversation_manager', None):
-                        self.conversation_manager.save_conversation_history()
-                except Exception as save_err:
-                    print(f"Warning: failed to save conversation history: {save_err}")
-
-                # Speak the response (LED controlled in audio_processor)
-                self.audio_processors.speak(response)
-                
-                return response
+            # Build message history for agent context (keep last 10 user-assistant exchanges)
+            messages = []
             
-            # Process directly without delayed feedback
-            response = agent_processing()
+            # Add previous conversation context (last 20 messages = 10 exchanges)
+            for hist_entry in self.conversation_history[-20:]:
+                if hist_entry["role"] == "user":
+                    messages.append(HumanMessage(content=hist_entry["content"]))
+                elif hist_entry["role"] == "assistant":
+                    messages.append(AIMessage(content=hist_entry["content"]))
+            
+            # Add current user message
+            user_message = HumanMessage(content=user_command)
+            messages.append(user_message)
+            
+            # Get the appropriate agent executor (dynamic or static)
+            agent_executor = self._create_focused_agent_executor(user_command) if self.use_dynamic_prompts else self.agent_executor
+            
+            # Invoke the agent with full context
+            result = agent_executor.invoke({"messages": messages})
+            
+            # Extract the response from the final message
+            final_message = result["messages"][-1]
+            response = final_message.content if isinstance(final_message, AIMessage) else str(final_message)
+            
+            # Extract URLs from response (especially for Amazon products)
+            urls = re.findall(r'https?://\S+', response)
+            # Remove duplicates while preserving order and clean up URLs
+            seen_urls = set()
+            unique_urls = []
+            for url in urls:
+                # Clean up URLs (remove trailing punctuation)
+                clean_url = url.rstrip('.,;:)}"\'')
+                if clean_url not in seen_urls:
+                    seen_urls.add(clean_url)
+                    unique_urls.append(clean_url)
+            
+            # Add to conversation history with URLs if found
+            self.conversation_history.append({"role": "user", "content": user_command})
+            assistant_entry = {"role": "assistant", "content": response}
+            if unique_urls:
+                assistant_entry["urls"] = unique_urls
+            self.conversation_history.append(assistant_entry)
+            
+            # Persist conversation history if a ConversationManager is provided
+            if getattr(self, 'conversation_manager', None):
+                try:
+                    self.conversation_manager.conversation_history = self.conversation_history
+                    self.conversation_manager.save_conversation_history()
+                except Exception:
+                    pass
+            
+
+            used_follow_up = False
+            for msg in result.get("messages", []):
+                if hasattr(msg, 'tool_calls'):
+                    for tool_call in getattr(msg, 'tool_calls', []):
+                        if hasattr(tool_call, 'name') and tool_call.name == 'ask_follow_up_question':
+                            used_follow_up = True
+                            break
+            
+            # Only speak if ask_follow_up_question wasn't used
+            if not used_follow_up:
+                try:
+                    tts_text = clean_text_for_speech(response)
+                except Exception:
+                    tts_text = response
+                self.audio_processors.speak(tts_text)
+            else:
+                tts_text = response
             
             # Explicitly clean up memory after agent processing
             gc.collect()
             
-            # No need to check for follow-up questions - the LLM will use the ask_follow_up_question tool when needed
-            
-            print("Agent processing completed. Ready for next command.")
-            return False
+            # Return response for external handlers (e.g., Telegram)
+            return {
+                "response": response,
+                "tts_text": tts_text,
+                "urls": unique_urls
+            }
             
         except Exception as e:
             error_msg = f"Sorry, I encountered an error: {str(e)}"
-            print(f"Agent error: {e}")
-            # Speak error message (LED controlled in audio_processor)
             self.audio_processors.speak(error_msg)
             # Clean up memory after error
             gc.collect()
-            return False
+            return {
+                "response": error_msg,
+                "tts_text": error_msg,
+                "urls": []
+            }
     
     def get_agent_info(self) -> Dict[str, Any]:
         """Get information about the agent's current state"""
@@ -1213,59 +1691,4 @@ When user says: 'play', 'resume', 'pause', 'stop', 'next', 'skip'
 
 
 if __name__ == "__main__":
-    # Test the LangChain processor functionality
-    print("Testing LangChainAgentProcessor...")
-    
-    # Mock handlers for testing
-    class MockHandler:
-        def speak(self, text, lang='en'):
-            print(f"[SPEAK]: {text}")
-        
-        def get_tool_action(self, command):
-            return {"tool": "none", "message": "test"}
-        
-        def handle_reminder_action(self, request):
-            return "Mock reminder created"
-        
-        def telegram_handler(self, request):
-            return "Mock telegram message sent"
-    
-    # Create mock conversation history
-    conversation_history = []
-    
-    try:
-        # Test initialization - only required parameters
-        processor = LangChainAgentProcessor(
-            conversation_history=conversation_history,
-            audio_processors=MockHandler()
-        )
-        
-        print("✓ LangChainAgentProcessor initialized successfully")
-        agent_info = processor.get_agent_info()
-        print(f"✓ Agent info: {agent_info}")
-        print(f"✓ Available tools: {', '.join(agent_info['tool_names'])}")
-        
-        # Test individual tool creation
-        current_weather_tool = processor._create_current_weather_tool()
-        forecast_tool = processor._create_weather_forecast_tool()
-        timezone_tool = processor._create_timezone_tool()
-        single_amazon_tool = processor._create_amazon_single_product_tool()
-        multi_amazon_tool = processor._create_amazon_multi_product_tool()
-        order_tracking_tool = processor._create_amazon_order_tracking_tool()
-        telegram_message_tool = processor._create_telegram_message_tool()
-        telegram_photo_tool = processor._create_telegram_photo_tool()
-        telegram_document_tool = processor._create_telegram_document_tool()
-        telegram_video_tool = processor._create_telegram_video_tool()
-        
-        print("All weather tool creation methods work")
-        print("All Amazon tool creation methods work")
-        print("Amazon order tracking tool created successfully")
-        print("All Telegram tool creation methods work")
-        print("LangChain processor is ready for use!")
-        print(f"Total tools available: {len(processor.tools)}")
-        print("process_user_command method ready for voice assistant integration")
-        
-    except Exception as e:
-        print(f" Error during testing: {e}")
-        import traceback
-        traceback.print_exc()
+    pass

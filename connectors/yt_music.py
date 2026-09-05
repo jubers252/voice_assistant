@@ -8,6 +8,8 @@ Attributes:
     IPC_SOCKET: Platform-specific socket path for mpv communication
 """
 
+from pathlib import Path
+from dotenv import load_dotenv
 from ytmusicapi import YTMusic
 from yt_dlp import YoutubeDL
 import subprocess
@@ -17,6 +19,8 @@ import time
 import sys
 import json
 import logging
+import shutil
+import errno
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,11 +29,6 @@ logger = logging.getLogger(__name__)
 # Add connectors to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'connectors'))
 
-try:
-    from volume_control import VolumeController
-    VOLUME_CONTROLLER_AVAILABLE = True
-except ImportError:
-    VOLUME_CONTROLLER_AVAILABLE = False
 
 # Use /tmp socket for Linux, Windows named pipe for Windows
 IPC_SOCKET = "/tmp/mpvsocket" if os.name == "posix" else r"\\.\pipe\mpvsocket"
@@ -50,9 +49,104 @@ class MusicPlayer:
 
     def __init__(self):
         """Initialize the MusicPlayer with YouTube Music API and volume control."""
+        load_dotenv()
         self.player = None
+        self.default_volume = 70
+        self.mpv_path = self._find_mpv_executable()
+        if self.mpv_path:
+            logger.info(f"Found mpv executable: {self.mpv_path}")
+        else:
+            logger.error(
+                "mpv executable not found. Install mpv or add it to PATH "
+                "(for example: 'apt install mpv' or 'sudo pacman -S mpv'). "
+                "Music playback will be disabled."
+            )
+
         self.ytmusic = YTMusic()
-        self.volume_controller = VolumeController() if VOLUME_CONTROLLER_AVAILABLE else None
+
+        cookie_env = os.getenv("YTDLP_COOKIE_FILE")
+        if cookie_env:
+            self.ytdlp_cookie_file = os.path.expanduser(cookie_env)
+        else:
+            self.ytdlp_cookie_file = self._find_cookie_file()
+
+        if self.ytdlp_cookie_file and os.path.exists(self.ytdlp_cookie_file):
+            logger.info(f"yt-dlp cookies enabled: {self.ytdlp_cookie_file}")
+        else:
+            logger.warning(
+                "yt-dlp cookie file not found. "
+                "Set YTDLP_COOKIE_FILE, place cookies at ~/.config/youtube/cookies.txt, "
+                "or add the file path to your service environment."
+            )
+
+    def _find_cookie_file(self) -> str:
+        """Search common paths for a yt-dlp cookie file."""
+        candidates = [
+            "~/.config/youtube/cookies.txt",
+            "~/.config/yt-dlp/cookies.txt",
+            "~/.youtube-cookies.txt",
+            "~/youtube-cookies.txt",
+            "~/cookies.txt",
+        ]
+        for candidate in candidates:
+            expanded = os.path.expanduser(candidate)
+            if os.path.exists(expanded):
+                return expanded
+        return os.path.expanduser("~/.config/youtube/cookies.txt")
+
+    def _find_mpv_executable(self) -> str:
+        """Locate the mpv executable on the host system."""
+        candidate = shutil.which("mpv") or shutil.which("mpv.exe")
+        if candidate:
+            return candidate
+
+        common_paths = [
+            "/usr/bin/mpv",
+            "/usr/local/bin/mpv",
+            os.path.expanduser("~/.local/bin/mpv"),
+            os.path.expanduser("~/snap/bin/mpv"),
+        ]
+        for path in common_paths:
+            if path and os.path.exists(path):
+                return path
+
+        return None
+
+    def _wait_for_ipc_socket(self, timeout: float = 3.0, interval: float = 0.1) -> bool:
+        """Wait for the mpv IPC socket to become available."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(interval)
+                s.connect(IPC_SOCKET)
+                s.close()
+                return True
+            except (FileNotFoundError, ConnectionRefusedError, OSError):
+                time.sleep(interval)
+        return False
+
+    def _start_mpv(self, cmd: list) -> bool:
+        """Start mpv and wait for the IPC socket before returning."""
+        if not self.mpv_path:
+            logger.error("Cannot start mpv: mpv is not installed or not found in PATH.")
+            return False
+
+        self.player = subprocess.Popen(cmd)
+        if not self._wait_for_ipc_socket():
+            logger.error("mpv IPC socket did not become available after starting mpv.")
+            if self.player:
+                try:
+                    self.player.terminate()
+                    self.player.wait(timeout=2)
+                except Exception:
+                    try:
+                        self.player.kill()
+                    except Exception:
+                        pass
+                self.player = None
+            return False
+        return True
 
     def search_song(self, query: str) -> tuple:
         """
@@ -105,7 +199,7 @@ class MusicPlayer:
             logger.error(f"Error searching artist: {e}")
             return None
 
-    def get_artist_info(self, artist_id: str, limit: int = None) -> dict:
+    def get_artist_info(self, artist_id: str, limit: int = 10) -> dict:
         """
         Retrieve comprehensive artist information and songs.
         
@@ -208,7 +302,7 @@ class MusicPlayer:
             logger.error(f"Error getting artist info: {e}", exc_info=True)
             return None
 
-    def search_playlist(self, query: str, limit: int = 1) -> tuple:
+    def search_playlist(self, query: str, limit: int = 5) -> tuple:
         """
         Search for a playlist on YouTube Music.
         
@@ -237,7 +331,7 @@ class MusicPlayer:
             logger.error(f"Error searching playlist: {e}")
             return None
 
-    def get_playlist_songs(self, playlist_id: str, limit: int = None) -> list:
+    def get_playlist_songs(self, playlist_id: str, limit: int = 5) -> list:
         """
         Retrieve songs from a YouTube Music playlist.
         
@@ -250,7 +344,7 @@ class MusicPlayer:
         """
         try:
             # Fetch more songs - use 0 for no limit initially, then apply our own limit
-            playlist = self.ytmusic.get_playlist(playlist_id, limit=500)
+            playlist = self.ytmusic.get_playlist(playlist_id, limit=10)
             songs = playlist.get("tracks", [])
             
             # Apply user limit if specified
@@ -263,7 +357,20 @@ class MusicPlayer:
             logger.error(f"Error getting playlist songs: {e}")
             return []
 
-    def play_playlist(self, playlist_query: str, limit: int = None) -> None:
+    def _resolve_volume(self, volume: int = None) -> int:
+        """Resolve and clamp requested volume to mpv-safe range (0-100)."""
+        level = self.default_volume if volume is None else volume
+        try:
+            level = int(level)
+        except (TypeError, ValueError):
+            level = self.default_volume
+        return max(0, min(100, level))
+
+    def _startup_volume(self) -> int:
+        """Forced mpv startup volume (always 70%)."""
+        return 70
+
+    def play_playlist(self, playlist_query: str, limit: int = 10, volume: int = None) -> None:
         """
         Search for and play a playlist on YouTube Music.
         
@@ -272,6 +379,7 @@ class MusicPlayer:
         Args:
             playlist_query: Playlist name to search for (e.g., "romantic songs")
             limit: Maximum number of songs to play (None = all available)
+            volume: Optional mpv volume level (0-100). Uses default volume if None.
         """
         logger.info(f"Searching for playlist: {playlist_query}")
         
@@ -315,25 +423,32 @@ class MusicPlayer:
             return
         
         logger.info(f"Starting playlist '{playlist_name}' with {len(audio_urls)} tracks")
+        if not self.mpv_path:
+            logger.error("Cannot play playlist: mpv is not installed or not found in PATH.")
+            return
+
         self.stop()
         
         # Start mpv with playlist
+        startup_volume = self._startup_volume()
         cmd = [
-            "mpv",
+            self.mpv_path,
             "--no-terminal",
             f"--input-ipc-server={IPC_SOCKET}",
-            "--playlist-start=0"
+            "--playlist-start=0",
+            f"--volume={startup_volume}",
         ] + audio_urls
-        
-        self.player = subprocess.Popen(cmd)
-        time.sleep(0.5)
+        if not self._start_mpv(cmd):
+            return
+        self.set_mpv_volume(startup_volume)
 
-    def play_by_artist(self, artist_name: str) -> None:
+    def play_by_artist(self, artist_name: str, volume: int = None) -> None:
         """
         Search for an artist and play their top song.
         
         Args:
             artist_name: Name of the artist to search for
+            volume: Optional mpv volume level (0-100). Uses default volume if None.
         """
         # Remove "song" from the query if present
         clean_name = artist_name
@@ -365,14 +480,22 @@ class MusicPlayer:
                 logger.info(f"Playing top song by {artist_name_result}: {title}")
                 audio_url = self.get_audio_url(video_id)
                 if audio_url:
+                    if not self.mpv_path:
+                        logger.error("Cannot play artist track: mpv is not installed or not found in PATH.")
+                        return
+
                     self.stop()
-                    self.player = subprocess.Popen([
-                        "mpv",
+                    startup_volume = self._startup_volume()
+                    cmd = [
+                        self.mpv_path,
                         "--no-terminal",
                         f"--input-ipc-server={IPC_SOCKET}",
+                        f"--volume={startup_volume}",
                         audio_url
-                    ])
-                    time.sleep(0.5)
+                    ]
+                    if not self._start_mpv(cmd):
+                        return
+                    self.set_mpv_volume(startup_volume)
                 else:
                     logger.error(f"Could not get audio URL for {title}")
             else:
@@ -393,10 +516,20 @@ class MusicPlayer:
         """
         try:
             ydl_opts = {
-                "format": "bestaudio",
+                "format": "bestaudio/best",
                 "quiet": True,
                 "no_warnings": True,
+                "noplaylist": True,
+                "http_headers": {
+                    "User-Agent": (
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    )
+                },
             }
+            if self.ytdlp_cookie_file and os.path.exists(self.ytdlp_cookie_file):
+                ydl_opts["cookiefile"] = self.ytdlp_cookie_file
+
             with YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(
                     f"https://www.youtube.com/watch?v={video_id}",
@@ -404,19 +537,23 @@ class MusicPlayer:
                 )
                 if "url" in info:
                     return info["url"]
-                else:
-                    logger.warning("Could not find audio URL in response")
-                    return None
+                # For merged formats, url is inside requested_formats
+                requested = info.get("requested_formats") or info.get("formats", [])
+                if requested:
+                    return requested[0].get("url")
+                logger.warning("Could not find audio URL in response")
+                return None
         except Exception as e:
             logger.error(f"Could not extract audio URL: {e}")
             return None
 
-    def play(self, query: str) -> None:
+    def play(self, query: str, volume: int = None) -> None:
         """
         Search for a song and play it immediately.
         
         Args:
             query: Song name or search query
+            volume: Optional mpv volume level (0-100). Uses default volume if None.
         """
         self.stop()
 
@@ -434,17 +571,24 @@ class MusicPlayer:
             logger.error(f"Could not get audio URL for {title}")
             return
 
+        if not self.mpv_path:
+            logger.error("Cannot play song: mpv is not installed or not found in PATH.")
+            return
+
         # Start mpv with IPC enabled
-        self.player = subprocess.Popen([
-            "mpv",
+        startup_volume = self._startup_volume()
+        cmd = [
+            self.mpv_path,
             "--no-terminal",
             f"--input-ipc-server={IPC_SOCKET}",
+            f"--volume={startup_volume}",
             audio_url
-        ])
+        ]
+        if not self._start_mpv(cmd):
+            return
+        self.set_mpv_volume(startup_volume)
 
-        time.sleep(0.5)  # give mpv time to start
-
-    def play_all_artist_tracks(self, artist_name: str, limit: int = 10) -> None:
+    def play_all_artist_tracks(self, artist_name: str, limit: int = 10, volume: int = None) -> None:
         """
         Retrieve and play all available songs from an artist.
         
@@ -454,6 +598,7 @@ class MusicPlayer:
         Args:
             artist_name: Name of the artist
             limit: Maximum number of songs to play (None = all available)
+            volume: Optional mpv volume level (0-100). Uses default volume if None.
         """
         clean_name = artist_name.replace(" song", "").strip()
         
@@ -507,16 +652,23 @@ class MusicPlayer:
         logger.info(f"Starting playlist with {len(audio_urls)} tracks")
         self.stop()
         
+        startup_volume = self._startup_volume()
         # Start mpv with all URLs as playlist
         cmd = [
-            "mpv",
+            self.mpv_path,
             "--no-terminal",
             f"--input-ipc-server={IPC_SOCKET}",
-            "--playlist-start=0"
+            "--playlist-start=0",
+            f"--volume={startup_volume}",
         ] + audio_urls
         
-        self.player = subprocess.Popen(cmd)
-        time.sleep(0.5)
+        if not self.mpv_path:
+            logger.error("Cannot play artist tracks: mpv is not installed or not found in PATH.")
+            return
+
+        if not self._start_mpv(cmd):
+            return
+        self.set_mpv_volume(startup_volume)
 
     def _send_mpv_command(self, command: str) -> bool:
         """
@@ -528,6 +680,10 @@ class MusicPlayer:
         Returns:
             True if command was sent successfully, False otherwise
         """
+        if not self.mpv_path:
+            logger.error("Cannot send command to mpv: mpv is not installed or not found in PATH.")
+            return False
+
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(IPC_SOCKET)
@@ -563,14 +719,12 @@ class MusicPlayer:
         if self._send_mpv_command('{"command": ["playlist-prev"]}'):
             logger.info("Skipped to previous track")
     
-    def set_volume(self, level: int) -> bool:
+    def set_mpv_volume(self, level: int) -> bool:
         """
-        Set system volume level.
-        
-        Uses PulseAudio system-level volume control.
+        Set mpv player volume directly (0-100).
         
         Args:
-            level: Volume level (0-100)
+            level: Volume level (0-100, where 100 is 100%)
             
         Returns:
             True if volume was set successfully, False otherwise
@@ -579,20 +733,20 @@ class MusicPlayer:
             logger.warning("Volume must be between 0-100")
             return False
         
-        if self.volume_controller:
-            if self.volume_controller.set_volume(level):
-                logger.info(f"Volume set to {level}%")
-                return True
-            else:
-                logger.error(f"Failed to set volume to {level}%")
-                return False
-        else:
-            logger.warning("Volume controller not available")
+        if not self.mpv_path:
+            logger.error("Cannot set volume: mpv is not installed or not found in PATH.")
             return False
 
-    def volume_up(self, step: int = 5) -> bool:
+        # mpv uses 0-100 scale
+        cmd = f'{{"command": ["set_property", "volume", {level}]}}'
+        if self._send_mpv_command(cmd):
+            logger.info(f"Mpv volume set to {level}%")
+            return True
+        return False
+
+    def mpv_volume_up(self, step: int = 5) -> bool:
         """
-        Increase volume by specified step.
+        Increase mpv volume by specified step.
         
         Args:
             step: Volume increment (default: 5%)
@@ -600,16 +754,15 @@ class MusicPlayer:
         Returns:
             True if volume was increased successfully, False otherwise
         """
-        if self.volume_controller:
-            new_vol = self.volume_controller.increase_volume(step)
-            if new_vol is not None:
-                logger.info(f"Volume increased to {new_vol}%")
-                return True
+        cmd = f'{{"command": ["add", "volume", {step}]}}'
+        if self._send_mpv_command(cmd):
+            logger.info(f"Mpv volume increased by {step}%")
+            return True
         return False
-    
-    def volume_down(self, step: int = 5) -> bool:
+
+    def mpv_volume_down(self, step: int = 5) -> bool:
         """
-        Decrease volume by specified step.
+        Decrease mpv volume by specified step.
         
         Args:
             step: Volume decrement (default: 5%)
@@ -617,26 +770,13 @@ class MusicPlayer:
         Returns:
             True if volume was decreased successfully, False otherwise
         """
-        if self.volume_controller:
-            new_vol = self.volume_controller.decrease_volume(step)
-            if new_vol is not None:
-                logger.info(f"Volume decreased to {new_vol}%")
-                return True
+        cmd = f'{{"command": ["add", "volume", -{step}]}}'
+        if self._send_mpv_command(cmd):
+            logger.info(f"Mpv volume decreased by {step}%")
+            return True
         return False
-    
-    def get_volume(self) -> int:
-        """
-        Get current system volume level.
-        
-        Returns:
-            Current volume percentage (0-100), or None if unavailable
-        """
-        if self.volume_controller:
-            vol = self.volume_controller.get_current_volume()
-            if vol is not None:
-                logger.info(f"Current volume: {vol}%")
-                return vol
-        return None
+
+   
 
     def stop(self) -> None:
         """
@@ -650,8 +790,26 @@ class MusicPlayer:
             s.sendall(b'{"command": ["quit"]}\n')
             s.close()
             logger.info("Playback stopped")
+        except OSError as e:
+            if e.errno in (errno.ECONNREFUSED, errno.ENOENT, errno.ECONNRESET):
+                if os.path.exists(IPC_SOCKET):
+                    try:
+                        os.remove(IPC_SOCKET)
+                        logger.info("Removed stale mpv IPC socket")
+                    except OSError:
+                        pass
+            if self.player:
+                try:
+                    self.player.terminate()
+                    self.player.wait(timeout=2)
+                    logger.info("Playback stopped (process terminated)")
+                except Exception:
+                    try:
+                        self.player.kill()
+                        logger.info("Playback stopped (process killed)")
+                    except Exception:
+                        pass
         except Exception as e:
-            # Fallback: send SIGTERM to process
             if self.player:
                 try:
                     self.player.terminate()
@@ -677,10 +835,12 @@ if __name__ == "__main__":
 
     # Example usage:
     # music.play_all_artist_tracks("guru randhawa", limit=10)
-    # music.play_playlist("romantic songs", limit=5)
-    # music.play("meow meow kitten voice")  # Play a specific song by name
+    # music.play_playlist("party hindi songs 2026", limit=5)
+    # music.play("achhi lagti ho hindi song")  # Play a specific song by name
     # time.sleep(3)
-    
+    # music.set_mpv_volume(80)
+    # music.set_mpv_volume(50)
+    # print
     # Playback controls:
     music.pause()          # Pause playback
     # time.sleep(2)
