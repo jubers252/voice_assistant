@@ -22,6 +22,7 @@ from connectors.telegram_bot import TelegramBot
 from handlers.event_scheduler import EventScheduler
 from gpio_setup import PixelLEDController
 from handlers.strands_agent_handler import StrandsAgent
+
 from strands.models.openai import OpenAIModel
 from handlers.wake_word_manager import WakeWordManager
 from camera.camera_context import add_camera_context_to_command, clear_wake_request, get_wake_request, read_tracking_angles
@@ -32,6 +33,10 @@ load_dotenv()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_EVENTS_FILE = os.path.join(current_dir, "events.json")
 DISPLAY_SYNC_INTERVAL = 0.2
+
+# Display configuration via environment variables
+ENABLE_ANIME_FACE_DISPLAY = os.getenv("ENABLE_ANIME_FACE_DISPLAY", "false").lower() in ("true", "1", "yes")
+ENABLE_CAMERA_DISPLAY = os.getenv("ENABLE_CAMERA_DISPLAY", "false").lower() in ("true", "1", "yes")
 
 class VoiceAssistant:
     """Voice Assistant - Main Application Class"""
@@ -69,15 +74,19 @@ class VoiceAssistant:
     def _initialize_hardware(self):
         self.pixel_led = PixelLEDController(led_count=26, brightness=1.0, simulate=False)
         self.pixel_led.off()
-        set_camera_display_enabled(False)
+        set_camera_display_enabled(ENABLE_CAMERA_DISPLAY)
         self.face_display = FaceDisplayController(mode="neutral")
-        self.face_display.start()
+        if ENABLE_ANIME_FACE_DISPLAY:
+            self.face_display.start()
+            print(f"[INIT] Anime face display enabled")
+        else:
+            print(f"[INIT] Anime face display disabled (set ENABLE_ANIME_FACE_DISPLAY=true to enable)")
         self._start_display_sync()
 
     def _set_face_mode(self, mode: str):
         if self.camera_display_enabled:
             return
-        if self.face_display is None:
+        if self.face_display is None or not self.face_display.is_running():
             return
         try:
             self.face_display.set_mode(mode)
@@ -107,7 +116,8 @@ class VoiceAssistant:
             enabled = is_camera_display_enabled(default=False)
             self.camera_display_enabled = enabled
 
-            if self.face_display is not None:
+            # Only sync face display if anime face display is enabled and running
+            if ENABLE_ANIME_FACE_DISPLAY and self.face_display is not None and self.face_display.is_running():
                 tracking_angles = read_tracking_angles()
                 self.face_display.set_pupil_angles(
                     tracking_angles.get("pupil_pan_angle", 0.0),
@@ -116,8 +126,6 @@ class VoiceAssistant:
                 if enabled:
                     self.face_display.hide()
                 else:
-                    if not self.face_display.is_running():
-                        self.face_display.start()
                     self.face_display.show()
             self.display_sync_stop_event.wait(DISPLAY_SYNC_INTERVAL)
 

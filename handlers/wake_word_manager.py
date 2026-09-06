@@ -21,7 +21,7 @@ class WakeWordManager:
     SAMPLE_RATE = 16000
     CHUNK_SIZE = 1280  # 80 ms @ 16 kHz
     DEBUG_SCORES = True
-    CUSTOM_MODEL_PATH = "/home/jubers/Documents/voice_assistant/Sofi_20260609_092546.onnx"
+    CUSTOM_MODEL_PATH = "/home/pi/Documents/voice_assistant/Sofi_20260609_092546.onnx"
 
     # Wakeword triggers
     WAKEWORD_DETECTION_THRESHOLD = 0.40
@@ -128,7 +128,7 @@ class WakeWordManager:
     def _load_model(self):
         print("Loading openWakeWord model...")
         try:
-            return Model(wakeword_models=[self.CUSTOM_MODEL_PATH], inference_framework="onnx")
+            return Model(wakeword_model_paths=[self.CUSTOM_MODEL_PATH], enable_speex_noise_suppression=False)
         except Exception as e:
             print(f"Failed to initialize openWakeWord model: {e}")
             raise
@@ -296,6 +296,10 @@ class WakeWordManager:
     def _wakeword_loop(self):
         model = self._load_model()
         last_trigger_time = 0.0
+        
+        # Buffer to accumulate minimum 400 samples for openwakeword
+        MIN_SAMPLES = 400
+        audio_buffer = np.array([], dtype=np.float32)
 
         while not self.stop_event.is_set():
             try:
@@ -303,35 +307,53 @@ class WakeWordManager:
             except queue.Empty:
                 continue
 
-            clipped = np.clip(chunk, -1.0, 1.0)
-            audio_int16 = (clipped * 32767).astype(np.int16)
-            scores = model.predict(audio_int16)
+            # Accumulate audio in buffer
+            audio_buffer = np.concatenate([audio_buffer, chunk])
+            
+            # Process only when we have enough samples
+            if len(audio_buffer) < MIN_SAMPLES:
+                continue
+            
+            # Take only what we need and keep excess for next iteration
+            audio_to_process = audio_buffer[:MIN_SAMPLES]
+            audio_buffer = audio_buffer[MIN_SAMPLES:]
+            
+            try:
+                clipped = np.clip(audio_to_process, -1.0, 1.0)
+                audio_int16 = (clipped * 32767).astype(np.int16)
+                scores = model.predict(audio_int16)
 
-            best_name = None
-            best_score = 0.0
-            for name, score in scores.items():
-                sc = float(score)
-                if sc > best_score:
-                    best_score = sc
-                    best_name = name
+                best_name = None
+                best_score = 0.0
+                for name, score in scores.items():
+                    sc = float(score)
+                    if sc > best_score:
+                        best_score = sc
+                        best_name = name
 
-            now = time.time()
-            cooldown_ok = (now - last_trigger_time) * 1000.0 >= self.WAKEWORD_COOLDOWN_MS
-            if best_score >= self.WAKEWORD_DETECTION_THRESHOLD and cooldown_ok:
-                last_trigger_time = now
-                self.pixel_led.set_listening()
-                if self.state_callback:
-                    try:
-                        self.state_callback("listening")
-                    except Exception:
-                        pass
-                with self.shared_state["lock"]:
-                    self.shared_state["trigger_global_sample"] = global_samples
-                self.shared_state["wakeword_event"].set()
-                print(f"\n🔥 Wakeword trigger: model={best_name}, score={best_score:.2f}")
+                now = time.time()
+                cooldown_ok = (now - last_trigger_time) * 1000.0 >= self.WAKEWORD_COOLDOWN_MS
+                if best_score >= self.WAKEWORD_DETECTION_THRESHOLD and cooldown_ok:
+                    last_trigger_time = now
+                    if self.pixel_led is not None:
+                        self.pixel_led.set_listening()
+                    if self.state_callback:
+                        try:
+                            self.state_callback("listening")
+                        except Exception:
+                            pass
+                    with self.shared_state["lock"]:
+                        self.shared_state["trigger_global_sample"] = global_samples
+                    self.shared_state["wakeword_event"].set()
+                    print(f"\n🔥 Wakeword trigger: model={best_name}, score={best_score:.2f}")
 
-            if self.DEBUG_SCORES and int(now * 10) % 10 == 0:
-                print(f"[WW] best_score={best_score:.2f}", end="\r")
+                if self.DEBUG_SCORES and int(now * 10) % 10 == 0:
+                    print(f"[WW] best_score={best_score:.2f}", end="\r")
+                    
+            except Exception as e:
+                print(f"[WW] Error during wake word prediction: {e}")
+                # Reset buffer on error to avoid propagating corruption
+                audio_buffer = np.array([], dtype=np.float32)
 
     def _vad_capture_loop(self):
         frame_size = int(self.SAMPLE_RATE * self.FRAME_MS / 1000)
