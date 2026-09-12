@@ -3,14 +3,18 @@ import socket
 import subprocess
 import threading
 import time
+import math
 
 import cv2
 import mediapipe as mp
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
 import numpy as np
 
-from .camera_context import set_wake_request, write_camera_context
-from camera.face_track_servo import FaceTrackServo
-from read_serial_simple import SensorReader
+from camera_display_control import is_camera_display_enabled, toggle_camera_display_enabled
+from camera_context import write_camera_context, write_tracking_angles, set_wake_request
+from face_track_servo import FaceTrackServo, MAX_ANGLE_LIMIT, PAN_NEUTRAL_ANGLE, TILT_NEUTRAL_ANGLE
+from sensor_reader import SensorReader
 
 try:
     import face_recognition
@@ -21,12 +25,19 @@ except ImportError:
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
+MP_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mp_models")
+FACE_DETECTOR_MODEL_PATH = os.path.join(MP_MODELS_DIR, "blaze_face_short_range.tflite")
+HAND_LANDMARKER_MODEL_PATH = os.path.join(MP_MODELS_DIR, "hand_landmarker.task")
+
 STREAM_PORT = 8002
+RELAY_STREAM_PORT = 8003
+RELAY_STREAM_HOST = os.getenv("FRAME_RELAY_HOST", "127.0.0.1")
+RELAY_PUBLISH_EVERY_N_FRAMES = 4
 CAMERA_INDEX = "0"
 WIDTH = 640
 HEIGHT = 480
 FPS = 30
-DETECT_EVERY_N_FRAMES = 4     # Face and hand detect every 4 frames for stable tracking
+DETECT_EVERY_N_FRAMES = 4     # Detect every 4 frames for stable tracking
 FACE_RECOGNITION_EVERY_N_FRAMES = 30  # Recognize every 30 frames (reduce CPU)
 PROCESS_SCALE = 0.35             # Much smaller = faster (was 0.5)
 FACE_DB_PATH = "my_db"
@@ -35,16 +46,97 @@ CONTEXT_LOG_EVERY_N_FRAMES = 30
 CAMERA_CONTEXT_UPDATE_SECONDS = 2
 FACE_LOST_CENTER_DELAY = 1.5
 FACE_MOVE_THRESHOLD = 6
-
-# Hand gesture constants
-FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 WAKE_GESTURE_PATTERN = ("fist", "open_hand", "fist", "open_hand")
 WAKE_GESTURE_MAX_STEP_SECONDS = 1.2
 WAKE_GESTURE_TRIGGER_COOLDOWN_SECONDS = 2.0
+# Hand gesture constants
+FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 
-# Sensor-assisted tracking
-TRACKING_MODE_FACE = "face"
-TRACKING_MODE_SENSOR = "sensor"
+# Sensor-based tracking fallback
+SENSOR_PORT = os.getenv("SENSOR_PORT", "/dev/ttyAMA0")
+SENSOR_BAUDRATE = 256000
+SENSOR_ENABLE_SERVO = True
+SENSOR_TRACKING_TIMEOUT = 3.0  # Use sensor for 3 seconds if face lost
+SENSOR_FALLBACK_ENABLE = True  # Enable sensor fallback when face not detected
+
+DISPLAY_STATE_CHECK_SECONDS = 0.2
+DISPLAY_BUTTON_BOUNDS = (510, 40, 680, 105)
+MAX_PUPIL_ANGLE = math.pi / 2
+
+
+class _RelativeBoundingBox:
+    """Normalized bounding box, mirroring the legacy mp.solutions API shape."""
+    __slots__ = ("xmin", "ymin", "width", "height")
+
+    def __init__(self, xmin, ymin, width, height):
+        self.xmin = xmin
+        self.ymin = ymin
+        self.width = width
+        self.height = height
+
+
+class _LocationData:
+    __slots__ = ("relative_bounding_box",)
+
+    def __init__(self, relative_bounding_box):
+        self.relative_bounding_box = relative_bounding_box
+
+
+class _CompatDetection:
+    """Wraps a Tasks-API Detection to look like the legacy detection object."""
+    __slots__ = ("location_data",)
+
+    def __init__(self, location_data):
+        self.location_data = location_data
+
+
+class _FaceDetectionResult:
+    __slots__ = ("detections",)
+
+    def __init__(self, detections):
+        self.detections = detections
+
+
+def _to_compat_face_result(detection_result, image_width, image_height):
+    """Convert a mediapipe.tasks FaceDetectorResult (pixel bboxes) into the
+    legacy-shaped result with normalized relative_bounding_box coordinates."""
+    if not detection_result or not detection_result.detections:
+        return _FaceDetectionResult([])
+
+    compat_detections = []
+    for detection in detection_result.detections:
+        bbox = detection.bounding_box
+        relative_bbox = _RelativeBoundingBox(
+            xmin=bbox.origin_x / image_width,
+            ymin=bbox.origin_y / image_height,
+            width=bbox.width / image_width,
+            height=bbox.height / image_height,
+        )
+        compat_detections.append(_CompatDetection(_LocationData(relative_bbox)))
+
+    return _FaceDetectionResult(compat_detections)
+
+
+def servo_angles_to_pupil_angles(pan_angle, tilt_angle):
+    pan_ratio = (pan_angle - PAN_NEUTRAL_ANGLE) / MAX_ANGLE_LIMIT
+    tilt_ratio = (tilt_angle - TILT_NEUTRAL_ANGLE) / MAX_ANGLE_LIMIT
+
+    pan_ratio = max(-1.0, min(1.0, pan_ratio))
+    tilt_ratio = max(-1.0, min(1.0, tilt_ratio))
+
+    pupil_pan_angle = pan_ratio * MAX_PUPIL_ANGLE
+    pupil_tilt_angle = tilt_ratio * MAX_PUPIL_ANGLE
+    return pupil_pan_angle, pupil_tilt_angle
+
+
+def publish_tracking_angles(servo_tracker):
+    pan_angle = getattr(servo_tracker, "last_pan_angle", None)
+    tilt_angle = getattr(servo_tracker, "last_tilt_angle", None)
+    if pan_angle is None or tilt_angle is None:
+        return
+
+    pupil_pan_angle, pupil_tilt_angle = servo_angles_to_pupil_angles(pan_angle, tilt_angle)
+    write_tracking_angles(pupil_pan_angle, pupil_tilt_angle)
 
 
 def start_stream():
@@ -71,16 +163,7 @@ def start_stream():
     ]
 
     print("Starting camera stream with rpicam-vid...")
-    try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        print(f"Camera process started with PID {process.pid}")
-        return process
-    except FileNotFoundError:
-        print("ERROR: rpicam-vid not found. Install libcamera: sudo apt install -y libcamera-apps")
-        raise
-    except Exception as e:
-        print(f"ERROR: Failed to start camera: {e}")
-        raise
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 
 
 def print_stream_logs(process):
@@ -88,20 +171,97 @@ def print_stream_logs(process):
         print(f"camera: {line.decode(errors='replace').rstrip()}")
 
 
+class FrameRelayServer:
+    def __init__(self, host=RELAY_STREAM_HOST, port=RELAY_STREAM_PORT):
+        self.host = host
+        self.port = port
+        self.server_sock = None
+        self.accept_thread = None
+        self.stop_event = threading.Event()
+        self.clients = []
+        self.clients_lock = threading.Lock()
+
+    def start(self):
+        self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_sock.bind((self.host, self.port))
+        self.server_sock.listen()
+        self.server_sock.settimeout(0.5)
+        self.accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
+        self.accept_thread.start()
+        print(f"[RELAY] Frame relay listening on tcp://{self.host}:{self.port}", flush=True)
+
+    def _accept_loop(self):
+        while not self.stop_event.is_set():
+            try:
+                client_sock, client_addr = self.server_sock.accept()
+                client_sock.settimeout(1.0)
+                with self.clients_lock:
+                    self.clients.append(client_sock)
+                print(f"[RELAY] Client connected from {client_addr[0]}:{client_addr[1]}", flush=True)
+            except socket.timeout:
+                continue
+            except OSError:
+                if not self.stop_event.is_set():
+                    print("[RELAY] Accept loop stopped unexpectedly", flush=True)
+                break
+
+    def publish_frame(self, frame):
+        with self.clients_lock:
+            if not self.clients:
+                return
+
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), 80],
+        )
+        if not ok:
+            return
+
+        payload = encoded.tobytes()
+        dead_clients = []
+        with self.clients_lock:
+            for client_sock in self.clients:
+                try:
+                    client_sock.sendall(payload)
+                except OSError:
+                    dead_clients.append(client_sock)
+
+            for client_sock in dead_clients:
+                try:
+                    client_sock.close()
+                except OSError:
+                    pass
+                self.clients.remove(client_sock)
+
+    def stop(self):
+        self.stop_event.set()
+        if self.server_sock is not None:
+            try:
+                self.server_sock.close()
+            except OSError:
+                pass
+            self.server_sock = None
+
+        if self.accept_thread and self.accept_thread.is_alive():
+            self.accept_thread.join(timeout=1.0)
+        self.accept_thread = None
+
+        with self.clients_lock:
+            for client_sock in self.clients:
+                try:
+                    client_sock.close()
+                except OSError:
+                    pass
+            self.clients = []
+
+
 def connect_stream(process):
     print("Connecting to camera stream...")
 
-    for attempt in range(40):
+    for _ in range(40):
         if process.poll() is not None:
-            # Process died, get stderr for diagnosis
-            print(f"ERROR: Camera process died with exit code {process.returncode}")
-            print("Camera process output:")
-            try:
-                output = process.stdout.read()
-                if output:
-                    print(output.decode(errors='replace'))
-            except:
-                pass
             raise RuntimeError(f"Camera stream stopped with code {process.returncode}")
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -110,15 +270,13 @@ def connect_stream(process):
 
         try:
             sock.connect(("127.0.0.1", STREAM_PORT))
-            print(f"Camera stream connected on attempt {attempt + 1}.")
+            print("Camera stream connected.")
             return sock
-        except OSError as e:
+        except OSError:
             sock.close()
-            if attempt == 0:
-                print(f"[Attempt {attempt + 1}/40] Waiting for camera stream...")
             time.sleep(0.25)
 
-    raise RuntimeError(f"Could not connect to camera stream on port {STREAM_PORT} after 40 attempts.")
+    raise RuntimeError("Could not connect to camera stream.")
 
 
 def read_frames(sock):
@@ -249,6 +407,9 @@ def count_fingers(hand_landmarks):
     if not hand_landmarks:
         return 0
     
+    # Handle both NormalizedLandmarkList and direct list formats
+    landmarks = hand_landmarks.landmark if hasattr(hand_landmarks, 'landmark') else hand_landmarks
+    
     # Count 4 main fingers: Index, Middle, Ring, Pinky
     # Compare tip to PIP (middle joint)
     finger_tips = [8, 12, 16, 20]
@@ -257,16 +418,16 @@ def count_fingers(hand_landmarks):
     fingers_extended = 0
     
     for tip_idx, pip_idx in zip(finger_tips, finger_pips):
-        tip = hand_landmarks.landmark[tip_idx]
-        pip = hand_landmarks.landmark[pip_idx]
+        tip = landmarks[tip_idx]
+        pip = landmarks[pip_idx]
         
         # When extended: tip is higher on screen (lower y value)
         if tip.y < pip.y:
             fingers_extended += 1
     
     # Thumb: compare tip (4) with CMC joint (2) using x-coordinate
-    thumb_tip = hand_landmarks.landmark[4]
-    thumb_cmc = hand_landmarks.landmark[2]
+    thumb_tip = landmarks[4]
+    thumb_cmc = landmarks[2]
     # Thumb is extended if tip is away from palm (larger x difference)
     if abs(thumb_tip.x - thumb_cmc.x) > 0.05:
         fingers_extended += 1
@@ -303,7 +464,7 @@ def get_hand_gesture(hand_landmarks):
     gesture = None
     if is_closed:
         gesture = "fist"
-    elif fingers >= 4:
+    elif fingers == 5:
         gesture = "open_hand"
     elif fingers == 2:
         gesture = "peace"
@@ -316,9 +477,12 @@ def get_hand_gesture(hand_landmarks):
 
 def get_hand_center(hand_landmarks):
     """Return a stable normalized palm center for motion tracking."""
+    # Handle both NormalizedLandmarkList and direct list formats
+    landmarks = hand_landmarks.landmark if hasattr(hand_landmarks, 'landmark') else hand_landmarks
+    
     palm_indices = (0, 5, 9, 13, 17)
-    xs = [hand_landmarks.landmark[idx].x for idx in palm_indices]
-    ys = [hand_landmarks.landmark[idx].y for idx in palm_indices]
+    xs = [landmarks[idx].x for idx in palm_indices]
+    ys = [landmarks[idx].y for idx in palm_indices]
     return sum(xs) / len(xs), sum(ys) / len(ys)
 
 
@@ -326,6 +490,7 @@ def reset_wake_gesture_state(wake_gesture_state, clear_center=False):
     wake_gesture_state["sequence"] = []
     wake_gesture_state["last_gesture"] = None
     wake_gesture_state["last_step_at"] = 0.0
+    wake_gesture_state["last_trigger_at"] = 0.0
     if clear_center:
         wake_gesture_state["center"] = None
 
@@ -339,14 +504,14 @@ def detect_wake_gesture(hand_result, wake_gesture_state, now):
         "matched": [],
     }
 
-    if not hand_result or not hand_result.multi_hand_landmarks:
+    if not hand_result or not hand_result.hand_landmarks:
         if now - wake_gesture_state.get("last_step_at", 0.0) > WAKE_GESTURE_MAX_STEP_SECONDS:
             reset_wake_gesture_state(wake_gesture_state, clear_center=True)
         result["progress"] = len(wake_gesture_state["sequence"])
         result["matched"] = list(wake_gesture_state["sequence"])
         return result
 
-    primary_hand = hand_result.multi_hand_landmarks[0]
+    primary_hand = hand_result.hand_landmarks[0]
     gesture_info = get_hand_gesture(primary_hand)
     gesture = gesture_info.get("gesture") if gesture_info else None
     if gesture not in {"fist", "open_hand"}:
@@ -418,7 +583,6 @@ def detect_wake_gesture(hand_result, wake_gesture_state, now):
 
     return result
 
-
 def get_face_bbox(detection, frame_width, frame_height):
     """Convert face detection to bounding box.
     
@@ -454,9 +618,43 @@ def setup_display_window():
     )
 
 
+def set_display_visibility(should_show, display_visible):
+    if should_show and not display_visible:
+        setup_display_window()
+        return True
+
+    if not should_show and display_visible:
+        try:
+            cv2.destroyWindow("Face and Hand Detection")
+        except cv2.error:
+            pass
+        return False
+
+    return display_visible
+
+
+def draw_display_toggle_button(frame, label):
+    x1, y1, x2, y2 = DISPLAY_BUTTON_BOUNDS
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (60, 60, 60), -1)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (220, 220, 220), 2)
+    cv2.putText(frame, label, (x1 + 14, y1 + 42),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.72, (245, 245, 245), 2, cv2.LINE_AA)
+
+
+def point_in_display_button(x, y):
+    x1, y1, x2, y2 = DISPLAY_BUTTON_BOUNDS
+    return x1 <= x <= x2 and y1 <= y <= y2
+
+
 def process_detection_frame(frame, face_detector, hands):
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    return face_detector.process(rgb_frame), hands.process(rgb_frame)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+    frame_height, frame_width = rgb_frame.shape[:2]
+
+    face_result = face_detector.detect(mp_image)
+    hand_result = hands.detect(mp_image)
+
+    return _to_compat_face_result(face_result, frame_width, frame_height), hand_result
 
 
 def update_face_labels(frame, face_result, frame_count, known_encodings, known_names, last_labels):
@@ -506,12 +704,12 @@ def update_camera_context(face_result, face_labels, frame_count, now, last_face_
     return [], last_face_count, last_update_at
 
 
-def draw_hand_overlays(frame, hand_result, mp_draw, mp_hands, frame_count):
-    if not hand_result or not hand_result.multi_hand_landmarks:
+def draw_hand_overlays(frame, hand_result, mp_draw, hand_connections, frame_count):
+    if not hand_result or not hand_result.hand_landmarks:
         return
 
-    for hand_idx, hand_landmarks in enumerate(hand_result.multi_hand_landmarks):
-        mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+    for hand_idx, hand_landmarks in enumerate(hand_result.hand_landmarks):
+        mp_draw.draw_landmarks(frame, hand_landmarks, hand_connections)
         gesture_info = get_hand_gesture(hand_landmarks)
 
         if not gesture_info:
@@ -531,113 +729,34 @@ def draw_hand_overlays(frame, hand_result, mp_draw, mp_hands, frame_count):
                   f"gesture={gesture_info['gesture']}")
 
 
-def draw_wake_gesture_overlay(frame, wake_gesture_status, now):
-    if not wake_gesture_status:
-        return
-
-    center = wake_gesture_status.get("center")
-    if center:
-        frame_height, frame_width = frame.shape[:2]
-        x = int(center[0] * frame_width)
-        y = int(center[1] * frame_height)
-        cv2.circle(frame, (x, y), 14, (255, 200, 0), 2)
-
-    if wake_gesture_status.get("detected"):
-        cv2.putText(
-            frame,
-            "Wake gesture detected",
-            (10, HEIGHT - 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 200, 0),
-            2,
-        )
-    elif now - wake_gesture_status.get("last_seen_at", 0.0) < 0.75:
-        matched = " -> ".join(wake_gesture_status.get("matched", [])) or "waiting"
-        cv2.putText(
-            frame,
-            f"Wake watch: {matched}",
-            (10, HEIGHT - 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 200, 0),
-            1,
-        )
-
-
-def initialize_sensor_reader():
-    try:
-        reader = SensorReader(daemon=True)
-        reader.start()
-        return reader
-    except Exception as exc:
-        print(f"[SENSOR] Warning: Could not initialize sensor reader - {exc}")
-        return None
-
-
-def update_servo_tracking(
-    face_result,
-    sensor_sample,
-    sensor_tracking_enabled,
-    servo_tracker,
-    frame_shape,
-    now,
-    last_face_seen_at,
-    last_tracked_center,
-    current_mode,
-):
-    sensor_motion_active = bool(sensor_sample and sensor_sample.get("motion_detected"))
-
-    if face_result and face_result.detections:
-        primary_face = face_result.detections[0]
-        face_bbox = get_face_bbox(primary_face, frame_shape[1], frame_shape[0])
-        center_x = face_bbox['x'] + face_bbox['width'] // 2
-        center_y = face_bbox['y'] + face_bbox['height'] // 2
-
-        moved_enough = (
-            last_tracked_center is None or
-            abs(center_x - last_tracked_center[0]) > FACE_MOVE_THRESHOLD or
-            abs(center_y - last_tracked_center[1]) > FACE_MOVE_THRESHOLD
-        )
-
-        if moved_enough:
-            servo_tracker.track_face(face_bbox)
-            last_tracked_center = (center_x, center_y)
-
-        return now, last_tracked_center, TRACKING_MODE_FACE
-
-    if sensor_motion_active:
-        servo_tracker.move_pan_from_sensor(sensor_sample["x"], sensor_sample["y"])
-        return last_face_seen_at, None, TRACKING_MODE_SENSOR
-
-    if not sensor_tracking_enabled and now - last_face_seen_at > FACE_LOST_CENTER_DELAY:
-        servo_tracker.center()
-
-    return last_face_seen_at, None, current_mode
-
-
-def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
+def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=None):
     """Main detection loop for face and hand tracking.
     
     Args:
         sock: Camera stream socket
         servo_tracker: FaceTrackServo instance for face tracking
-        sensor_reader: Optional sensor reader for motion-based pan fallback
+        relay_server: Optional frame relay for downstream consumers
+        sensor_reader: Optional SensorReader instance for fallback tracking when face not detected
     """
-    mp_face_detection = mp.solutions.face_detection
-    mp_hands = mp.solutions.hands
-    mp_draw = mp.solutions.drawing_utils
+    mp_draw = mp_vision.drawing_utils
+    hand_connections = mp_vision.HandLandmarksConnections.HAND_CONNECTIONS
     known_encodings, known_names = load_known_faces(FACE_DB_PATH)
 
-    face_detector = mp_face_detection.FaceDetection(
-        model_selection=0, min_detection_confidence=0.6
+    face_detector = mp_vision.FaceDetector.create_from_options(
+        mp_vision.FaceDetectorOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=FACE_DETECTOR_MODEL_PATH),
+            running_mode=mp_vision.RunningMode.IMAGE,
+            min_detection_confidence=0.6,
+        )
     )
-    hands = mp_hands.Hands(
-        static_image_mode=False,
-        model_complexity=0,
-        max_num_hands=2,
-        min_detection_confidence=0.7,
-        min_tracking_confidence=0.5,
+    hands = mp_vision.HandLandmarker.create_from_options(
+        mp_vision.HandLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=HAND_LANDMARKER_MODEL_PATH),
+            running_mode=mp_vision.RunningMode.IMAGE,
+            num_hands=2,
+            min_hand_detection_confidence=0.7,
+            min_tracking_confidence=0.5,
+        )
     )
 
     # State tracking
@@ -650,7 +769,8 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
     # Servo: track when face was last seen to avoid centering on brief drops
     last_face_seen_at = 0.0
     last_tracked_center = None
-    tracking_mode = TRACKING_MODE_SENSOR if sensor_reader else TRACKING_MODE_FACE
+
+    # Wake gesture detection state
     wake_gesture_state = {
         "sequence": [],
         "last_gesture": None,
@@ -658,14 +778,36 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
         "last_trigger_at": 0.0,
         "center": None,
     }
-    wake_gesture_status = None
 
-    setup_display_window()
+    # Sensor-based fallback tracking state
+    sensor_fallback_active = False
+    last_sensor_reading_at = 0.0
+    using_sensor_fallback = False
+
+    display_enabled = is_camera_display_enabled(default=True)
+    display_visible = set_display_visibility(display_enabled, False)
+    last_display_state_check_at = 0.0
+    toggle_requested = False
+
+    def _mouse_callback(event, x, y, _flags, _param):
+        nonlocal toggle_requested
+        if event == cv2.EVENT_LBUTTONUP and point_in_display_button(x, y):
+            toggle_requested = True
+
+    if display_visible:
+        cv2.setMouseCallback("Face and Hand Detection", _mouse_callback)
 
     try:
         for frame in read_frames(sock):
             frame_count += 1
             now = time.time()
+
+            if now - last_display_state_check_at >= DISPLAY_STATE_CHECK_SECONDS:
+                display_enabled = is_camera_display_enabled(default=True)
+                display_visible = set_display_visibility(display_enabled, display_visible)
+                if display_visible:
+                    cv2.setMouseCallback("Face and Hand Detection", _mouse_callback)
+                last_display_state_check_at = now
 
             # Downscale for faster processing
             processing_frame = frame
@@ -675,7 +817,7 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
                     interpolation=cv2.INTER_LINEAR
                 )
 
-            # Run face and hand detection on the same cadence to keep CPU usage stable.
+            # Run detection every N frames
             if frame_count % DETECT_EVERY_N_FRAMES == 0:
                 latest_face_result, latest_hand_result = process_detection_frame(
                     processing_frame,
@@ -690,11 +832,6 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
                     known_names,
                     latest_face_labels,
                 )
-                wake_gesture_status = detect_wake_gesture(latest_hand_result, wake_gesture_state, now)
-                wake_gesture_status["last_seen_at"] = now
-                if wake_gesture_status.get("detected"):
-                    set_wake_request()
-                    print("[HAND] Wake gesture detected")
 
             # Update camera context from the latest detections and labels.
             latest_face_labels, last_context_face_count, last_context_update_at = update_camera_context(
@@ -706,100 +843,167 @@ def detect_face_and_hands(sock, servo_tracker, sensor_reader=None):
                 last_context_update_at,
             )
 
-            sensor_sample = sensor_reader.get_latest() if sensor_reader else None
-
             # Draw detections and detect gestures
             if latest_face_result:
                 draw_faces(frame, latest_face_result.detections, latest_face_labels)
-            draw_hand_overlays(frame, latest_hand_result, mp_draw, mp_hands, frame_count)
-            draw_wake_gesture_overlay(frame, wake_gesture_status, now)
+            draw_hand_overlays(frame, latest_hand_result, mp_draw, hand_connections, frame_count)
 
-            # Face updates run on the detection cadence; sensor fallback can run every frame.
-            should_update_tracking = (
-                frame_count % DETECT_EVERY_N_FRAMES == 0
-                or bool(sensor_sample and sensor_sample.get("motion_detected"))
-            )
-            if should_update_tracking:
-                last_face_seen_at, last_tracked_center, next_mode = update_servo_tracking(
-                    latest_face_result,
-                    sensor_sample,
-                    sensor_reader is not None,
-                    servo_tracker,
-                    frame.shape,
-                    now,
-                    last_face_seen_at,
-                    last_tracked_center,
-                    tracking_mode,
-                )
-                if next_mode != tracking_mode:
-                    print(f"[TRACKING] Mode -> {next_mode}")
-                tracking_mode = next_mode
+            # Detect wake gesture (fist -> open_hand -> fist -> open_hand sequence)
+            wake_result = detect_wake_gesture(latest_hand_result, wake_gesture_state, now)
+            if wake_result["detected"]:
+                print("[WAKE] Wake gesture detected! Waking up assistant...", flush=True)
+                set_wake_request(source="hand_gesture")
+            
+            # Draw wake gesture progress on screen
+            if wake_result["progress"] > 0:
+                progress_text = f"Wake Gesture: {'/'.join(wake_result['matched'])} ({wake_result['progress']}/{len(WAKE_GESTURE_PATTERN)})"
+                cv2.putText(frame, progress_text, (10, frame.shape[0] - 20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Draw sensor fallback status indicator
+            if using_sensor_fallback:
+                sensor_status = "● SENSOR TRACKING ACTIVE"
+                cv2.putText(frame, sensor_status, (10, 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+
+            # Track face with servo ONLY when face actually moves
+            if frame_count % DETECT_EVERY_N_FRAMES == 0:
+                if latest_face_result and latest_face_result.detections:
+                    # Face detected - use face-based tracking
+                    primary_face = latest_face_result.detections[0]
+                    face_bbox = get_face_bbox(primary_face, frame.shape[1], frame.shape[0])
+                    center_x = face_bbox['x'] + face_bbox['width'] // 2
+                    center_y = face_bbox['y'] + face_bbox['height'] // 2
+
+                    moved_enough = (
+                        last_tracked_center is None or
+                        abs(center_x - last_tracked_center[0]) > FACE_MOVE_THRESHOLD or
+                        abs(center_y - last_tracked_center[1]) > FACE_MOVE_THRESHOLD
+                    )
+
+                    if moved_enough:
+                        servo_tracker.track_face(face_bbox)
+                        last_tracked_center = (center_x, center_y)
+
+                    publish_tracking_angles(servo_tracker)
+                    last_face_seen_at = now
+                    sensor_fallback_active = False
+                    using_sensor_fallback = False
+                else:
+                    # No face detected - try sensor fallback tracking if available
+                    if sensor_reader and SENSOR_FALLBACK_ENABLE:
+                        sensor_sample = sensor_reader.get_latest()
+                        
+                        if sensor_sample:
+                            # We have recent sensor data - use it for tracking
+                            if not using_sensor_fallback:
+                                print(f"[TRACKING] Face lost, switching to sensor-based tracking", flush=True)
+                                using_sensor_fallback = True
+                                sensor_fallback_active = True
+                                last_sensor_reading_at = now
+                            
+                            # Convert sensor pan angle to servo movement
+                            # The sensor provides pan angle, we can use it to update servo
+                            pan_angle = sensor_sample.get('pan_angle', 0)
+                            servo_tracker.pan_pwm.change_duty_cycle(
+                                servo_tracker.angle_to_duty_cycle(pan_angle)
+                            )
+                            servo_tracker.last_pan_angle = pan_angle
+                            publish_tracking_angles(servo_tracker)
+                            last_sensor_reading_at = now
+                        elif sensor_fallback_active:
+                            # Lost sensor reading, check timeout
+                            time_since_sensor = now - last_sensor_reading_at
+                            if time_since_sensor > SENSOR_TRACKING_TIMEOUT:
+                                print(f"[TRACKING] Sensor fallback timeout ({time_since_sensor:.1f}s), centering", flush=True)
+                                servo_tracker.center()
+                                publish_tracking_angles(servo_tracker)
+                                sensor_fallback_active = False
+                                using_sensor_fallback = False
+                    else:
+                        # No face and no sensor - center servo after delay
+                        if now - last_face_seen_at > FACE_LOST_CENTER_DELAY:
+                            if not using_sensor_fallback:
+                                servo_tracker.center()
+                            publish_tracking_angles(servo_tracker)
             
             # Upscale frame to fill the 720x1280 vertical display
             display_frame = cv2.resize(frame, (720, 1280), interpolation=cv2.INTER_LINEAR)
-            cv2.imshow("Face and Hand Detection", display_frame)
+            if relay_server and frame_count % RELAY_PUBLISH_EVERY_N_FRAMES == 0:
+                relay_server.publish_frame(frame)
+            if display_visible:
+                draw_display_toggle_button(display_frame, "Show Face")
+                cv2.imshow("Face and Hand Detection", display_frame)
 
-            if (cv2.waitKey(1) & 0xFF) in (27, ord("q")):
-                print(f"Exiting. Total frames: {frame_count}")
-                break
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("c") or toggle_requested:
+                    toggle_requested = False
+                    toggle_camera_display_enabled(default=False)
+                    display_enabled = False
+                    display_visible = set_display_visibility(False, display_visible)
+                    continue
+
+                if key in (27, ord("q")):
+                    print(f"Exiting. Total frames: {frame_count}")
+                    break
     finally:
         servo_tracker.stop()
-        if sensor_reader:
-            sensor_reader.stop()
-            sensor_reader.join(timeout=1.0)
         hands.close()
         face_detector.close()
+        if display_visible:
+            try:
+                cv2.destroyWindow("Face and Hand Detection")
+            except cv2.error:
+                pass
 
 
 def main():
-    process = None
+    process = start_stream()
+    threading.Thread(target=print_stream_logs, args=(process,), daemon=True).start()
     sock = None
     servo_tracker = FaceTrackServo(verbose=False)
     sensor_reader = None
+    relay_server = None
 
     try:
-        # Start camera stream
-        process = start_stream()
-        threading.Thread(target=print_stream_logs, args=(process,), daemon=True).start()
-        time.sleep(0.5)  # Give process time to start
-        
-        # Connect to camera stream
-        try:
-            sock = connect_stream(process)
-        except RuntimeError as e:
-            print(f"\n[ERROR] Camera connection failed: {e}")
-            print("\nTroubleshooting:")
-            print("  1. Check if camera is connected: vcgencmd get_camera")
-            print("  2. Enable camera: sudo raspi-config -> Interface Options -> Camera")
-            print("  3. Check permissions: v4l2-ctl --list-devices")
-            print("  4. Try direct test: rpicam-still -o test.jpg")
-            raise
+        sock = connect_stream(process)
+        relay_server = FrameRelayServer()
+        relay_server.start()
         
         # Initialize servo tracking (optional - will skip if hardware not available)
         if not servo_tracker.initialize():
             print("[WARNING] Could not initialize servo hardware - face tracking disabled")
-
-        sensor_reader = initialize_sensor_reader()
-        detect_face_and_hands(sock, servo_tracker, sensor_reader)
-    
-    except Exception as e:
-        print(f"\n[CRITICAL ERROR] {e}")
-        import traceback
-        traceback.print_exc()
+        
+        # Initialize sensor-based fallback tracking (optional)
+        if SENSOR_FALLBACK_ENABLE:
+            try:
+                sensor_reader = SensorReader(
+                    port=SENSOR_PORT,
+                    baudrate=SENSOR_BAUDRATE,
+                    daemon=True,
+                    enable_servo=False,  # Servo controlled by face detector, not sensor
+                    verbose=False
+                )
+                sensor_reader.start()
+                print("[SENSOR] Sensor reader started for fallback tracking", flush=True)
+            except Exception as e:
+                print(f"[WARNING] Could not initialize sensor reader: {e}")
+                sensor_reader = None
+        
+        detect_face_and_hands(sock, servo_tracker, relay_server=relay_server, sensor_reader=sensor_reader)
     
     finally:
-        print("\nCleaning up...")
         servo_tracker.stop()
-        if sensor_reader:
+        if sensor_reader and sensor_reader.running:
             sensor_reader.stop()
-            sensor_reader.join(timeout=1.0)
+            sensor_reader.join(timeout=2.0)
+        if relay_server:
+            relay_server.stop()
         if sock:
             sock.close()
-        if process:
-            process.terminate()
-            process.wait(timeout=5)
+        process.terminate()
+        process.wait()
         cv2.destroyAllWindows()
-        print("Cleanup complete.")
 
 
 if __name__ == "__main__":

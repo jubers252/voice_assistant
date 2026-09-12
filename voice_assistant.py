@@ -12,6 +12,9 @@ import speech_recognition as sr
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
+# Set OpenCV Qt font directory to suppress warnings
+os.environ["QT_QPA_FONTDIR"] = "/usr/share/fonts"
+
 from audio.audio_processor import AudioProcessors
 from camera.camera_display_control import is_camera_display_enabled, set_camera_display_enabled
 from speech.speech_recognizer import SpeechRecognizer

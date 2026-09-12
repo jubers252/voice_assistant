@@ -9,10 +9,11 @@ obj = FaceTrackServo(verbose=True)
 obj.initialize()  # Initialize PWM hardware
 
 def decode_coord(raw):
-    if raw >= 0x8000:
-        return raw - 0x8000
+    """Properly decode unsigned 16-bit to signed"""
+    if raw > 0x7FFF:
+        return raw - 0x10000
     else:
-        return -raw
+        return raw
 
 ser = serial.Serial("/dev/ttyAMA0", 256000, timeout=1)
 
