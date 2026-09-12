@@ -48,7 +48,7 @@ from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
 from connectors.zepto_order_automation import ZeptoScraper
 from connectors.home_automation import HomeAutomation
-from connectors.yt_music import MusicPlayer
+from connectors import youtube_api
 from connectors.map import get_travel_time_with_traffic
 from connectors.get_images_and_video import search_and_download_images, search_videos
 import asyncio
@@ -98,7 +98,6 @@ class StrandsAgent(Agent):
         self.bigbasket_tools = BigBasketTools()
         self.zepto_db = ZeptoOrderDatabase()
         self.home_automation = HomeAutomation()
-        self.youtube_music = MusicPlayer()
         self.audio_processors = audio_processors or AudioProcessors()
         self.state_callback = state_callback
         self.face_display = face_display
@@ -1550,11 +1549,22 @@ class StrandsAgent(Agent):
             if self.recognizer:
                 self.recognizer.set_music_playing(True)
 
-            self.executor.submit(self.youtube_music.play, song_name, volume)
-            self.youtube_music.set_mpv_volume(80)
+            # Search for the song
+            print(f"Searching for song: {song_name}")
+            song = youtube_api.search_single_song(song_name)
+            if not song:
+                return f"Could not find song: {song_name}"
+            
+            print(f"Found song: {song['title']}, starting playback...")
+            # Play the song directly (not through executor to ensure global state is updated)
+            youtube_api.play_with_mpv(song["url"], song["title"])
+            
             vol_label = f" at {volume}%" if volume is not None else ""
-            return f"Starting song playback: {song_name}{vol_label}"
+            return f"Now playing: {song['title']} by {song['channel']}{vol_label}"
         except Exception as e:
+            print(f"Song tool error: {e}")
+            import traceback
+            traceback.print_exc()
             return f"YouTube Music song error: {str(e)}"
 
     @tool
@@ -1566,11 +1576,22 @@ class StrandsAgent(Agent):
             if self.recognizer:
                 self.recognizer.set_music_playing(True)
 
-            self.executor.submit(self.youtube_music.play_playlist, playlist_name, volume=volume)
-            self.youtube_music.set_mpv_volume(80)
+            # Search for songs by genre/theme
+            print(f"Searching for playlist: {playlist_name}")
+            songs = youtube_api.search_genre(playlist_name, max_results=15)
+            if not songs:
+                return f"Could not find songs for: {playlist_name}"
+            
+            print(f"Found {len(songs)} songs, starting playlist...")
+            # Play the playlist directly (not through executor to ensure global state is updated)
+            youtube_api.play_playlist(songs, 0)
+            
             vol_label = f" at {volume}%" if volume is not None else ""
-            return f"Starting playlist: {playlist_name}{vol_label}"
+            return f"Starting playlist '{playlist_name}' with {len(songs)} songs{vol_label}"
         except Exception as e:
+            print(f"Playlist tool error: {e}")
+            import traceback
+            traceback.print_exc()
             return f"YouTube Music playlist error: {str(e)}"
     
     @tool
@@ -1582,11 +1603,22 @@ class StrandsAgent(Agent):
             if self.recognizer:
                 self.recognizer.set_music_playing(True)
 
-            self.executor.submit(self.youtube_music.play_all_artist_tracks, artist_name, volume)
-            self.youtube_music.set_mpv_volume(80)
+            # Search for songs by artist
+            print(f"Searching for artist: {artist_name}")
+            songs = youtube_api.search_by_singer(artist_name, max_results=15)
+            if not songs:
+                return f"Could not find songs by: {artist_name}"
+            
+            print(f"Found {len(songs)} songs by {artist_name}, starting playback...")
+            # Play the artist's songs directly (not through executor)
+            youtube_api.play_playlist(songs, 0)
+            
             vol_label = f" at {volume}%" if volume is not None else ""
-            return f"Starting artist playlist: {artist_name}{vol_label}"
+            return f"Now playing songs by {artist_name} ({len(songs)} tracks){vol_label}"
         except Exception as e:
+            print(f"Artist tool error: {e}")
+            import traceback
+            traceback.print_exc()
             return f"YouTube Music artist error: {str(e)}"
     
     
@@ -1597,33 +1629,35 @@ class StrandsAgent(Agent):
     
         try:
             action_lower = action.lower().strip()
+            print(f"Control action: {action_lower}")
             
             if action_lower in ['pause', 'stop']:
-                self.youtube_music.pause()
-                # Set music flag to False
+                youtube_api.toggle_pause()
                 if self.recognizer:
                     self.recognizer.set_music_playing(False)
-                return "YouTube Music paused"
+                return "Music paused"
             
             elif action_lower in ['resume', 'continue', 'play']:
-                self.youtube_music.resume()
-                # Set music flag to True
+                youtube_api.toggle_pause()
                 if self.recognizer:
                     self.recognizer.set_music_playing(True)
-                return "YouTube Music resumed"
+                return "Music resumed"
             
             elif action_lower in ['next', 'skip']:
-                self.youtube_music.next()
+                youtube_api.play_next()
                 return "Skipped to next track"
             
             elif action_lower in ['previous', 'prev', 'back']:
-                self.youtube_music.previous()
+                youtube_api.play_previous()
                 return "Skipped to previous track"
             
             else:
-                return "Use: pause, stop, resume, next, previous"
+                return "Supported actions: pause, stop, resume, next, previous"
             
         except Exception as e:
+            print(f"Control tool error: {e}")
+            import traceback
+            traceback.print_exc()
             return f"YouTube Music control error: {str(e)}"
 
 
@@ -1821,7 +1855,7 @@ if __name__ == "__main__":
     
     # Test happy expression
     print("\n=== Testing Happy ===")
-    response2 = my_pi_agent.process_user_command("That's great news!")
+    response2 = my_pi_agent.process_user_command("play saiyyara song")
     print(response2)
     
     # Clean up
