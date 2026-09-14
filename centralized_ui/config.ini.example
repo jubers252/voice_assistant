@@ -1,0 +1,87 @@
+# Centralized UI Configuration
+# Customize this file to enable integrations with your Voice Assistant modules
+
+[server]
+# Flask server configuration
+host = 0.0.0.0
+port = 5000
+debug = false
+secret_key = your-secret-key-here
+
+[camera]
+# Camera configuration
+enabled = false
+type = opencv  # options: opencv, mjpeg, picamera
+device = /dev/video0
+fps = 30
+resolution = 640x480
+flip_horizontal = false
+flip_vertical = false
+
+[anime_face]
+# Anime face display configuration
+enabled = false
+model_path = ./Sofi_20260609_092546.onnx
+update_interval = 500  # milliseconds
+emotion_detection = true
+
+[weather]
+# Weather configuration
+enabled = false
+provider = openweathermap  # options: openweathermap, weather_api
+api_key = YOUR_API_KEY_HERE
+city = YOUR_CITY_HERE
+update_interval = 600  # seconds (10 minutes)
+
+[music]
+# Music player configuration
+enabled = false
+providers = [spotify, youtube_music]  # enable multiple providers
+
+[music.spotify]
+client_id = YOUR_SPOTIFY_CLIENT_ID
+client_secret = YOUR_SPOTIFY_CLIENT_SECRET
+redirect_uri = http://localhost:5000/callback
+
+[music.youtube_music]
+email = your_email@gmail.com
+password = your_password
+
+[home_automation]
+# Home automation configuration
+enabled = false
+type = gpio  # options: gpio, relay, web_api
+
+[home_automation.devices.light]
+enabled = true
+gpio_pin = 17
+type = relay
+
+[home_automation.devices.fan]
+enabled = true
+gpio_pin = 18
+type = relay
+
+[home_automation.devices.ac]
+enabled = true
+gpio_pin = 22
+type = relay
+
+[home_automation.devices.doorbell]
+enabled = true
+gpio_pin = 23
+type = sensor
+
+[system]
+# System monitoring configuration
+cpu_temp_sensor = /sys/class/thermal/thermal_zone0/temp
+memory_warning_threshold = 80  # percent
+cpu_warning_threshold = 80  # percent
+temp_warning_threshold = 70  # celsius
+
+[logging]
+# Logging configuration
+level = INFO  # options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+file = ./logs/centralized_ui.log
+max_size = 10485760  # 10MB
+backup_count = 5

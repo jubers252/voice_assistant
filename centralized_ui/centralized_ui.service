@@ -1,0 +1,29 @@
+[Unit]
+Description=Voice Assistant Centralized UI Dashboard
+After=network.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Documents/voice_assistant/centralized_ui
+ExecStart=/home/pi/Documents/ENV/AI/bin/python /home/pi/Documents/voice_assistant/centralized_ui/app.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment="PYTHONUNBUFFERED=1"
+# Required for pactl/PulseAudio to reach the user's audio session
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+Environment="PULSE_SERVER=unix:/run/user/1000/pulse/native"
+
+# Resource limits
+CPUAccounting=yes
+MemoryAccounting=yes
+MemoryLimit=512M
+
+# Security
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

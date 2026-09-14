@@ -11,6 +11,7 @@ import json
 import concurrent.futures
 import queue
 import speech_recognition as sr
+import requests
 # Ensure project root is in path when running this file directly
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -165,7 +166,7 @@ class StrandsAgent(Agent):
                 self._create_telegram_photo_tool,
                 self._create_telegram_document_tool,
                 self._create_telegram_video_tool,
-                self._create_volume_control_tool,
+                self.control_system_volume,
                 self.set_face_expression_tool,
                 self._zepto_ordering_tool,
                 self._create_zepto_order_history_tool,
@@ -580,6 +581,47 @@ class StrandsAgent(Agent):
         
         return f"I've updated your {key} to '{value}' in my records."
     
+    def _switch_ui_tab(self, tab_name: str) -> bool:
+        """
+        Switch the centralized UI to a specific tab.
+        
+        Args:
+            tab_name: The tab to switch to ('camera', 'anime', 'weather', 'music', 'automation', 'system')
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        valid_tabs = ['camera', 'anime', 'weather', 'music', 'automation', 'system']
+        
+        if tab_name not in valid_tabs:
+            logger.warning(f"[UI] Invalid tab name: {tab_name}")
+            return False
+        
+        try:
+            # Try to switch tab on centralized UI (localhost:5000)
+            logger.info(f"[UI] Attempting to switch to tab: {tab_name}")
+            response = requests.post(
+                'http://localhost:5000/api/switch_tab',
+                json={'tab': tab_name},
+                timeout=2
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"[UI] Successfully switched to tab: {tab_name}")
+                return True
+            else:
+                logger.warning(f"[UI] Failed to switch tab. Status: {response.status_code}, Response: {response.text}")
+                return False
+        except requests.exceptions.ConnectionError:
+            logger.debug(f"[UI] Centralized UI not running at localhost:5000")
+            return False
+        except requests.exceptions.Timeout:
+            logger.warning(f"[UI] Centralized UI timeout while switching to {tab_name}")
+            return False
+        except Exception as e:
+            logger.error(f"[UI] Error switching tab to {tab_name}: {e}")
+            return False
+    
     @tool
     def get_current_weather(self, location: str):
         """
@@ -597,6 +639,10 @@ class StrandsAgent(Agent):
             }
             # Assuming handle_tool_requests is available in your scope
             result = handle_tool_requests(tool_request)
+            
+            # Switch centralized UI to weather tab
+            self._switch_ui_tab('weather')
+            
             return f"Current weather in {location}: {result}"
         except Exception as e:
             return f"Weather retrieval error: {str(e)}"
@@ -682,6 +728,10 @@ class StrandsAgent(Agent):
                     "location": location
                 }
                 result = handle_tool_requests(tool_request)
+                
+                # Switch centralized UI to weather tab
+                self._switch_ui_tab('weather')
+                
                 return f"Weather forecast for {location}: {result}"
             except Exception as e:
                 return f"Weather forecast error: {str(e)}"
@@ -1218,12 +1268,13 @@ class StrandsAgent(Agent):
 
 
     @tool
-    def _create_volume_control_tool(self, command: str):
+    def control_system_volume(self, command: str):
         """Control system volume. Commands: 'increase', 'decrease', 'mute', 'unmute', 'set', or 'status'. Format: action|step|level (e.g., 'increase|10' or 'decrease|10' or 'set||50').
         Args:   
           command: A string command to control volume, formatted as 'action|step|level'. Examples: 'increase|10' to raise volume by 10%, 'decrease|5' to lower by 5%, 'set||50' to set volume to 50%, 'mute' to mute, 'unmute' to unmute, 'status' to check current volume."""
     
         try:
+            print(f"[VOLUME TOOL] Called with command: '{command}'")
             from connectors.volume_control import main_control
             
             # Parse the command format: "action|step|level"
@@ -1240,8 +1291,11 @@ class StrandsAgent(Agent):
             if len(parts) > 2 and parts[2].strip():
                 level = int(parts[2].strip())
             
+            print(f"[VOLUME TOOL] Parsed: action={action}, step={step}, level={level}")
+            
             # Call main_control with parsed arguments
             result = main_control(action, step=step, level=level)
+            print(f"[VOLUME TOOL] Result: {result}")
             
             # Format response for TTS
             if action == "status":
@@ -1258,6 +1312,7 @@ class StrandsAgent(Agent):
                 return "Volume command executed"
                 
         except Exception as e:
+            print(f"[VOLUME TOOL] Exception: {type(e).__name__}: {e}")
             return f"Volume control error: {str(e)}"
 
     @tool
@@ -1798,9 +1853,9 @@ class StrandsAgent(Agent):
                         self._schedule_expression_after_speech("7", hold_seconds=3.0)
                 else:
                     print("Skipping duplicate follow-up question speech from final response")
-
-                if self.pixel_led:
-                    self.pixel_led.set_listening()
+                    # No speak() call queued to turn the LED off later, so clear it now.
+                    if self.pixel_led:
+                        self.pixel_led.off()
 
                 self.save_and_embed_message("user", user_command)
                 self.save_and_embed_message("assistant", response_text)

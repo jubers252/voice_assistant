@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Assistant Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Header with Status -->
+        <header class="dashboard-header">
+            <h1>🎙️ Voice Assistant</h1>
+            <div class="header-actions">
+                <div class="status-indicator" id="status">
+                    <span class="status-dot"></span>
+                    <span>Online</span>
+                </div>
+                <button id="startBtn" class="start-btn" title="Start Voice Assistant" style="display:none;">
+                    <span class="start-icon">▶️</span>
+                    <span class="start-label">Start</span>
+                </button>
+                <button id="quitBtn" class="quit-btn" title="Stop Voice Assistant">
+                    <span class="quit-icon">⏻</span>
+                    <span class="quit-label">Stop</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Tab Navigation -->
+        <nav class="tab-navigation">
+            <button class="tab-btn active" data-tab="camera" title="Camera">
+                <span class="tab-icon">📹</span>
+                <span class="tab-label">Camera</span>
+            </button>
+            <button class="tab-btn" data-tab="anime" title="Anime Face">
+                <span class="tab-icon">✨</span>
+                <span class="tab-label">Anime</span>
+            </button>
+            <button class="tab-btn" data-tab="weather" title="Weather">
+                <span class="tab-icon">🌤️</span>
+                <span class="tab-label">Weather</span>
+            </button>
+            <button class="tab-btn" data-tab="music" title="Music">
+                <span class="tab-icon">🎵</span>
+                <span class="tab-label">Music</span>
+            </button>
+            <button class="tab-btn" data-tab="automation" title="Automation">
+                <span class="tab-icon">🏠</span>
+                <span class="tab-label">Auto</span>
+            </button>
+            <button class="tab-btn" data-tab="system" title="System">
+                <span class="tab-icon">📊</span>
+                <span class="tab-label">System</span>
+            </button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="dashboard-content">
+
+            <!-- Camera Tab -->
+            <section class="tab-content active" id="camera-content">
+                <div class="widget-full">
+                    <div class="widget-header">
+                        <h2>📹 Camera Feed</h2>
+                        <button class="btn-small" id="toggleCamera" title="Toggle camera">
+                            <span>ON</span>
+                        </button>
+                    </div>
+                    <div class="camera-container">
+                        <img id="cameraFeed" src="/video_feed" alt="Camera Feed" class="camera-feed">
+                        <div class="camera-overlay">
+                            <span id="cameraStatus" class="status-badge">Live</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Anime Face Tab -->
+            <section class="tab-content" id="anime-content">
+                <div class="widget-full">
+                    <div class="widget-header">
+                        <h2>✨ Anime Face</h2>
+                        <button class="btn-small" id="toggleAnimeFace" title="Toggle anime face">
+                            <span>ON</span>
+                        </button>
+                    </div>
+                    <div class="anime-container">
+                        <img id="animeFace" src="/anime_feed" alt="Anime Face" class="anime-face-large">
+                        <div class="anime-info">
+                            <p id="animeMood">Happy</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Weather Tab -->
+            <section class="tab-content" id="weather-content">
+                <div class="widget-full">
+                    <div class="widget-header">
+                        <h2>🌤️ Weather & Time</h2>
+                    </div>
+                    <div class="weather-container">
+                        <div class="weather-time-section">
+                            <div class="time-large">
+                                <div id="currentTime" class="time-display-large">--:--</div>
+                                <p class="time-label">Current Time</p>
+                            </div>
+                            <div class="weather-main">
+                                <div id="temperature" class="temp-display-large">--°C</div>
+                                <p class="weather-label" id="weatherCondition">Loading...</p>
+                            </div>
+                        </div>
+                        <div class="weather-details">
+                            <div class="weather-detail-item">
+                                <span class="detail-icon">💧</span>
+                                <span class="detail-label">Humidity</span>
+                                <span id="humidity" class="detail-value">--%</span>
+                            </div>
+                            <div class="weather-detail-item">
+                                <span class="detail-icon">🌬️</span>
+                                <span class="detail-label">Wind</span>
+                                <span id="windSpeed" class="detail-value">-- km/h</span>
+                            </div>
+                            <div class="weather-detail-item">
+                                <span class="detail-icon">🧭</span>
+                                <span class="detail-label">Pressure</span>
+                                <span id="pressure" class="detail-value">-- hPa</span>
+                            </div>
+                        </div>
+                        <div class="weather-description">
+                            <p id="weatherDescription" class="weather-desc">Fetching weather data...</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Music Tab -->
+            <section class="tab-content" id="music-content">
+                <div class="widget-full">
+                    <div class="widget-header">
+                        <h2>🎵 Music Player</h2>
+                    </div>
+                    <div class="music-player-full">
+                        <!-- Album Art -->
+                        <div class="album-art-large">
+                            <img id="albumArt" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Crect fill='%23333' width='200' height='200'/%3E%3Ccircle cx='100' cy='100' r='50' fill='%23666'/%3E%3C/svg%3E" alt="Album Art">
+                        </div>
+
+                        <!-- Track Info -->
+                        <div class="track-info-large">
+                            <h3 id="trackTitle">No Track Playing</h3>
+                            <p id="trackArtist">Unknown Artist</p>
+                        </div>
+
+                        <!-- Progress Bar -->
+                        <div class="progress-container-large">
+                            <span id="musicCurrentTime" class="time">0:00</span>
+                            <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0">
+                            <span id="duration" class="time">0:00</span>
+                        </div>
+
+                        <!-- Controls -->
+                        <div class="player-controls-large">
+                            <button id="prevBtn" class="control-btn-large" title="Previous">
+                                <span>⏮️</span>
+                            </button>
+                            <button id="playPauseBtn" class="control-btn-large play-btn-large" title="Play/Pause">
+                                <span>▶️</span>
+                            </button>
+                            <button id="nextBtn" class="control-btn-large" title="Next">
+                                <span>⏭️</span>
+                            </button>
+                        </div>
+
+                        <!-- Volume Control -->
+                        <div class="volume-control-large">
+                            <span>🔊</span>
+                            <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="70">
+                            <span id="volumeValue">70%</span>
+                        </div>
+
+                        <!-- Playlist -->
+                        <div class="playlist-section-large">
+                            <button id="togglePlaylist" class="btn-secondary-large">📋 Playlist</button>
+                            <div id="playlistContainer" class="playlist-container-large hidden">
+                                <ul id="playlistItems" class="playlist-items-large">
+                                    <li class="loading">Loading playlist...</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Home Automation Tab -->
+            <section class="tab-content" id="automation-content">
+                <div class="widget-full">
+                    <div class="widget-header">
+                        <h2>🏠 Home Automation</h2>
+                    </div>
+                    <div class="automation-container">
+                        <button class="automation-btn-large" id="lightToggle" data-device="light">
+                            <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                                <circle cx="50" cy="35" r="20" fill="#FFD700" stroke="#FFA500" stroke-width="2"/>
+                                <path d="M 40 55 L 45 60 L 45 75 L 55 75 L 55 60 L 60 55" fill="none" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+                                <line x1="45" y1="75" x2="45" y2="85" stroke="#FFD700" stroke-width="2"/>
+                                <line x1="55" y1="75" x2="55" y2="85" stroke="#FFD700" stroke-width="2"/>
+                            </svg>
+                            <span class="device-name">Lights</span>
+                            <span class="device-status">OFF</span>
+                        </button>
+                        <button class="automation-btn-large" id="fanToggle" data-device="fan">
+                            <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                                <circle cx="50" cy="50" r="8" fill="#00D4FF" stroke="#00A8CC" stroke-width="1"/>
+                                <circle cx="50" cy="20" r="12" fill="none" stroke="#00D4FF" stroke-width="2" opacity="0.8"/>
+                                <circle cx="80" cy="50" r="12" fill="none" stroke="#00D4FF" stroke-width="2" opacity="0.8"/>
+                                <circle cx="50" cy="80" r="12" fill="none" stroke="#00D4FF" stroke-width="2" opacity="0.8"/>
+                                <circle cx="20" cy="50" r="12" fill="none" stroke="#00D4FF" stroke-width="2" opacity="0.8"/>
+                            </svg>
+                            <span class="device-name">Fan</span>
+                            <span class="device-status">OFF</span>
+                        </button>
+                        <button class="automation-btn-large" id="acToggle" data-device="ac">
+                            <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M 30 25 L 50 10 L 70 25 L 60 35 L 50 28 L 40 35 Z" fill="#00BFFF" stroke="#0099CC" stroke-width="1.5"/>
+                                <path d="M 30 50 L 50 35 L 70 50 L 60 60 L 50 53 L 40 60 Z" fill="#00BFFF" stroke="#0099CC" stroke-width="1.5"/>
+                                <path d="M 30 75 L 50 60 L 70 75 L 60 85 L 50 78 L 40 85 Z" fill="#00BFFF" stroke="#0099CC" stroke-width="1.5"/>
+                            </svg>
+                            <span class="device-name">AC</span>
+                            <span class="device-status">OFF</span>
+                        </button>
+                        <button class="automation-btn-large" id="doorbellToggle" data-device="doorbell">
+                            <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M 35 40 L 50 25 L 65 40 L 65 70 Q 65 80 50 85 Q 35 80 35 70 Z" fill="#FF9800" stroke="#FF6F00" stroke-width="2"/>
+                                <circle cx="50" cy="50" r="8" fill="#FFD700" stroke="#FF9800" stroke-width="1.5"/>
+                                <path d="M 50 90 L 50 95 L 45 95 L 45 97 L 55 97 L 55 95 L 50 95" fill="#888" stroke="#666" stroke-width="1"/>
+                            </svg>
+                            <span class="device-name">Doorbell</span>
+                            <span class="device-status">ARMED</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- System Status Tab -->
+            <section class="tab-content" id="system-content">
+                <div class="widget-full">
+                    <div class="widget-header">
+                        <h2>📊 System Status</h2>
+                    </div>
+                    <div class="status-container">
+                        <div class="status-item-large">
+                            <span class="status-label">CPU Usage</span>
+                            <div class="progress-bar-large">
+                                <div id="cpuUsage" class="progress-fill" style="width: 0%"></div>
+                            </div>
+                            <span id="cpuValue" class="status-value-large">--%</span>
+                        </div>
+                        <div class="status-item-large">
+                            <span class="status-label">Memory</span>
+                            <div class="progress-bar-large">
+                                <div id="memoryUsage" class="progress-fill" style="width: 0%"></div>
+                            </div>
+                            <span id="memoryValue" class="status-value-large">--%</span>
+                        </div>
+                        <div class="status-item-large">
+                            <span class="status-label">Temperature</span>
+                            <div class="progress-bar-large">
+                                <div id="tempUsage" class="progress-fill" style="width: 0%"></div>
+                            </div>
+                            <span id="tempValue" class="status-value-large">--°C</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+
+        <!-- Footer -->
+        <footer class="dashboard-footer">
+            <p>Last Updated: <span id="lastUpdate">--:--:--</span></p>
+        </footer>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

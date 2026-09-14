@@ -220,6 +220,17 @@ class WakeWordManager:
     def _recognize_and_dispatch(self, segment, trigger_offset_samples):
         if not self.recognition_lock.acquire(blocking=False):
             print("[INFO] Recognition busy, skipping this segment.")
+            # This segment is being discarded, so nothing else will clear the LED/state.
+            if self.pixel_led is not None:
+                try:
+                    self.pixel_led.off()
+                except Exception:
+                    pass
+            if self.state_callback:
+                try:
+                    self.state_callback("neutral")
+                except Exception:
+                    pass
             return
         command_dispatched = False
         try:
@@ -375,82 +386,96 @@ class WakeWordManager:
             except queue.Empty:
                 continue
 
-            frame_bytes = (np.clip(chunk, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
-            is_speech = vad.is_speech(frame_bytes, self.SAMPLE_RATE)
-            recent_flags.append(1 if is_speech else 0)
+            try:
+                frame_bytes = (np.clip(chunk, -1.0, 1.0) * 32767).astype(np.int16).tobytes()
+                is_speech = vad.is_speech(frame_bytes, self.SAMPLE_RATE)
+                recent_flags.append(1 if is_speech else 0)
 
-            rms = float(
-            np.sqrt(
-                np.mean(chunk.astype(np.float32) ** 2)
+                rms = float(
+                np.sqrt(
+                    np.mean(chunk.astype(np.float32) ** 2)
+                    )
                 )
-            )
-            vad_ratio = self._recent_vad_ratio(recent_flags)
+                vad_ratio = self._recent_vad_ratio(recent_flags)
 
-            if is_speech:
-                hangover_ms_left = self.HANGOVER_MS
-            else:
-                hangover_ms_left = max(0.0, hangover_ms_left - chunk_ms)
-
-            if not recording:
-                if self.shared_state["wakeword_event"].is_set():
-                    with self.shared_state["lock"]:
-                        ring_chunks = list(self.shared_state["audio_ring"])
-                        trigger_global_sample = self.shared_state["trigger_global_sample"]
-
-                    recording = True
-                    self.is_recording = True
-                    speech_buffer = ring_chunks[-max(1, int(self.PRE_ROLL_MS / chunk_ms)):]
-                    speech_buffer.append(chunk)
-                    speech_ms = (sum(len(ch) for ch in speech_buffer) / self.SAMPLE_RATE) * 1000.0
-                    recording_elapsed_ms = 0.0
-                    silence_ms = 0.0
+                if is_speech:
                     hangover_ms_left = self.HANGOVER_MS
+                else:
+                    hangover_ms_left = max(0.0, hangover_ms_left - chunk_ms)
 
-                    segment_start_global = global_samples - sum(len(ch) for ch in speech_buffer)
-                    trigger_offset_samples = max(0, trigger_global_sample - segment_start_global)
-                    print(f"\n[VAD START] peak={rms:.3f} vad_ratio={vad_ratio:.2f}")
-                continue
+                if not recording:
+                    if self.shared_state["wakeword_event"].is_set():
+                        with self.shared_state["lock"]:
+                            ring_chunks = list(self.shared_state["audio_ring"])
+                            trigger_global_sample = self.shared_state["trigger_global_sample"]
 
-            speech_buffer.append(chunk)
-            speech_ms += chunk_ms
+                        recording = True
+                        self.is_recording = True
+                        speech_buffer = ring_chunks[-max(1, int(self.PRE_ROLL_MS / chunk_ms)):]
+                        speech_buffer.append(chunk)
+                        speech_ms = (sum(len(ch) for ch in speech_buffer) / self.SAMPLE_RATE) * 1000.0
+                        recording_elapsed_ms = 0.0
+                        silence_ms = 0.0
+                        hangover_ms_left = self.HANGOVER_MS
 
-            silence_threshold = max(
-                self.ambient_noise_floor * self.NOISE_MULTIPLIER,
-                self.ENERGY_SILENCE_THRESHOLD
-            )
+                        segment_start_global = global_samples - sum(len(ch) for ch in speech_buffer)
+                        trigger_offset_samples = max(0, trigger_global_sample - segment_start_global)
+                        print(f"\n[VAD START] peak={rms:.3f} vad_ratio={vad_ratio:.2f}")
+                    continue
 
-            is_energy_silent = rms < silence_threshold
+                speech_buffer.append(chunk)
+                speech_ms += chunk_ms
 
-            if (
-                is_energy_silent
-                and vad_ratio <= self.VAD_END_RATIO
-                and hangover_ms_left <= 0.0
-            ):
-                silence_ms += chunk_ms
-            else:
-                silence_ms = 0.0
-
-            end_by_energy = silence_ms >= self.ENERGY_END_MS and speech_ms >= self.MIN_SPEECH_MS
-            end_by_max = speech_ms >= self.MAX_COMMAND_MS
-            end_by_long_silence = silence_ms >= self.MAX_SILENCE_MS
-            if self.DEBUG_SCORES:
-                print(
-                f"[REC] rms={rms:.5f} "
-                f"noise={self.ambient_noise_floor:.5f} "
-                f"thr={silence_threshold:.5f} "
+                silence_threshold = max(
+                    self.ambient_noise_floor * self.NOISE_MULTIPLIER,
+                    self.ENERGY_SILENCE_THRESHOLD
                 )
 
-            if end_by_energy or end_by_max or end_by_long_silence:
-                end_reason = "energy_silence" if end_by_energy else "max_len"
-                segment = np.concatenate(speech_buffer).astype(np.float32)
-                print(f"\n[VAD END] duration={len(segment)/self.SAMPLE_RATE:.2f}s, reason={end_reason}")
+                is_energy_silent = rms < silence_threshold
 
-                threading.Thread(
-                    target=self._recognize_and_dispatch,
-                    args=(segment, trigger_offset_samples),
-                    daemon=True,
-                ).start()
+                if (
+                    is_energy_silent
+                    and vad_ratio <= self.VAD_END_RATIO
+                    and hangover_ms_left <= 0.0
+                ):
+                    silence_ms += chunk_ms
+                else:
+                    silence_ms = 0.0
 
+                end_by_energy = silence_ms >= self.ENERGY_END_MS and speech_ms >= self.MIN_SPEECH_MS
+                end_by_max = speech_ms >= self.MAX_COMMAND_MS
+                end_by_long_silence = silence_ms >= self.MAX_SILENCE_MS
+                if self.DEBUG_SCORES:
+                    print(
+                    f"[REC] rms={rms:.5f} "
+                    f"noise={self.ambient_noise_floor:.5f} "
+                    f"thr={silence_threshold:.5f} "
+                    )
+
+                if end_by_energy or end_by_max or end_by_long_silence:
+                    end_reason = "energy_silence" if end_by_energy else "max_len"
+                    segment = np.concatenate(speech_buffer).astype(np.float32)
+                    print(f"\n[VAD END] duration={len(segment)/self.SAMPLE_RATE:.2f}s, reason={end_reason}")
+
+                    threading.Thread(
+                        target=self._recognize_and_dispatch,
+                        args=(segment, trigger_offset_samples),
+                        daemon=True,
+                    ).start()
+
+                    recording = False
+                    speech_buffer = []
+                    speech_ms = 0.0
+                    silence_ms = 0.0
+                    hangover_ms_left = 0.0
+                    trigger_offset_samples = None
+                    recording_elapsed_ms = 0.0
+                    self.is_recording = False
+                    self.shared_state["wakeword_event"].clear()
+                    recent_flags.clear()
+            except Exception as e:
+                # Never let a bad frame kill this thread and strand the listening LED on.
+                print(f"[VAD] Error processing frame, resetting recording state: {e}")
                 recording = False
                 speech_buffer = []
                 speech_ms = 0.0
@@ -459,9 +484,15 @@ class WakeWordManager:
                 trigger_offset_samples = None
                 recording_elapsed_ms = 0.0
                 self.is_recording = False
-                self.shared_state["wakeword_event"].clear()
+                if self.shared_state is not None:
+                    self.shared_state["wakeword_event"].clear()
                 recent_flags.clear()
-                
+                if self.pixel_led is not None:
+                    try:
+                        self.pixel_led.off()
+                    except Exception:
+                        pass
+
     def start_detection(self, process_command_callback=None):
         if self.detection_running:
             print("[WWD] Detection already running")

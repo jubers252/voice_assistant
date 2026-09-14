@@ -41,6 +41,26 @@ DISPLAY_SYNC_INTERVAL = 0.2
 ENABLE_ANIME_FACE_DISPLAY = os.getenv("ENABLE_ANIME_FACE_DISPLAY", "false").lower() in ("true", "1", "yes")
 ENABLE_CAMERA_DISPLAY = os.getenv("ENABLE_CAMERA_DISPLAY", "false").lower() in ("true", "1", "yes")
 
+# Centralized UI configuration
+ENABLE_CENTRALIZED_UI = os.getenv("ENABLE_CENTRALIZED_UI", "true").lower() in ("true", "1", "yes")
+CENTRALIZED_UI_OPEN_BROWSER = os.getenv("CENTRALIZED_UI_OPEN_BROWSER", "false").lower() in ("true", "1", "yes")
+CENTRALIZED_UI_PORT = int(os.getenv("CENTRALIZED_UI_PORT", "5000"))
+CENTRALIZED_UI_PATH = os.path.join(current_dir, "centralized_ui")
+
+def _is_port_in_use(port, host="127.0.0.1"):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
+
+# Set by the centralized UI's "Quit" button (via SIGTERM) to request a full, non-restarting shutdown
+_shutdown_event = threading.Event()
+
+def _handle_shutdown_signal(signum, frame):
+    _shutdown_event.set()
+
+signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+
 class VoiceAssistant:
     """Voice Assistant - Main Application Class"""
     
@@ -61,12 +81,14 @@ class VoiceAssistant:
         self.telegram_stop_event = threading.Event()
         self.telegram_thread = None
         self.telegram_last_update_id = 0
+        self.centralized_ui_process = None
 
         self._initialize_hardware()
         self._initialize_audio_and_recognizer()
         self._initialize_memory_and_reminders()
         self._initialize_command_processor()
         self._initialize_scheduling()
+        self._start_centralized_ui()
 
         # Start camera process only after successful initialization to avoid orphans.
         self._start_camera_context_process()
@@ -442,6 +464,133 @@ class VoiceAssistant:
         finally:
             self.camera_process = None
 
+    def _start_centralized_ui(self):
+        """Start the centralized UI Flask server in a separate process."""
+        if not ENABLE_CENTRALIZED_UI:
+            print("[UI] Centralized UI disabled (set ENABLE_CENTRALIZED_UI=true to enable)")
+            return
+
+        if not os.path.exists(CENTRALIZED_UI_PATH):
+            print(f"[UI] Centralized UI path not found: {CENTRALIZED_UI_PATH}")
+            return
+
+        # If the dashboard is already running as its own persistent process (e.g. started
+        # independently, or relaunched by its own "Start" button), don't spawn a second copy.
+        if _is_port_in_use(CENTRALIZED_UI_PORT):
+            print(f"[UI] Centralized UI already running on port {CENTRALIZED_UI_PORT}, skipping spawn")
+            self.centralized_ui_process = None
+            return
+
+        print("[UI] Starting Centralized UI server...")
+        
+        try:
+            # Start the Flask app in a subprocess
+            ui_script = os.path.join(CENTRALIZED_UI_PATH, "app.py")
+            self.centralized_ui_process = subprocess.Popen(
+                [sys.executable, ui_script],
+                cwd=CENTRALIZED_UI_PATH,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid  # Create new process group
+            )
+            print(f"[UI] Centralized UI started (PID: {self.centralized_ui_process.pid})")
+            
+            # Wait a moment for server to start
+            time.sleep(2)
+            
+            # Show URL info regardless
+            print(f"\n[UI] ✅ Dashboard available at:")
+            print(f"[UI] 📱 Local:  http://localhost:{CENTRALIZED_UI_PORT}")
+            print(f"[UI] 🌐 Network: http://<your-raspberry-pi-ip>:{CENTRALIZED_UI_PORT}")
+            print(f"[UI] Find your IP with: hostname -I\n")
+            
+            # Optionally open browser
+            if CENTRALIZED_UI_OPEN_BROWSER:
+                self._open_ui_in_browser()
+                
+        except Exception as e:
+            print(f"[UI] Failed to start Centralized UI: {e}")
+            self.centralized_ui_process = None
+
+    def _open_ui_in_browser(self):
+        """Open the centralized UI in default browser."""
+        try:
+            url = f"http://localhost:{CENTRALIZED_UI_PORT}"
+            
+            # Kiosk flags: fullscreen, no address bar/taskbar/notifications
+            chromium_kiosk_flags = [
+                '--kiosk',
+                '--start-fullscreen',
+                '--noerrdialogs',
+                '--disable-infobars',
+                '--no-first-run',
+                '--disable-session-crashed-bubble',
+                '--disable-translate',
+                '--check-for-update-interval=31536000',
+                '--overscroll-history-navigation=0',
+            ]
+
+            # Try multiple approaches for Raspberry Pi
+            browsers_to_try = [
+                ['chromium-browser', *chromium_kiosk_flags, url],   # Chromium
+                ['chromium', *chromium_kiosk_flags, url],           # Chromium (alt)
+                ['firefox', '--kiosk', url],                        # Firefox
+                ['midori', url],                                    # Midori (lightweight)
+                ['w3m', url],                                       # Text browser
+            ]
+            
+            browser_opened = False
+            
+            # Try system-specific browser launch
+            for browser_cmd in browsers_to_try:
+                try:
+                    print(f"[UI] Trying to open with {browser_cmd[0]}...")
+                    subprocess.Popen(browser_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    browser_opened = True
+                    print(f"[UI] Browser opened: {url}")
+                    return
+                except FileNotFoundError:
+                    continue
+                except Exception as e:
+                    print(f"[UI] {browser_cmd[0]} failed: {e}")
+                    continue
+            
+            # Fallback: Try webbrowser module
+            if not browser_opened:
+                import webbrowser
+                print(f"[UI] Trying webbrowser module...")
+                webbrowser.open(url)
+                browser_opened = True
+                print(f"[UI] Browser opened: {url}")
+            
+            # If all else fails, just display the URL
+            if not browser_opened:
+                print(f"\n[UI] ⚠️  Could not auto-open browser")
+                print(f"[UI] 📱 Open this URL in your browser manually:")
+                print(f"[UI] ➜  http://localhost:{CENTRALIZED_UI_PORT}")
+                print(f"[UI] 🌐 From another device: http://<raspberry-pi-ip>:{CENTRALIZED_UI_PORT}\n")
+                
+        except Exception as e:
+            print(f"[UI] Browser error: {e}")
+            print(f"[UI] Open manually: http://localhost:{CENTRALIZED_UI_PORT}")
+
+    def _stop_centralized_ui(self):
+        """Stop the centralized UI server."""
+        if not self.centralized_ui_process or self.centralized_ui_process.poll() is not None:
+            return
+
+        print("[UI] Stopping Centralized UI server...")
+        try:
+            os.killpg(os.getpgid(self.centralized_ui_process.pid), signal.SIGTERM)
+            self.centralized_ui_process.wait(timeout=5)
+        except Exception:
+            try:
+                self.centralized_ui_process.kill()
+                self.centralized_ui_process.wait(timeout=2)
+            except Exception:
+                pass
+        finally:
+            self.centralized_ui_process = None
 
     def _start_runtime_services(self):
         self.audio_processors.play_beep_sound(beep_file="beep/startup_sound.wav")
@@ -470,6 +619,7 @@ class VoiceAssistant:
 
         self._stop_wake_request_listener()
         self._stop_telegram_listener()
+        self._stop_centralized_ui()
 
         self.pixel_led.off()
         set_camera_display_enabled(False)
@@ -487,11 +637,12 @@ class VoiceAssistant:
         try:
             self._start_runtime_services()
 
-            while True:
+            while not _shutdown_event.is_set():
                 time.sleep(0.5)
                     
         except KeyboardInterrupt:
             print("\n[MAIN] Stopped by user")
+            _shutdown_event.set()
         except Exception as e:
             print(f"[MAIN] Error: {e}")
         finally:
@@ -517,6 +668,10 @@ def _run_main_loop():
             print("Starting Voice Assistant...")
             print("Events will trigger automatically at scheduled times\n")
             assistant.run()
+
+            if _shutdown_event.is_set():
+                print("Program stopped (quit requested).")
+                break
             
         except KeyboardInterrupt:
             print("Program stopped by user.")

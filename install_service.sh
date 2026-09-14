@@ -21,3 +21,15 @@ echo "  Restart service: sudo systemctl restart voice_assistant"
 echo "  View status:     sudo systemctl status voice_assistant"
 echo "  View logs:       sudo journalctl -u voice_assistant -f"
 echo "  Disable service: sudo systemctl disable voice_assistant"
+
+# Close/stop the dashboard (if ever needed)
+sudo systemctl stop centralized_ui.service
+
+# Start it again
+sudo systemctl start centralized_ui.service
+
+# Check status
+sudo systemctl status centralized_ui.service
+
+# View logs
+sudo journalctl -u centralized_ui.service -f

@@ -309,3 +309,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 **Made with care by Juber**
 
 *For support, please open an issue on GitHub*
+sudo systemctl start centralized_ui.service
+pkill -f "python.*centralized_ui/app.py"
+sudo systemctl start centralized_ui.service

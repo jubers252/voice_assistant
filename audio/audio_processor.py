@@ -111,6 +111,9 @@ class AudioProcessors:
         self.pixel_led = None  # Will be set by voice assistant if available
         self.state_callback = None
         
+        # Use PulseAudio for volume control - no pygame mixer volume override
+        # (pygame mixer volume affects system audio state and can impact mic sensitivity)
+        
         # Initialize pygame mixer once to prevent double initialization corruption
         self._init_pygame_mixer()
     
@@ -498,7 +501,7 @@ class AudioProcessors:
                         self._init_pygame_mixer()
                     
                     pygame.mixer.music.load(beep_file)
-                    pygame.mixer.music.set_volume(0.6)  # Lower volume for beep
+                    pygame.mixer.music.set_volume(0.6)
                     pygame.mixer.music.play()
                     
                     # Wait for the short beep to finish

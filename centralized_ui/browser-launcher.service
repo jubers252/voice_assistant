@@ -1,0 +1,18 @@
+[Unit]
+Description=Launch Chromium Browser for Voice Assistant Dashboard
+After=centralized_ui.service
+Wants=centralized_ui.service
+PartOf=centralized_ui.service
+
+[Service]
+Type=oneshot
+User=pi
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/pi/.Xauthority"
+ExecStart=/home/pi/Documents/voice_assistant/centralized_ui/launch_browser.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
