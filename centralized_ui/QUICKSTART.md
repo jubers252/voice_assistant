@@ -39,7 +39,7 @@ After basic setup, integrate your modules:
 
 ### Anime Face
 - [ ] Update `app.py` line 260 with anime display module
-- [ ] Modify `/anime_feed` route
+- [ ] Verify orb mode updates through `/api/face_state`
 - [ ] Test expression changes
 
 ### Weather

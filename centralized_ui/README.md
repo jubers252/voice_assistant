@@ -9,7 +9,7 @@ A unified web-based dashboard for your Voice Assistant Raspberry Pi, displaying 
 ✨ **Anime Face Display** - Dynamic anime character responses
 🌤️ **Weather & Time** - Real-time weather and clock display
 🎵 **Music Player** - Full-featured music player with playlist
-🏠 **Home Automation** - Control lights, fan, AC, doorbell
+🏠 **Home Automation** - Control light, zero light, and fan; doorbell reserved for later
 📊 **System Monitor** - CPU, memory, and temperature status
 
 ## Installation
@@ -101,12 +101,10 @@ from connectors.home_automation import HomeAutomation
 automation = HomeAutomation()
 ```
 
-### Anime Face
-Update `app.py` line ~260 in `handle_anime_face_command()`:
-```python
-from anime_face_display import AnimeFaceDisplay
-anime = AnimeFaceDisplay()
-```
+### AI Orb
+The Anime tab renders the orb and particles directly in the browser. The assistant
+posts mode changes to `POST /api/face_state`, which broadcasts the `face_state`
+Socket.IO event. No separate desktop face renderer is required.
 
 ## API Endpoints
 
@@ -242,3 +240,22 @@ For issues or questions:
 2. Verify all integrations in `app.py`
 3. Test individual components separately
 4. Check Raspberry Pi resources: `free -h`, `htop`
+## Home automation controls
+
+Light, Zero Light (`zero`), and Fan use the existing ESP JSON API through
+`connectors/home_automation.py`. The backend reads device status every two
+seconds and sends it to the UI over WebSocket, including remote and voice
+changes. UI commands use the same connector. Doorbell stays visible as
+Not configured for later setup. Restart the UI backend and reload the page
+after updating.
+
+## YouTube music player
+
+The Music tab controls the primary player in `connectors/youtube_api.py`.
+Start a song or playlist using voice, then use the dashboard to pause/resume,
+choose a track, skip, seek, or adjust volume. Track metadata, playlist, and
+playback progress refresh over WebSocket every two seconds.
+
+The voice process owns the playlist and serves the dashboard through a local
+socket (`/tmp/youtube-player.sock`). The old floating Tkinter UI has been removed. Restart both the voice assistant and centralized UI after
+updating, then start a song to establish the player connection.

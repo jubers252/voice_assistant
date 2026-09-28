@@ -222,3 +222,5 @@ chroma_memory/
 assistant_memory.db
 images/
 my_db/
+camera/scene_context.json
+camera/scene_context.json.tmp

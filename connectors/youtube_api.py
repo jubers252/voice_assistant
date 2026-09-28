@@ -7,26 +7,25 @@ import json
 import time
 import sys
 import threading
-
-# Try to import tkinter - may not be available on headless systems
-try:
-    import tkinter as tk
-    from tkinter import ttk
-    HAS_DISPLAY = os.environ.get('DISPLAY') is not None
-except (ImportError, RuntimeError):
-    tk = None
-    ttk = None
-    HAS_DISPLAY = False
+import socketserver
+import shutil
+import importlib.util
+from pathlib import Path
 
 load_dotenv()
 
 API_KEY = os.getenv("YOUTUBE_API_KEY")
 MPV_SOCKET = "/tmp/mpvsocket"
+PLAYER_SOCKET = "/tmp/youtube-player.sock"
+_player_server = None
+_player_server_lock = threading.Lock()
+_player_control_lock = threading.RLock()
 current_playlist = []
 current_index = 0
 mpv_process = None
-music_ui_root = None  # Global reference to music UI window
-music_ui_labels = {}  # Dictionary to store UI labels for updates
+playback_error = None
+playback_loading = False
+MPV_LOG = "/tmp/voice_assistant_mpv.log"
 
 youtube = build(
     "youtube",
@@ -47,7 +46,7 @@ PLAYBACK FUNCTIONS:
 -------------------
 1. play_with_mpv(url, title) - Play single song
 2. play_all_songs(songs_list) - Play all songs sequentially
-3. play_playlist(songs_list, start_index=0) - Play with UI controls
+3. play_playlist(songs_list, start_index=0) - Play with voice and dashboard controls
 
 USAGE EXAMPLES:
 ---------------
@@ -210,29 +209,121 @@ def search_by_singer(singer_name, max_results=10):
 # -----------------------------------------------------
 
 def mpv_command(command):
+    """Read a complete command response, ignoring unsolicited MPV events."""
     try:
-        client = socket.socket(
-            socket.AF_UNIX,
-            socket.SOCK_STREAM
-        )
-
-        client.connect(MPV_SOCKET)
-
-        message = json.dumps({
-            "command": command
-        }) + "\n"
-
-        client.send(message.encode())
-
-        response = client.recv(4096)
-
-        client.close()
-
-        return json.loads(response.decode())
-
-    except Exception as e:
-        print("MPV IPC error:", e)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(1)
+            client.connect(MPV_SOCKET)
+            client.sendall((json.dumps({'command': command, 'request_id': 1}) + '\n').encode())
+            with client.makefile('rb') as stream:
+                while True:
+                    line = stream.readline(1024 * 1024)
+                    if not line:
+                        return None
+                    response = json.loads(line)
+                    if response.get('request_id') == 1:
+                        return response
+    except (OSError, ValueError):
         return None
+
+
+def playback_status():
+    """JSON snapshot of the actual player and its in-process playlist."""
+    def prop(name, default):
+        response = mpv_command(['get_property', name])
+        return response.get('data', default) if response and response.get('error') == 'success' else default
+
+    song = current_playlist[current_index] if 0 <= current_index < len(current_playlist) else {}
+    active = mpv_process is not None and mpv_process.poll() is None
+    return {
+        'available': True,
+        'error': playback_error,
+        'loading': playback_loading,
+        'title': song.get('title', 'No Track Playing'),
+        'artist': song.get('channel', 'YouTube'),
+        'album_art': song.get('thumbnail', ''),
+        'is_playing': active and not playback_loading and not prop('pause', True) and not prop('idle-active', True),
+        'progress': (prop('time-pos', 0) or 0) if active else 0,
+        'duration': (prop('duration', 0) or 0) if active else 0,
+        'volume': prop('volume', 70) if active else 70,
+        'current_index': current_index,
+        'tracks': [{'title': item['title'], 'artist': item.get('channel', 'YouTube')}
+                   for item in current_playlist],
+    }
+
+
+def control_playback(payload):
+    """Keep dashboard controls in the process that owns the playlist."""
+    action = payload.get('action')
+    with _player_control_lock:
+        if action == 'play' and 'track_index' in payload:
+            play_index(payload['track_index'])
+        elif action == 'play' and (mpv_process is None or mpv_process.poll() is not None):
+            play_index(current_index)
+        elif action in ('play', 'pause', 'stop', 'volume', 'seek'):
+            if action in ('play', 'pause'):
+                command = ['set_property', 'pause', action == 'pause']
+            elif action == 'stop':
+                command = ['stop']
+            else:
+                value = float(payload.get('value', 0))
+                if not 0 <= value <= 100:
+                    raise ValueError('Volume and seek must be between 0 and 100.')
+                command = (['set_property', 'volume', value] if action == 'volume'
+                           else ['seek', value, 'absolute-percent'])
+            response = mpv_command(command)
+            if not response or response.get('error') != 'success':
+                raise ValueError('The music player could not apply the command.')
+        elif action == 'next':
+            play_next()
+        elif action == 'previous':
+            play_previous()
+        else:
+            raise ValueError('Unsupported music command.')
+
+
+def start_player_server():
+    """Expose the existing player to the local dashboard; no second player."""
+    global _player_server
+    with _player_server_lock:
+        if _player_server is not None:
+            return
+        if os.path.exists(PLAYER_SOCKET):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.settimeout(1)
+                try:
+                    probe.connect(PLAYER_SOCKET)
+                except (ConnectionRefusedError, FileNotFoundError):
+                    os.unlink(PLAYER_SOCKET)
+                else:
+                    raise RuntimeError('Another YouTube player is already serving the dashboard.')
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(self):
+                self.request.settimeout(5)
+                try:
+                    line = self.rfile.readline(8192)
+                    if not line:
+                        return
+                    payload = json.loads(line)
+                    if not isinstance(payload, dict):
+                        raise ValueError('Invalid music request.')
+                    if payload.get('action') != 'status':
+                        control_playback(payload)
+                    response = {'status': playback_status()}
+                except Exception as exc:
+                    response = {'error': str(exc)}
+                try:
+                    self.wfile.write((json.dumps(response) + '\n').encode())
+                except OSError:
+                    pass
+
+        class Server(socketserver.ThreadingUnixStreamServer):
+            daemon_threads = True
+
+        _player_server = Server(PLAYER_SOCKET, Handler)
+        os.chmod(PLAYER_SOCKET, 0o600)
+        threading.Thread(target=_player_server.serve_forever, daemon=True).start()
 
 
 # -----------------------------------------------------
@@ -253,19 +344,9 @@ def set_volume(value):
 # Pause / Resume
 # -----------------------------------------------------
 
-paused = False
-
-
 def toggle_pause():
-    global paused
-
-    paused = not paused
-
-    mpv_command([
-        "set_property",
-        "pause",
-        paused
-    ])
+    # MPV owns pause state, including changes made through the dashboard.
+    return mpv_command(['cycle', 'pause'])
 
 
 # -----------------------------------------------------
@@ -277,154 +358,114 @@ def stop_music():
     mpv_command(["stop"])
 
 
-# Play next song
+def play_index(index):
+    global current_index
+    with _player_control_lock:
+        if type(index) is not int or not 0 <= index < len(current_playlist):
+            raise ValueError('Track is not in the current playlist.')
+        current_index = index
+        song = current_playlist[index]
+        process = play_with_mpv(song['url'], song['title'])
+        if process is None:
+            raise RuntimeError('Could not start music playback.')
+        return process
+
+
 def play_next():
-    global current_index, mpv_process
-    
     if current_index < len(current_playlist) - 1:
-        current_index += 1
-        
-        # Stop current playback
-        if mpv_process and mpv_process.poll() is None:
-            mpv_process.terminate()
-        
-        # Play next song (don't call play_playlist, just play_with_mpv)
-        song = current_playlist[current_index]
-        mpv_process = play_with_mpv(song["url"], song["title"])
-        
-        # Update UI immediately
-        update_song_info()
-    else:
-        print("Already at last song")
+        return play_index(current_index + 1)
 
 
-# Play previous song
 def play_previous():
-    global current_index, mpv_process
-    
     if current_index > 0:
-        current_index -= 1
-        
-        # Stop current playback
-        if mpv_process and mpv_process.poll() is None:
-            mpv_process.terminate()
-        
-        # Play previous song (don't call play_playlist, just play_with_mpv)
-        song = current_playlist[current_index]
-        mpv_process = play_with_mpv(song["url"], song["title"])
-        
-        # Update UI immediately
-        update_song_info()
-    else:
-        print("Already at first song")
-
-
-# Update song info in UI
-def update_song_info():
-    """Update UI labels with current song info."""
-    global music_ui_labels, current_playlist, current_index
-    
-    if not music_ui_labels:  # No UI active
-        return
-        
-    if current_playlist and current_index < len(current_playlist):
-        song = current_playlist[current_index]
-        
-        # Update title
-        if "title" in music_ui_labels:
-            music_ui_labels["title"].config(text=song["title"])
-        
-        # Update channel/artist
-        if "channel" in music_ui_labels:
-            music_ui_labels["channel"].config(text=song['channel'])
-        
-        # Update index display
-        if "index" in music_ui_labels:
-            index_text = f"Song {current_index + 1} of {len(current_playlist)}"
-            music_ui_labels["index"].config(text=index_text)
-        
-        # Keep UI on top
-        global music_ui_root
-        if music_ui_root:
-            try:
-                music_ui_root.lift()
-                music_ui_root.focus_force()
-            except:
-                pass
+        return play_index(current_index - 1)
 
 
 # -----------------------------------------------------
 # Play with MPV
 
-def play_with_mpv(url, title):
-    global mpv_process
+def play_with_mpv(url, title, song_info=None):
+    global current_playlist, current_index
+    with _player_control_lock:
+        # Direct single-song playback must replace any previous playlist.
+        if song_info is not None or not current_playlist or current_playlist[current_index]['url'] != url:
+            current_playlist = [song_info or {'url': url, 'title': title}]
+            current_index = 0
+        start_player_server()
+        return _start_mpv(url, title)
 
+
+def youtube_extract_command(url):
+    # Use the assistant's installed version, not the older system executable.
+    command = [sys.executable, '-m', 'yt_dlp', '--no-playlist', '--no-cache-dir',
+               '--socket-timeout', '10', '-f', 'bestaudio/best', '-g']
+    node = shutil.which('node')
+    if not node:
+        playwright = importlib.util.find_spec('playwright')
+        if playwright and playwright.origin:
+            bundled = Path(playwright.origin).parent / 'driver' / 'node'
+            if bundled.is_file():
+                node = str(bundled)
+    if node:
+        command.extend(['--js-runtimes', f'node:{node}'])
+    return command + [url]
+
+
+def _start_mpv(url, title):
+    global mpv_process, playback_error, playback_loading
+    playback_error = None
+    playback_loading = True
     try:
-        # Remove old socket
+        if mpv_process and mpv_process.poll() is None:
+            mpv_process.terminate()
+            try:
+                mpv_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                mpv_process.kill()
+                mpv_process.wait(timeout=2)
+        mpv_process = None
         if os.path.exists(MPV_SOCKET):
             os.remove(MPV_SOCKET)
 
-        print(f"\nPlaying: {title}")
+        result = subprocess.run(youtube_extract_command(url), capture_output=True,
+                                text=True, timeout=45)
+        streams = result.stdout.strip().splitlines()
+        if result.returncode != 0 or not streams:
+            print('YouTube extraction failed:', result.stderr[-2000:])
+            raise RuntimeError('YouTube could not provide an audio stream. Please try another song.')
 
-        # Kill previous process if running
-        if mpv_process and mpv_process.poll() is None:
+        mpv_cmd = ['mpv', '--no-video', '--no-sub', '--no-terminal',
+                   f'--title={title}', '--volume=70',
+                   f'--input-ipc-server={MPV_SOCKET}', streams[0]]
+        # Avoid unread PIPE buffers; preserve startup/audio errors for diagnosis.
+        with open(MPV_LOG, 'w') as log:
+            mpv_process = subprocess.Popen(mpv_cmd, stdout=log, stderr=subprocess.STDOUT)
+
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if mpv_process.poll() is not None:
+                raise RuntimeError(f'Music player exited before audio started. See {MPV_LOG}.')
+            audio = mpv_command(['get_property', 'audio-out-params'])
+            position = mpv_command(['get_property', 'time-pos'])
+            if (audio and audio.get('error') == 'success' and audio.get('data') and
+                    position and position.get('error') == 'success' and
+                    isinstance(position.get('data'), (int, float)) and position['data'] > 0):
+                print(f'Audio playback confirmed: {title}')
+                return mpv_process
+            time.sleep(0.2)
+        raise RuntimeError('Audio did not start within 15 seconds. Please retry.')
+    except Exception as exc:
+        playback_error = str(exc) if not isinstance(exc, subprocess.TimeoutExpired) else 'YouTube took too long to load the song. Please retry.'
+        if mpv_process is not None and mpv_process.poll() is None:
             mpv_process.terminate()
-            time.sleep(0.5)
-
-        # Extract streaming URL using yt-dlp
-        try:
-            result = subprocess.run(
-                ["yt-dlp", "-f", "bestaudio", "-g", url],
-                capture_output=True,
-                text=True,
-                timeout=15
-            )
-            
-            if result.returncode == 0:
-                stream_url = result.stdout.strip().split('\n')[0]
-                print(f"Got stream URL from yt-dlp")
-            else:
-                # Fallback to direct URL if yt-dlp fails
-                print(f"yt-dlp failed: {result.stderr[:100]}")
-                stream_url = url
-        except subprocess.TimeoutExpired:
-            print("yt-dlp timeout, using direct URL")
-            stream_url = url
-        except FileNotFoundError:
-            print("yt-dlp not found, using direct URL")
-            stream_url = url
-
-        print(f"Stream URL: {stream_url[:100]}")
-
-        mpv_cmd = [
-            "mpv",
-            "--no-video",
-            "--no-sub",
-            f"--title={title}",
-            "--volume=70",
-            f"--input-ipc-server={MPV_SOCKET}",
-            stream_url
-        ]
-
-        print(f"Starting MPV with: {' '.join(mpv_cmd[:5])}...")
-
-        mpv_process = subprocess.Popen(
-            mpv_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-        
-        print(f"MPV process started: PID={mpv_process.pid}")
-
-        return mpv_process
-
-    except FileNotFoundError:
-        print("MPV not installed")
-        print("sudo apt install mpv")
-        return None
-    except Exception as e:
-        print(f"Error in play_with_mpv: {e}")
-        return None
+            try:
+                mpv_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                mpv_process.kill()
+                mpv_process.wait(timeout=2)
+        raise RuntimeError(playback_error) from exc
+    finally:
+        playback_loading = False
 
 
 def play_all_songs(songs_list):
@@ -441,306 +482,11 @@ def play_all_songs(songs_list):
 
 
 def play_playlist(songs_list, start_index=0):
-    """Play songs with UI controls."""
+    """Start a playlist controlled by voice and the centralized dashboard."""
     global current_playlist, current_index
-    
-    current_playlist = songs_list
-    current_index = start_index
-    
-    # Launch UI only once when starting playlist
-    if HAS_DISPLAY and tk is not None:
-        launch_music_ui(songs_list)
-    
-    if current_index < len(current_playlist):
-        song = current_playlist[current_index]
-        return play_with_mpv(song["url"], song["title"])
-
-
-# =====================================================
-# Launch Music UI
-# =====================================================
-
-def launch_music_ui(songs_list):
-    """Launch Tkinter music player UI in a separate thread - only once per playlist."""
-    
-    global music_ui_root
-    
-    if not tk or not HAS_DISPLAY:
-        return
-    
-    # Close existing window if running
-    if music_ui_root is not None:
-        try:
-            music_ui_root.destroy()
-        except:
-            pass
-    
-    try:
-        # Create UI in a separate thread to not block music playback
-        ui_thread = threading.Thread(target=lambda: create_music_ui(songs_list), daemon=True)
-        ui_thread.start()
-    except Exception as e:
-        print(f"Error launching UI: {e}")
-
-
-def create_music_ui(songs_list):
-    """Create and run the Tkinter music player UI."""
-    
-    global music_ui_root, music_ui_labels
-    
-    if not tk:
-        return
-    
-    try:
-        music_ui_root = tk.Tk()
-        music_ui_root.title("🎵 Music Player")
-        music_ui_root.geometry("500x400")
-        music_ui_root.resizable(False, False)  # Prevent resizing
-        
-        # Position in top-right corner to avoid fullscreen app overlap
-        music_ui_root.geometry("+1400+20")
-        
-        # Always on top - use skipTaskbar and always-on-top
-        music_ui_root.attributes('-topmost', True)
-        music_ui_root.attributes('-type', 'splash')  # Make it act like a floating window
-        music_ui_root.focus_force()  # Force focus on window creation
-        
-        # Title
-        title_label = tk.Label(
-            music_ui_root,
-            text=songs_list[0]["title"] if songs_list else "Playing...",
-            font=("Arial", 14, "bold"),
-            wraplength=450,
-            fg="black"
-        )
-        title_label.pack(pady=15)
-        music_ui_labels["title"] = title_label
-        
-        # Artist/Channel
-        channel_label = tk.Label(
-            music_ui_root,
-            text=songs_list[0]["channel"] if songs_list else "YouTube Music",
-            font=("Arial", 11),
-            fg="gray"
-        )
-        channel_label.pack(pady=5)
-        music_ui_labels["channel"] = channel_label
-        
-        # Status
-        status_label = tk.Label(
-            music_ui_root,
-            text="▶ Now Playing",
-            font=("Arial", 10, "bold"),
-            fg="green"
-        )
-        status_label.pack(pady=10)
-        music_ui_labels["status"] = status_label
-        
-        # Volume display
-        volume_label = tk.Label(
-            music_ui_root,
-            text="Volume: 70%",
-            font=("Arial", 9),
-            fg="blue"
-        )
-        volume_label.pack(pady=5)
-        music_ui_labels["volume"] = volume_label
-        
-        # Index display
-        index_label = tk.Label(
-            music_ui_root,
-            text=f"Song 1 of {len(songs_list)}",
-            font=("Arial", 9),
-            fg="purple"
-        )
-        index_label.pack(pady=3)
-        music_ui_labels["index"] = index_label
-        
-        # Button frame 1 - Playback controls
-        button_frame1 = tk.Frame(music_ui_root)
-        button_frame1.pack(pady=10)
-        
-        # Previous button
-        def on_prev():
-            try:
-                play_previous()
-                music_ui_root.lift()  # Bring window to front
-                music_ui_root.focus_force()  # Force focus
-            except Exception as e:
-                print(f"Error in previous: {e}")
-        
-        prev_btn = tk.Button(
-            button_frame1,
-            text="⏮ Previous",
-            command=on_prev,
-            bg="#ff6600",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            width=10,
-            padx=5,
-            pady=8
-        )
-        prev_btn.pack(side="left", padx=5)
-        
-        # Pause/Resume button
-        pause_state = {"paused": False}
-        
-        def on_pause():
-            try:
-                toggle_pause()
-                if pause_state["paused"]:
-                    pause_state["paused"] = False
-                    pause_btn.config(text="⏸ Pause")
-                    music_ui_labels["status"].config(text="▶ Playing")
-                else:
-                    pause_state["paused"] = True
-                    pause_btn.config(text="▶ Resume")
-                    music_ui_labels["status"].config(text="⏸ Paused")
-                music_ui_root.lift()
-                music_ui_root.focus_force()
-            except Exception as e:
-                print(f"Error in pause: {e}")
-        
-        pause_btn = tk.Button(
-            button_frame1,
-            text="⏸ Pause",
-            command=on_pause,
-            bg="#0099ff",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            width=10,
-            padx=5,
-            pady=8
-        )
-        pause_btn.pack(side="left", padx=5)
-        music_ui_labels["pause_btn"] = pause_btn
-        
-        # Next button
-        def on_next():
-            try:
-                play_next()
-                music_ui_root.lift()  # Bring window to front
-                music_ui_root.focus_force()  # Force focus
-            except Exception as e:
-                print(f"Error in next: {e}")
-        
-        next_btn = tk.Button(
-            button_frame1,
-            text="Next ⏭",
-            command=on_next,
-            bg="#00dd66",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            width=10,
-            padx=5,
-            pady=8
-        )
-        next_btn.pack(side="left", padx=5)
-        
-        # Button frame 2 - Volume and Stop controls
-        button_frame2 = tk.Frame(music_ui_root)
-        button_frame2.pack(pady=10)
-        
-        # Volume decrease
-        def decrease_volume():
-            try:
-                current_vol = int(music_ui_labels["volume"].cget("text").split(": ")[1].rstrip("%"))
-                new_vol = max(0, current_vol - 10)
-                set_volume(new_vol)
-                music_ui_labels["volume"].config(text=f"Volume: {new_vol}%")
-                music_ui_root.lift()
-                music_ui_root.focus_force()
-            except Exception as e:
-                print(f"Error decreasing volume: {e}")
-        
-        vol_down = tk.Button(
-            button_frame2,
-            text="🔉 -",
-            command=decrease_volume,
-            bg="#ff9900",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            width=8,
-            padx=5,
-            pady=8
-        )
-        vol_down.pack(side="left", padx=5)
-        
-        # Volume increase
-        def increase_volume():
-            try:
-                current_vol = int(music_ui_labels["volume"].cget("text").split(": ")[1].rstrip("%"))
-                new_vol = min(100, current_vol + 10)
-                set_volume(new_vol)
-                music_ui_labels["volume"].config(text=f"Volume: {new_vol}%")
-                music_ui_root.lift()
-                music_ui_root.focus_force()
-            except Exception as e:
-                print(f"Error increasing volume: {e}")
-        
-        vol_up = tk.Button(
-            button_frame2,
-            text="🔊 +",
-            command=increase_volume,
-            bg="#ff9900",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            width=8,
-            padx=5,
-            pady=8
-        )
-        vol_up.pack(side="left", padx=5)
-        
-        # Stop button
-        def on_stop():
-            try:
-                global music_ui_root
-                stop_music()
-                music_ui_labels["status"].config(text="⏹ Stopped")
-                # Close UI after stopping
-                if music_ui_root:
-                    music_ui_root.destroy()
-                    music_ui_root = None
-            except Exception as e:
-                print(f"Error stopping: {e}")
-        
-        stop_btn = tk.Button(
-            button_frame2,
-            text="⏹ Stop",
-            command=on_stop,
-            bg="#dd0000",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            width=8,
-            padx=5,
-            pady=8
-        )
-        stop_btn.pack(side="left", padx=5)
-        
-        # Keep window on top - refresh every 100ms and maintain focus
-        def keep_on_top():
-            try:
-                if music_ui_root:
-                    music_ui_root.attributes('-topmost', True)
-                    music_ui_root.lift()  # Bring to front
-                    music_ui_root.after(500, keep_on_top)  # Check every 500ms
-            except:
-                pass
-        
-        # Bind focus loss to restore focus immediately
-        def on_focus_out(event):
-            try:
-                if music_ui_root:
-                    music_ui_root.lift()
-                    music_ui_root.focus_force()
-            except:
-                pass
-        
-        music_ui_root.bind("<FocusOut>", on_focus_out)
-        
-        keep_on_top()
-        
-        music_ui_root.mainloop()
-        
-    except Exception as e:
-        print(f"Error creating UI: {e}")
+    if type(start_index) is not int or not 0 <= start_index < len(songs_list):
+        raise ValueError('Choose a valid starting track.')
+    with _player_control_lock:
+        current_playlist = songs_list
+        current_index = start_index
+        return play_index(start_index)

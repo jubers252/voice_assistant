@@ -13,7 +13,15 @@ import numpy as np
 
 from camera_display_control import is_camera_display_enabled, toggle_camera_display_enabled
 from camera_context import write_camera_context, write_tracking_angles, set_wake_request
-from face_track_servo import FaceTrackServo, MAX_ANGLE_LIMIT, PAN_NEUTRAL_ANGLE, TILT_NEUTRAL_ANGLE
+from face_track_servo import (
+    FaceTrackServo,
+    MAX_ANGLE_LIMIT,
+    PAN_MAX_ANGLE,
+    PAN_NEUTRAL_ANGLE,
+    TILT_MAX_ANGLE,
+    TILT_MIN_ANGLE,
+    TILT_NEUTRAL_ANGLE,
+)
 from sensor_reader import SensorReader
 
 try:
@@ -118,8 +126,9 @@ def _to_compat_face_result(detection_result, image_width, image_height):
 
 
 def servo_angles_to_pupil_angles(pan_angle, tilt_angle):
-    pan_ratio = (pan_angle - PAN_NEUTRAL_ANGLE) / MAX_ANGLE_LIMIT
-    tilt_ratio = (tilt_angle - TILT_NEUTRAL_ANGLE) / MAX_ANGLE_LIMIT
+    pan_ratio = (pan_angle - PAN_NEUTRAL_ANGLE) / PAN_MAX_ANGLE
+    tilt_span = max(TILT_NEUTRAL_ANGLE - TILT_MIN_ANGLE, TILT_MAX_ANGLE - TILT_NEUTRAL_ANGLE)
+    tilt_ratio = (tilt_angle - TILT_NEUTRAL_ANGLE) / tilt_span
 
     pan_ratio = max(-1.0, min(1.0, pan_ratio))
     tilt_ratio = max(-1.0, min(1.0, tilt_ratio))

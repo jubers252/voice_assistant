@@ -335,7 +335,22 @@ class AmazonIndiaScraper:
                 return False
                 
         except Exception as e:
-            print(f"Login error: {e}")
+            error_text = str(e)
+            recovery_redirect = re.search(
+                r"https?://(?:www\.)?amazon\.in/ap/(?:forgotpassword|password/forgotpassword|forgotpassword/reverification)",
+                error_text,
+                re.IGNORECASE,
+            )
+            if recovery_redirect:
+                print(
+                    "Amazon India sent this login to account recovery instead of a supported sign-in page. "
+                    "Complete the password/account verification in a browser, then rerun this script. "
+                    "The connector cannot complete Amazon's recovery challenge automatically."
+                )
+                if self.debug:
+                    print(f"Amazon auth page: {recovery_redirect.group(0)}")
+            else:
+                print(f"Login error: {e}")
             return False
     
     def clear_saved_session(self) -> bool:
@@ -1011,6 +1026,7 @@ def get_order(tool_request) -> List[Dict[str, Any]]:
         import traceback
         traceback.print_exc()
 if __name__ == "__main__":
-    tool_request = {"days": 60}  # Example input to
-    get_order(tool_request)
+    tool_request = {"days": 30}  # Example input to
+    result = get_order(tool_request)
+    print(result)
     pass

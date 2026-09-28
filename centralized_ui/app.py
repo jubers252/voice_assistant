@@ -10,9 +10,10 @@ import psutil
 import signal
 import subprocess
 import threading
+import socket
 import sys
 from datetime import datetime
-from flask import Flask, render_template, jsonify, request, redirect
+from flask import Flask, render_template, jsonify, request, redirect, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, disconnect
 import logging
@@ -21,6 +22,14 @@ import logging
 PARENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PARENT_DIR)
 VOICE_ASSISTANT_SCRIPT = os.path.join(PARENT_DIR, 'voice_assistant.py')
+MUSIC_PLAYER_SOCKET = '/tmp/youtube-player.sock'
+from centralized_ui.camera_feed import CameraFeed
+from connectors.home_automation import HomeAutomation
+
+home_automation = HomeAutomation()
+home_automation_lock = threading.Lock()
+
+camera_feed = CameraFeed(host=os.getenv('FRAME_RELAY_CLIENT_HOST', '127.0.0.1'))
 
 # Import weather connector
 try:
@@ -57,10 +66,10 @@ class GlobalState:
         self.music_playing = False
         self.current_track = 0
         self.devices = {
-            'light': False,
-            'fan': False,
-            'ac': False,
-            'doorbell': True  # armed by default
+            'light': None,
+            'fan': None,
+            'zero': None,
+            'doorbell': None  # Reserved for future setup
         }
         self.weather_data = {}
         self.system_status = {}
@@ -135,16 +144,29 @@ def index():
 
 @app.route('/video_feed')
 def video_feed():
-    """Stream camera feed"""
-    # This is a placeholder - integrate with your camera_stream_simple.py
-    # For now, return a placeholder image
-    return redirect('/static/placeholder.jpg')
+    """Stream annotated frames from the existing camera process."""
+    camera_feed.start()
+    return Response(camera_feed.stream(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame',
+                    headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
 
-@app.route('/anime_feed')
-def anime_feed():
-    """Stream anime face"""
-    # This is a placeholder - integrate with your anime_face_display.py
-    return redirect('/static/placeholder.jpg')
+
+@app.route('/api/camera/status')
+def camera_status():
+    camera_feed.start()
+    return jsonify({'available': camera_feed.available()})
+
+@app.route('/api/face_state', methods=['POST'])
+def face_state():
+    """Receive the assistant's current face mode (listening/speaking/etc.) and broadcast it."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        mode = data.get('mode', 'neutral')
+        socketio.emit('face_state', {'mode': mode}, namespace='/')
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"[FACE] State broadcast error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 # ============================================
 # API ENDPOINTS
@@ -201,14 +223,8 @@ def get_weather():
 def get_playlist():
     """Get current playlist"""
     try:
-        # TODO: Integrate with music connectors (spotify, youtube_api, yt_music)
-        playlist = {
-            'tracks': [
-                {'title': 'Track 1', 'artist': 'Artist 1'},
-                {'title': 'Track 2', 'artist': 'Artist 2'},
-                {'title': 'Track 3', 'artist': 'Artist 3'},
-            ]
-        }
+        status = music_player_request({'action': 'status'})
+        playlist = {'tracks': status['tracks'], 'current_index': status['current_index']}
         return jsonify(playlist)
     except Exception as e:
         logger.error(f"Playlist error: {e}")
@@ -259,6 +275,10 @@ def handle_command():
             handle_device_command(payload)
         
         return jsonify({'success': True})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except ConnectionError as e:
+        return jsonify({'error': str(e)}), 503
     except Exception as e:
         logger.error(f"Command error: {e}")
         return jsonify({'error': str(e)}), 500
@@ -362,6 +382,7 @@ def handle_connect():
     """Handle client connection"""
     logger.info('Client connected')
     emit('response', {'data': 'Connected to server'})
+    emit('home_status', state.devices)
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -387,7 +408,7 @@ def handle_socket_command(data):
         emit('response', {'success': True})
     except Exception as e:
         logger.error(f"Socket command error: {e}")
-        emit('error', {'message': str(e)})
+        emit('error', {'message': str(e), 'type': data.get('type')})
 
 # ============================================
 # COMMAND HANDLERS
@@ -425,57 +446,56 @@ def handle_anime_face_command(payload):
     # Broadcast update
     socketio.emit('device_status', {'device': 'anime_face', 'status': state.anime_face_active})
 
+def music_player_request(payload):
+    """Talk to youtube_api.py inside the running voice-assistant process."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(70 if payload.get('action') != 'status' else 8)
+            client.connect(MUSIC_PLAYER_SOCKET)
+            client.sendall((json.dumps(payload) + '\n').encode())
+            with client.makefile('rb') as stream:
+                response = json.loads(stream.readline(1024 * 1024))
+        if 'error' in response:
+            raise ValueError(response['error'])
+        return response['status']
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConnectionError('Music player unavailable. Start a song using voice first.') from exc
+
+
 def handle_music_command(payload):
-    """Handle music player commands"""
-    action = payload.get('action')
-    
-    if action == 'play':
-        state.music_playing = True
-        logger.info("Music playing")
-        # TODO: Integrate with music connectors
-    elif action == 'pause':
-        state.music_playing = False
-        logger.info("Music paused")
-        # TODO: Integrate with music connectors
-    elif action == 'next':
-        logger.info("Next track")
-        # TODO: Integrate with music connectors
-    elif action == 'previous':
-        logger.info("Previous track")
-        # TODO: Integrate with music connectors
-    elif action == 'volume':
-        volume = payload.get('value', 70)
-        logger.info(f"Volume set to {volume}%")
-        # TODO: Integrate with volume control
-    elif action == 'seek':
-        position = payload.get('value', 0)
-        logger.info(f"Seek to {position}")
-        # TODO: Integrate with music player
-    
-    # Broadcast update
-    socketio.emit('music_update', {
-        'title': 'Example Track',
-        'artist': 'Example Artist',
-        'is_playing': state.music_playing,
-        'progress': 0,
-        'duration': 180
-    })
+    status = music_player_request(payload)
+    socketio.emit('music_update', status)
 
 def handle_device_command(payload):
-    """Handle home automation device commands"""
+    """Use the same ESP command API as voice control."""
     device = payload.get('device')
     action = payload.get('action')
-    
-    if device in state.devices:
-        state.devices[device] = (action == 'on')
-        logger.info(f"Device {device} turned {action}")
-        # TODO: Integrate with GPIO/relay control
-        
-        # Broadcast update
-        socketio.emit('device_status', {
-            'device': device,
-            'status': action
-        })
+    if device not in ('light', 'zero', 'fan') or action not in ('on', 'off'):
+        raise ValueError('Invalid device or action; doorbell is not configured yet.')
+    with home_automation_lock:
+        if not home_automation.send_cmd({device: action == 'on'}):
+            raise ConnectionError('Could not send the device command.')
+        refresh_home_status()
+
+
+def refresh_home_status():
+    """Populate the UI directly from the existing API's JSON state."""
+    status = home_automation.get_status()
+    for device in ('light', 'zero', 'fan'):
+        value = status.get(device) if isinstance(status, dict) else None
+        state.devices[device] = value if type(value) is bool else None
+    socketio.emit('home_status', state.devices.copy())
+
+
+def broadcast_home_status():
+    # Remote/voice changes happen outside the UI, so read the ESP periodically.
+    while True:
+        try:
+            with home_automation_lock:
+                refresh_home_status()
+        except Exception as exc:
+            logger.warning('Home status refresh failed: %s', exc)
+        time.sleep(2)
 
 # ============================================
 # UTILITY FUNCTIONS
@@ -543,19 +563,16 @@ def broadcast_music_updates():
     """Periodically broadcast music player updates"""
     while True:
         try:
-            # TODO: Integrate with music connectors
+            music_data = music_player_request({'action': 'status'})
+        except (ConnectionError, ValueError):
             music_data = {
-                'title': 'Example Track',
-                'artist': 'Example Artist',
-                'album_art': '/static/placeholder.jpg',
-                'is_playing': state.music_playing,
-                'progress': 30,
-                'duration': 180
+                'available': False, 'title': 'No Track Playing',
+                'artist': 'Start a song using voice', 'album_art': '',
+                'is_playing': False, 'progress': 0, 'duration': 0,
+                'volume': 70, 'tracks': [], 'current_index': 0,
             }
-            socketio.emit('music_update', music_data)
-        except Exception as e:
-            logger.error(f"Error broadcasting music: {e}")
-        
+        socketio.emit('music_update', music_data)
+
         time.sleep(2)  # Update every 2 seconds
 
 # ============================================
@@ -579,6 +596,7 @@ def start_background_threads():
     """Start background update threads"""
     threads = [
         threading.Thread(target=broadcast_system_status, daemon=True),
+        threading.Thread(target=broadcast_home_status, daemon=True),
         threading.Thread(target=broadcast_weather_updates, daemon=True),
         threading.Thread(target=broadcast_music_updates, daemon=True),
     ]

@@ -9,10 +9,14 @@ class TabbedDashboardManager {
         this.playlist = [];
         this.io = null;
         this.currentTab = 'camera';
+        this.cameraPreviewEnabled = true;
         this.init();
     }
 
     init() {
+        this.setupOrbParticles();
+        this.updateCameraPreview();
+        setInterval(() => this.updateCameraPreview(), 2000);
         this.setupTabNavigation();
         this.setupEventListeners();
         this.updateClock();
@@ -90,6 +94,7 @@ class TabbedDashboardManager {
         }
 
         this.currentTab = tabName;
+        this.updateCameraPreview();
         console.log(`[switchTab] ✓ Successfully switched to tab: ${tabName}`);
     }
 
@@ -139,11 +144,17 @@ class TabbedDashboardManager {
 
         const volumeSlider = document.getElementById('volumeSlider');
         if (volumeSlider) {
+            volumeSlider.addEventListener('pointerdown', () => { volumeSlider.dataset.adjusting = 'true'; });
+            volumeSlider.addEventListener('pointerup', () => { delete volumeSlider.dataset.adjusting; });
+            volumeSlider.addEventListener('pointercancel', () => { delete volumeSlider.dataset.adjusting; });
             volumeSlider.addEventListener('change', (e) => this.setVolume(e.target.value));
         }
 
         const progressBar = document.getElementById('progressBar');
         if (progressBar) {
+            progressBar.addEventListener('pointerdown', () => { progressBar.dataset.adjusting = 'true'; });
+            progressBar.addEventListener('pointerup', () => { delete progressBar.dataset.adjusting; });
+            progressBar.addEventListener('pointercancel', () => { delete progressBar.dataset.adjusting; });
             progressBar.addEventListener('change', (e) => this.seek(e.target.value));
         }
 
@@ -184,6 +195,8 @@ class TabbedDashboardManager {
             this.io.on('disconnect', () => {
                 console.log('✗ Socket.IO disconnected');
                 this.updateStatus(false);
+                this.updateHomeStatus({});
+                this.updateMusicDisplay({available: false, title: 'No Track Playing', artist: 'Player disconnected', is_playing: false, progress: 0, duration: 0, tracks: [], current_index: 0});
             });
 
             this.io.on('system_status', (data) => {
@@ -198,8 +211,18 @@ class TabbedDashboardManager {
                 this.updateMusicDisplay(data);
             });
 
+            this.io.on('home_status', (data) => this.updateHomeStatus(data));
+
+            this.io.on('error', (data) => {
+                document.getElementById(data.type === 'music' ? 'musicMessage' : 'automationMessage').textContent = data.message;
+            });
+
             this.io.on('device_status', (data) => {
                 this.updateDeviceStatus(data);
+            });
+
+            this.io.on('face_state', (data) => {
+                this.updateFaceState(data);
             });
 
             this.io.on('switch_tab', (data) => {
@@ -324,11 +347,39 @@ class TabbedDashboardManager {
        ============================================ */
 
     toggleCamera() {
-        const btn = document.getElementById('toggleCamera');
-        if (btn) {
-            const isOn = btn.querySelector('span').textContent === 'ON';
-            btn.querySelector('span').textContent = isOn ? 'OFF' : 'ON';
-            this.sendCommand('camera', { action: isOn ? 'stop' : 'start' });
+        this.cameraPreviewEnabled = !this.cameraPreviewEnabled;
+        document.querySelector('#toggleCamera span').textContent = this.cameraPreviewEnabled ? 'ON' : 'OFF';
+        this.updateCameraPreview();
+    }
+
+    async updateCameraPreview() {
+        const feed = document.getElementById('cameraFeed');
+        const message = document.getElementById('cameraMessage');
+        const badge = document.getElementById('cameraStatus');
+        if (!feed) return;
+        const revision = this.cameraPreviewRevision = (this.cameraPreviewRevision || 0) + 1;
+        let available = false;
+        if (this.cameraPreviewEnabled && this.currentTab === 'camera') {
+            try {
+                const response = await fetch('/api/camera/status', { cache: 'no-store' });
+                if (response.ok) available = (await response.json()).available;
+            } catch (error) { /* Retry on the next status poll. */ }
+        }
+        if (revision !== this.cameraPreviewRevision) return;
+        const visible = this.cameraPreviewEnabled && this.currentTab === 'camera';
+        if (visible && available) {
+            if (!feed.hasAttribute('src')) feed.src = `/video_feed?t=${Date.now()}`;
+            feed.onerror = () => feed.removeAttribute('src');
+            feed.hidden = false;
+            message.hidden = true;
+            badge.textContent = 'Live';
+        } else {
+            feed.removeAttribute('src');
+            feed.hidden = true;
+            message.hidden = false;
+            message.textContent = this.cameraPreviewEnabled
+                ? 'Waiting for camera. Start the assistant to connect.' : 'Camera preview paused';
+            badge.textContent = this.cameraPreviewEnabled ? 'Waiting' : 'Paused';
         }
     }
 
@@ -389,9 +440,7 @@ class TabbedDashboardManager {
        ============================================ */
 
     togglePlayPause() {
-        this.isPlaying = !this.isPlaying;
-        this.updatePlayButton();
-        this.sendCommand('music', { action: this.isPlaying ? 'play' : 'pause' });
+        this.sendCommand('music', { action: this.isPlaying ? 'pause' : 'play' });
     }
 
     previousTrack() {
@@ -436,6 +485,7 @@ class TabbedDashboardManager {
         if (!playlistItems) return;
 
         this.playlist = data.tracks || [];
+        if (data.current_index !== undefined) this.currentTrack = data.current_index;
         playlistItems.innerHTML = '';
 
         if (this.playlist.length === 0) {
@@ -455,10 +505,6 @@ class TabbedDashboardManager {
     }
 
     playTrack(index) {
-        this.currentTrack = index;
-        this.isPlaying = true;
-        this.updatePlayButton();
-        this.updatePlaylistHighlight();
         this.sendCommand('music', { action: 'play', track_index: index });
     }
 
@@ -487,9 +533,22 @@ class TabbedDashboardManager {
         if (data.artist) {
             document.getElementById('trackArtist').textContent = data.artist;
         }
-        if (data.album_art) {
-            document.getElementById('albumArt').src = data.album_art;
+        const art = document.getElementById('albumArt');
+        if (!art.dataset.placeholder) art.dataset.placeholder = art.src;
+        art.src = data.album_art || art.dataset.placeholder;
+        document.getElementById('musicMessage').textContent = data.error || (data.loading ? 'Loading audio…' : data.available
+            ? (data.is_playing ? 'Playing · YouTube' : 'Paused or stopped · YouTube')
+            : 'Start a song using voice');
+        for (const id of ['playPauseBtn', 'prevBtn', 'nextBtn', 'progressBar', 'volumeSlider']) {
+            document.getElementById(id).disabled = !data.available || data.loading || !data.tracks?.length;
         }
+        document.getElementById('prevBtn').disabled ||= data.current_index <= 0;
+        document.getElementById('nextBtn').disabled ||= data.current_index >= (data.tracks?.length || 0) - 1;
+        if (data.volume !== undefined && !document.getElementById('volumeSlider').dataset.adjusting) {
+            document.getElementById('volumeSlider').value = data.volume;
+            document.getElementById('volumeValue').textContent = `${Math.round(data.volume)}%`;
+        }
+        if (data.tracks) this.displayPlaylist(data);
         if (data.is_playing !== undefined) {
             this.isPlaying = data.is_playing;
             this.updatePlayButton();
@@ -497,8 +556,8 @@ class TabbedDashboardManager {
         if (data.progress !== undefined && data.duration !== undefined) {
             const progressBar = document.getElementById('progressBar');
             const currentTime = document.getElementById('musicCurrentTime');
-            if (progressBar && data.duration > 0) {
-                progressBar.value = (data.progress / data.duration) * 100;
+            if (progressBar && !progressBar.dataset.adjusting) {
+                progressBar.value = data.duration > 0 ? (data.progress / data.duration) * 100 : 0;
             }
             if (currentTime) {
                 currentTime.textContent = this.formatTime(data.progress);
@@ -524,27 +583,71 @@ class TabbedDashboardManager {
 
     toggleDevice(device) {
         const btn = document.querySelector(`[data-device="${device}"]`);
-        if (btn) {
-            btn.classList.toggle('active');
-            const status = btn.querySelector('.device-status');
-            const isActive = btn.classList.contains('active');
-            status.textContent = isActive ? 'ON' : 'OFF';
-            this.sendCommand('device', { device, action: isActive ? 'on' : 'off' });
-        }
+        if (!btn || btn.disabled || device === 'doorbell' || !this.io?.connected) return;
+        const action = btn.classList.contains('active') ? 'off' : 'on';
+        btn.disabled = true;
+        document.getElementById('automationMessage').textContent = 'Updating device…';
+        this.sendCommand('device', { device, action });
+    }
+
+    updateHomeStatus(states) {
+        const devices = ['light', 'zero', 'fan'];
+        for (const device of devices) this.updateDeviceStatus({device, status: states[device]});
+        document.getElementById('automationMessage').textContent =
+            devices.every(device => typeof states[device] === 'boolean')
+                ? 'Connected' : 'Home controller unavailable';
     }
 
     updateDeviceStatus(data) {
+        if (!['light', 'zero', 'fan'].includes(data.device)) return;
         const btn = document.querySelector(`[data-device="${data.device}"]`);
         if (btn) {
-            const isActive = data.status === 'on' || data.status === true;
-            if (isActive) {
-                btn.classList.add('active');
-            } else {
-                btn.classList.remove('active');
+            const known = typeof data.status === 'boolean';
+            btn.classList.toggle('active', data.status === true);
+            btn.disabled = !known || !this.io?.connected;
+            if (known) btn.setAttribute('aria-pressed', String(data.status));
+            else btn.removeAttribute('aria-pressed');
+            btn.querySelector('.device-status').textContent =
+                known ? (data.status ? 'ON' : 'OFF') : 'Unavailable';
+        }
+    }
+
+    setupOrbParticles() {
+        const field = document.getElementById('orbParticles');
+        if (!field) return;
+
+        // Jittered cells keep dots spread across the entire stage, even at its edges.
+        const fragment = document.createDocumentFragment();
+        for (let row = 0; row < 8; row++) {
+            for (let column = 0; column < 12; column++) {
+                const dot = document.createElement('span');
+                dot.className = 'orb-particle';
+                dot.style.left = `${(column + 0.15 + Math.random() * 0.7) / 12 * 100}%`;
+                dot.style.top = `${(row + 0.15 + Math.random() * 0.7) / 8 * 100}%`;
+                dot.style.setProperty('--size', `${1.5 + Math.random() * 2}px`);
+                dot.style.setProperty('--drift-x', `${(Math.random() - 0.5) * 36}px`);
+                dot.style.setProperty('--drift-y', `${-12 - Math.random() * 28}px`);
+                dot.style.setProperty('--duration', `${5 + Math.random() * 7}s`);
+                dot.style.setProperty('--delay', `${-Math.random() * 24}s`);
+                fragment.appendChild(dot);
             }
-            
-            const status = btn.querySelector('.device-status');
-            status.textContent = isActive ? 'ON' : 'OFF';
+        }
+        field.replaceChildren(fragment);
+        document.addEventListener('visibilitychange', () => {
+            field.classList.toggle('is-paused', document.hidden);
+        });
+    }
+
+    updateFaceState(data) {
+        const orb = document.getElementById('aiOrb');
+        const mood = document.getElementById('animeMood');
+        if (!orb) return;
+
+        const mode = data.mode || 'neutral';
+        orb.className = `ai-orb ai-orb-${mode}`;
+        orb.closest('.anime-container').dataset.mode = mode;
+        if (mood) {
+            mood.textContent = mode.charAt(0).toUpperCase() + mode.slice(1);
         }
     }
 

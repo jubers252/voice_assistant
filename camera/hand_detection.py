@@ -1,5 +1,6 @@
 import os
 import socket
+import select
 import subprocess
 import threading
 import time
@@ -12,8 +13,22 @@ from mediapipe.tasks.python import vision as mp_vision
 import numpy as np
 
 from camera_display_control import is_camera_display_enabled, toggle_camera_display_enabled
-from camera_context import write_camera_context, write_tracking_angles, set_wake_request
-from face_track_servo import FaceTrackServo, MAX_ANGLE_LIMIT, PAN_NEUTRAL_ANGLE, TILT_NEUTRAL_ANGLE
+from camera_context import (
+    get_servo_adjustment,
+    write_camera_context,
+    write_tracking_angles,
+    set_wake_request,
+)
+from face_track_servo import (
+    FaceTrackServo,
+    MAX_ANGLE_LIMIT,
+    PAN_MIN_ANGLE,
+    PAN_MAX_ANGLE,
+    PAN_NEUTRAL_ANGLE,
+    TILT_MIN_ANGLE,
+    TILT_MAX_ANGLE,
+    TILT_NEUTRAL_ANGLE,
+)
 from sensor_reader import SensorReader
 
 try:
@@ -37,7 +52,8 @@ CAMERA_INDEX = "0"
 WIDTH = 640
 HEIGHT = 480
 FPS = 30
-DETECT_EVERY_N_FRAMES = 4     # Detect every 4 frames for stable tracking
+FACE_DETECT_EVERY_N_FRAMES = 2  # Update face tracking up to 15 times per second at 30 FPS.
+DETECT_EVERY_N_FRAMES = 3      # Keep hand/gesture detection at 7.5 times per second.
 FACE_RECOGNITION_EVERY_N_FRAMES = 30  # Recognize every 30 frames (reduce CPU)
 PROCESS_SCALE = 0.35             # Much smaller = faster (was 0.5)
 FACE_DB_PATH = "my_db"
@@ -45,7 +61,9 @@ FACE_MATCH_TOLERANCE = 0.5
 CONTEXT_LOG_EVERY_N_FRAMES = 30
 CAMERA_CONTEXT_UPDATE_SECONDS = 2
 FACE_LOST_CENTER_DELAY = 1.5
-FACE_MOVE_THRESHOLD = 6
+TILT_SEARCH_RANGE_DEGREES = 20
+TILT_SEARCH_STEP_DEGREES = 1
+TILT_SEARCH_INTERVAL_SECONDS = 0.25
 WAKE_GESTURE_PATTERN = ("fist", "open_hand", "fist", "open_hand")
 WAKE_GESTURE_MAX_STEP_SECONDS = 1.2
 WAKE_GESTURE_TRIGGER_COOLDOWN_SECONDS = 2.0
@@ -55,8 +73,8 @@ FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 # Sensor-based tracking fallback
 SENSOR_PORT = os.getenv("SENSOR_PORT", "/dev/ttyAMA0")
 SENSOR_BAUDRATE = 256000
-SENSOR_TRACKING_TIMEOUT = 3.0  # Use sensor for 3 seconds if face lost
-SENSOR_FALLBACK_ENABLE = True  # Enable sensor fallback when face not detected
+SENSOR_TRACKING_TIMEOUT = 3.0  # Hold the last pan target after radar data goes stale.
+SENSOR_FALLBACK_ENABLE = True  # Enable radar pan tracking.
 
 DISPLAY_STATE_CHECK_SECONDS = 0.2
 DISPLAY_BUTTON_BOUNDS = (510, 40, 680, 105)
@@ -117,8 +135,9 @@ def _to_compat_face_result(detection_result, image_width, image_height):
 
 
 def servo_angles_to_pupil_angles(pan_angle, tilt_angle):
-    pan_ratio = (pan_angle - PAN_NEUTRAL_ANGLE) / MAX_ANGLE_LIMIT
-    tilt_ratio = (tilt_angle - TILT_NEUTRAL_ANGLE) / MAX_ANGLE_LIMIT
+    pan_ratio = (pan_angle - PAN_NEUTRAL_ANGLE) / PAN_MAX_ANGLE
+    tilt_span = max(TILT_NEUTRAL_ANGLE - TILT_MIN_ANGLE, TILT_MAX_ANGLE - TILT_NEUTRAL_ANGLE)
+    tilt_ratio = (tilt_angle - TILT_NEUTRAL_ANGLE) / tilt_span
 
     pan_ratio = max(-1.0, min(1.0, pan_ratio))
     tilt_ratio = max(-1.0, min(1.0, tilt_ratio))
@@ -151,6 +170,9 @@ def start_stream():
         str(HEIGHT),
         "--framerate",
         str(FPS),
+        # Focus once at startup, then hold to avoid continuous focus hunting.
+        "--autofocus-mode",
+        "auto",
         "--codec",
         "mjpeg",
         "--quality",
@@ -287,23 +309,34 @@ def read_frames(sock):
         if not data:
             break
 
-        buffer += data
-        if len(buffer) > max_buffer_size:
-            buffer = buffer[-max_buffer_size:]
-
+        latest_frame = None
         while True:
-            start = buffer.find(b"\xff\xd8")
-            end = buffer.find(b"\xff\xd9")
+            buffer += data
+            if len(buffer) > max_buffer_size:
+                buffer = buffer[-max_buffer_size:]
 
-            if start == -1 or end == -1 or end <= start:
+            while True:
+                start = buffer.find(b"\xff\xd8")
+                end = buffer.find(b"\xff\xd9")
+                if start == -1 or end == -1 or end <= start:
+                    break
+
+                jpg = buffer[start:end + 2]
+                buffer = buffer[end + 2:]
+                frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
+                if frame is not None:
+                    latest_frame = frame
+
+            # Discard queued old frames and track the newest complete frame.
+            readable, _, _ = select.select([sock], [], [], 0)
+            if not readable:
                 break
+            data = sock.recv(32768)
+            if not data:
+                return
 
-            jpg = buffer[start:end + 2]
-            buffer = buffer[end + 2:]
-            frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-
-            if frame is not None:
-                yield frame
+        if latest_frame is not None:
+            yield latest_frame
 
 
 def load_known_faces(db_path):
@@ -645,15 +678,19 @@ def point_in_display_button(x, y):
     return x1 <= x <= x2 and y1 <= y <= y2
 
 
-def process_detection_frame(frame, face_detector, hands):
+def process_detection_frame(frame, face_detector, hands, run_face=True, run_hands=True):
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
     frame_height, frame_width = rgb_frame.shape[:2]
 
-    face_result = face_detector.detect(mp_image)
-    hand_result = hands.detect(mp_image)
+    face_result = face_detector.detect(mp_image) if run_face else None
+    hand_result = hands.detect(mp_image) if run_hands else None
 
-    return _to_compat_face_result(face_result, frame_width, frame_height), hand_result
+    compat_face_result = (
+        _to_compat_face_result(face_result, frame_width, frame_height)
+        if run_face else None
+    )
+    return compat_face_result, hand_result
 
 
 def update_face_labels(frame, face_result, frame_count, known_encodings, known_names, last_labels):
@@ -765,9 +802,13 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
     last_context_face_count = 0
     last_context_update_at = 0
 
-    # Servo: track when face was last seen to avoid centering on brief drops
+    # Face detections own both pan and tilt; radar is only a fallback when no
+    # face is visible.
     last_face_seen_at = 0.0
-    last_tracked_center = None
+    tilt_search_direction = 1
+    next_tilt_search_at = 0.0
+    last_servo_command_id = 0
+    manual_servo_until = 0.0
 
     # Wake gesture detection state
     wake_gesture_state = {
@@ -778,11 +819,9 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
         "center": None,
     }
 
-    # Sensor-based fallback tracking state
-    using_sensor_fallback = False
-    last_sensor_reading_at = 0.0
+    using_radar_pan = False
 
-    display_enabled = is_camera_display_enabled(default=True)
+    display_enabled = is_camera_display_enabled(default=False)
     display_visible = set_display_visibility(display_enabled, False)
     last_display_state_check_at = 0.0
     toggle_requested = False
@@ -801,7 +840,7 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
             now = time.time()
 
             if now - last_display_state_check_at >= DISPLAY_STATE_CHECK_SECONDS:
-                display_enabled = is_camera_display_enabled(default=True)
+                display_enabled = is_camera_display_enabled(default=False)
                 display_visible = set_display_visibility(display_enabled, display_visible)
                 if display_visible:
                     cv2.setMouseCallback("Face and Hand Detection", _mouse_callback)
@@ -815,21 +854,30 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                     interpolation=cv2.INTER_LINEAR
                 )
 
-            # Run detection every N frames
-            if frame_count % DETECT_EVERY_N_FRAMES == 0:
-                latest_face_result, latest_hand_result = process_detection_frame(
+            # Run face detection more often than hand detection so tracking
+            # stays responsive without doubling the gesture model workload.
+            run_face_detection = frame_count % FACE_DETECT_EVERY_N_FRAMES == 0
+            run_hand_detection = frame_count % DETECT_EVERY_N_FRAMES == 0
+            if run_face_detection or run_hand_detection:
+                face_result, hand_result = process_detection_frame(
                     processing_frame,
                     face_detector,
                     hands,
+                    run_face=run_face_detection,
+                    run_hands=run_hand_detection,
                 )
-                latest_face_labels = update_face_labels(
-                    frame,
-                    latest_face_result,
-                    frame_count,
-                    known_encodings,
-                    known_names,
-                    latest_face_labels,
-                )
+                if run_face_detection:
+                    latest_face_result = face_result
+                    latest_face_labels = update_face_labels(
+                        frame,
+                        latest_face_result,
+                        frame_count,
+                        known_encodings,
+                        known_names,
+                        latest_face_labels,
+                    )
+                if run_hand_detection:
+                    latest_hand_result = hand_result
 
             # Update camera context from the latest detections and labels.
             latest_face_labels, last_context_face_count, last_context_update_at = update_camera_context(
@@ -858,69 +906,92 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                 cv2.putText(frame, progress_text, (10, frame.shape[0] - 20),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             
-            # Draw sensor fallback status indicator
-            if using_sensor_fallback:
-                sensor_status = "● SENSOR TRACKING ACTIVE"
-                cv2.putText(frame, sensor_status, (10, 50),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+            face_visible = bool(
+                latest_face_result and latest_face_result.detections
+            )
+            adjustment = get_servo_adjustment(after_command_id=last_servo_command_id)
+            if adjustment:
+                last_servo_command_id = adjustment["command_id"]
+                if adjustment.get("pan_angle") is not None:
+                    servo_tracker.move_pan_to_angle(adjustment["pan_angle"])
+                if adjustment.get("tilt_angle") is not None:
+                    servo_tracker.move_tilt_to_angle(adjustment["tilt_angle"])
+                manual_servo_until = now + adjustment["hold_seconds"]
+                publish_tracking_angles(servo_tracker)
+                print(
+                    "[CAMERA] Agent servo adjustment: "
+                    f"pan {servo_tracker.last_pan_angle:.1f}°, "
+                    f"tilt {servo_tracker.last_tilt_angle:.1f}°; "
+                    f"holding face tracking for {adjustment['hold_seconds']:.1f}s",
+                    flush=True,
+                )
 
-            # Track face with servo ONLY when face actually moves
-            if frame_count % DETECT_EVERY_N_FRAMES == 0:
-                if latest_face_result and latest_face_result.detections:
-                    # Face detected - use face-based tracking
+            if run_face_detection and now >= manual_servo_until:
+                if face_visible:
                     primary_face = latest_face_result.detections[0]
                     face_bbox = get_face_bbox(primary_face, frame.shape[1], frame.shape[0])
-                    center_x = face_bbox['x'] + face_bbox['width'] // 2
-                    center_y = face_bbox['y'] + face_bbox['height'] // 2
-
-                    moved_enough = (
-                        last_tracked_center is None or
-                        abs(center_x - last_tracked_center[0]) > FACE_MOVE_THRESHOLD or
-                        abs(center_y - last_tracked_center[1]) > FACE_MOVE_THRESHOLD
-                    )
-
-                    if moved_enough:
-                        servo_tracker.track_face(face_bbox)
-                        last_tracked_center = (center_x, center_y)
-
+                    _, tilt_correction = servo_tracker.bbox_to_angles(face_bbox)
+                    if tilt_correction:
+                        tilt_search_direction = 1 if tilt_correction > 0 else -1
+                    servo_tracker.track_face(face_bbox)
                     publish_tracking_angles(servo_tracker)
                     last_face_seen_at = now
-                    using_sensor_fallback = False
+                    using_radar_pan = False
                 else:
-                    # No face detected - try sensor fallback tracking if available
-                    if sensor_reader and SENSOR_FALLBACK_ENABLE:
-                        sensor_sample = sensor_reader.get_latest()
-                        
-                        if sensor_sample:
-                            # We have recent sensor data - use it for tracking
-                            if not using_sensor_fallback:
-                                print(f"[TRACKING] Face lost, switching to sensor-based tracking", flush=True)
-                                using_sensor_fallback = True
-                            
-                            # Convert sensor pan angle to servo movement using safe method
-                            pan_angle = sensor_sample.get('pan_angle', 0)
-                            servo_tracker.move_pan_to_angle(pan_angle)
+                    # Radar may help reacquire a face after it leaves view,
+                    # but cannot override face-based tracking while visible.
+                    sensor_sample = (
+                        sensor_reader.get_latest()
+                        if sensor_reader and SENSOR_FALLBACK_ENABLE
+                        else None
+                    )
+                    using_radar_pan = bool(
+                        sensor_sample
+                        and now - sensor_sample.get("timestamp", 0) <= SENSOR_TRACKING_TIMEOUT
+                    )
+                    if using_radar_pan:
+                        previous_pan = servo_tracker.last_pan_angle
+                        servo_tracker.move_pan_to_angle(sensor_sample.get("pan_angle", 0))
+                        if servo_tracker.last_pan_angle != previous_pan:
                             publish_tracking_angles(servo_tracker)
-                            last_sensor_reading_at = now
-                        elif using_sensor_fallback:
-                            # Lost sensor reading, check timeout
-                            if now - last_sensor_reading_at > SENSOR_TRACKING_TIMEOUT:
-                                print(f"[TRACKING] Sensor fallback timeout, centering", flush=True)
-                                servo_tracker.center()
-                                publish_tracking_angles(servo_tracker)
-                                using_sensor_fallback = False
-                    else:
-                        # No face and no sensor - center servo after delay
-                        if now - last_face_seen_at > FACE_LOST_CENTER_DELAY and not using_sensor_fallback:
-                            servo_tracker.center()
+                        cv2.putText(frame, "● RADAR REACQUIRE", (10, 50),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+
+                if not face_visible and now - last_face_seen_at >= FACE_LOST_CENTER_DELAY:
+                    # Search only around the configured default tilt position.
+                    # The endpoints are hard limits for this recovery motion.
+                    if now >= next_tilt_search_at:
+                        lower = max(
+                            TILT_MIN_ANGLE,
+                            TILT_NEUTRAL_ANGLE - TILT_SEARCH_RANGE_DEGREES,
+                        )
+                        upper = min(
+                            TILT_MAX_ANGLE,
+                            TILT_NEUTRAL_ANGLE + TILT_SEARCH_RANGE_DEGREES,
+                        )
+                        target_tilt = (
+                            servo_tracker.last_tilt_angle
+                            + tilt_search_direction * TILT_SEARCH_STEP_DEGREES
+                        )
+                        if target_tilt >= upper:
+                            target_tilt = upper
+                            tilt_search_direction = -1
+                        elif target_tilt <= lower:
+                            target_tilt = lower
+                            tilt_search_direction = 1
+
+                        previous_tilt = servo_tracker.last_tilt_angle
+                        servo_tracker.move_tilt_to_angle(target_tilt)
+                        if servo_tracker.last_tilt_angle != previous_tilt:
                             publish_tracking_angles(servo_tracker)
+                        next_tilt_search_at = now + TILT_SEARCH_INTERVAL_SECONDS
             
-            # Upscale frame to fill the 720x1280 vertical display
-            display_frame = cv2.resize(frame, (720, 1280), interpolation=cv2.INTER_LINEAR)
+            # Dashboard frames are published independently of the desktop window.
             if relay_server and frame_count % RELAY_PUBLISH_EVERY_N_FRAMES == 0:
                 relay_server.publish_frame(frame)
             if display_visible:
-                draw_display_toggle_button(display_frame, "Show Face")
+                display_frame = cv2.resize(frame, (720, 1280), interpolation=cv2.INTER_LINEAR)
+                draw_display_toggle_button(display_frame, "Hide Camera")
                 cv2.imshow("Face and Hand Detection", display_frame)
 
                 key = cv2.waitKey(1) & 0xFF

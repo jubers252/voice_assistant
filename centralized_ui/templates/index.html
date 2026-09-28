@@ -68,9 +68,10 @@
                         </button>
                     </div>
                     <div class="camera-container">
-                        <img id="cameraFeed" src="/video_feed" alt="Camera Feed" class="camera-feed">
+                        <img id="cameraFeed" alt="Camera Feed" class="camera-feed" hidden>
+                        <p id="cameraMessage">Waiting for camera. Start the assistant to connect.</p>
                         <div class="camera-overlay">
-                            <span id="cameraStatus" class="status-badge">Live</span>
+                            <span id="cameraStatus" class="status-badge">Waiting</span>
                         </div>
                     </div>
                 </div>
@@ -85,10 +86,11 @@
                             <span>ON</span>
                         </button>
                     </div>
-                    <div class="anime-container">
-                        <img id="animeFace" src="/anime_feed" alt="Anime Face" class="anime-face-large">
+                    <div class="anime-container" data-mode="neutral">
+                        <div id="orbParticles" class="orb-particles" aria-hidden="true"></div>
+                        <div id="aiOrb" class="ai-orb ai-orb-neutral"></div>
                         <div class="anime-info">
-                            <p id="animeMood">Happy</p>
+                            <p id="animeMood">Neutral</p>
                         </div>
                     </div>
                 </div>
@@ -140,6 +142,7 @@
                 <div class="widget-full">
                     <div class="widget-header">
                         <h2>🎵 Music Player</h2>
+                        <span id="musicMessage" role="status">Start a song using voice</span>
                     </div>
                     <div class="music-player-full">
                         <!-- Album Art -->
@@ -150,25 +153,25 @@
                         <!-- Track Info -->
                         <div class="track-info-large">
                             <h3 id="trackTitle">No Track Playing</h3>
-                            <p id="trackArtist">Unknown Artist</p>
+                            <p id="trackArtist">YouTube</p>
                         </div>
 
                         <!-- Progress Bar -->
                         <div class="progress-container-large">
                             <span id="musicCurrentTime" class="time">0:00</span>
-                            <input type="range" id="progressBar" class="progress-bar" min="0" max="100" value="0">
+                            <input type="range" id="progressBar" aria-label="Playback position" disabled class="progress-bar" min="0" max="100" value="0">
                             <span id="duration" class="time">0:00</span>
                         </div>
 
                         <!-- Controls -->
                         <div class="player-controls-large">
-                            <button id="prevBtn" class="control-btn-large" title="Previous">
+                            <button id="prevBtn" disabled class="control-btn-large" title="Previous">
                                 <span>⏮️</span>
                             </button>
-                            <button id="playPauseBtn" class="control-btn-large play-btn-large" title="Play/Pause">
+                            <button id="playPauseBtn" disabled class="control-btn-large play-btn-large" title="Play/Pause">
                                 <span>▶️</span>
                             </button>
-                            <button id="nextBtn" class="control-btn-large" title="Next">
+                            <button id="nextBtn" disabled class="control-btn-large" title="Next">
                                 <span>⏭️</span>
                             </button>
                         </div>
@@ -176,7 +179,7 @@
                         <!-- Volume Control -->
                         <div class="volume-control-large">
                             <span>🔊</span>
-                            <input type="range" id="volumeSlider" class="volume-slider" min="0" max="100" value="70">
+                            <input type="range" id="volumeSlider" aria-label="Volume" disabled class="volume-slider" min="0" max="100" value="70">
                             <span id="volumeValue">70%</span>
                         </div>
 
@@ -199,18 +202,19 @@
                     <div class="widget-header">
                         <h2>🏠 Home Automation</h2>
                     </div>
+                    <p id="automationMessage" role="status" aria-live="polite">Reading device states…</p>
                     <div class="automation-container">
-                        <button class="automation-btn-large" id="lightToggle" data-device="light">
+                        <button class="automation-btn-large" id="lightToggle" data-device="light" disabled aria-pressed="false">
                             <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
                                 <circle cx="50" cy="35" r="20" fill="#FFD700" stroke="#FFA500" stroke-width="2"/>
                                 <path d="M 40 55 L 45 60 L 45 75 L 55 75 L 55 60 L 60 55" fill="none" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
                                 <line x1="45" y1="75" x2="45" y2="85" stroke="#FFD700" stroke-width="2"/>
                                 <line x1="55" y1="75" x2="55" y2="85" stroke="#FFD700" stroke-width="2"/>
                             </svg>
-                            <span class="device-name">Lights</span>
-                            <span class="device-status">OFF</span>
+                            <span class="device-name">Light</span>
+                            <span class="device-status">Loading…</span>
                         </button>
-                        <button class="automation-btn-large" id="fanToggle" data-device="fan">
+                        <button class="automation-btn-large" id="fanToggle" data-device="fan" disabled aria-pressed="false">
                             <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
                                 <circle cx="50" cy="50" r="8" fill="#00D4FF" stroke="#00A8CC" stroke-width="1"/>
                                 <circle cx="50" cy="20" r="12" fill="none" stroke="#00D4FF" stroke-width="2" opacity="0.8"/>
@@ -219,25 +223,23 @@
                                 <circle cx="20" cy="50" r="12" fill="none" stroke="#00D4FF" stroke-width="2" opacity="0.8"/>
                             </svg>
                             <span class="device-name">Fan</span>
-                            <span class="device-status">OFF</span>
+                            <span class="device-status">Loading…</span>
                         </button>
-                        <button class="automation-btn-large" id="acToggle" data-device="ac">
-                            <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M 30 25 L 50 10 L 70 25 L 60 35 L 50 28 L 40 35 Z" fill="#00BFFF" stroke="#0099CC" stroke-width="1.5"/>
-                                <path d="M 30 50 L 50 35 L 70 50 L 60 60 L 50 53 L 40 60 Z" fill="#00BFFF" stroke="#0099CC" stroke-width="1.5"/>
-                                <path d="M 30 75 L 50 60 L 70 75 L 60 85 L 50 78 L 40 85 Z" fill="#00BFFF" stroke="#0099CC" stroke-width="1.5"/>
+                        <button class="automation-btn-large" id="zeroToggle" data-device="zero" disabled aria-pressed="false">
+                            <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                <path d="M65 18 A32 32 0 1 0 80 68 A30 30 0 0 1 65 18Z" fill="#FFD700" stroke="#FFA500" stroke-width="2"/>
                             </svg>
-                            <span class="device-name">AC</span>
-                            <span class="device-status">OFF</span>
+                            <span class="device-name">Zero Light</span>
+                            <span class="device-status">Loading…</span>
                         </button>
-                        <button class="automation-btn-large" id="doorbellToggle" data-device="doorbell">
+                        <button class="automation-btn-large" id="doorbellToggle" data-device="doorbell" disabled title="Doorbell setup will be added later">
                             <svg class="device-icon-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
                                 <path d="M 35 40 L 50 25 L 65 40 L 65 70 Q 65 80 50 85 Q 35 80 35 70 Z" fill="#FF9800" stroke="#FF6F00" stroke-width="2"/>
                                 <circle cx="50" cy="50" r="8" fill="#FFD700" stroke="#FF9800" stroke-width="1.5"/>
                                 <path d="M 50 90 L 50 95 L 45 95 L 45 97 L 55 97 L 55 95 L 50 95" fill="#888" stroke="#666" stroke-width="1"/>
                             </svg>
                             <span class="device-name">Doorbell</span>
-                            <span class="device-status">ARMED</span>
+                            <span class="device-status">Not configured</span>
                         </button>
                     </div>
                 </div>

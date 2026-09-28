@@ -9,6 +9,7 @@ import time
 import json
 import ctypes
 import speech_recognition as sr
+import requests
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
@@ -28,17 +29,14 @@ from handlers.strands_agent_handler import StrandsAgent
 
 from strands.models.openai import OpenAIModel
 from handlers.wake_word_manager import WakeWordManager
-from camera.camera_context import add_camera_context_to_command, clear_wake_request, get_wake_request, read_tracking_angles
-from anime_face_display import FaceDisplayController
+from camera.camera_context import add_camera_context_to_command, clear_wake_request, get_wake_request
 
 load_dotenv()
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_EVENTS_FILE = os.path.join(current_dir, "events.json")
-DISPLAY_SYNC_INTERVAL = 0.2
 
 # Display configuration via environment variables
-ENABLE_ANIME_FACE_DISPLAY = os.getenv("ENABLE_ANIME_FACE_DISPLAY", "false").lower() in ("true", "1", "yes")
 ENABLE_CAMERA_DISPLAY = os.getenv("ENABLE_CAMERA_DISPLAY", "false").lower() in ("true", "1", "yes")
 
 # Centralized UI configuration
@@ -68,10 +66,6 @@ class VoiceAssistant:
         """Initialize all components"""
         print("[INIT] Voice Assistant Starting...\n")
         self.camera_process = None
-        self.face_display = None
-        self.camera_display_enabled = False
-        self.display_sync_stop_event = threading.Event()
-        self.display_sync_thread = None
         self.current_user = "default_user"
         self.wake_manager = None
         self.wake_request_stop_event = threading.Event()
@@ -100,78 +94,28 @@ class VoiceAssistant:
         self.pixel_led = PixelLEDController(led_count=26, brightness=1.0, simulate=False)
         self.pixel_led.off()
         set_camera_display_enabled(ENABLE_CAMERA_DISPLAY)
-        self.face_display = FaceDisplayController(mode="neutral")
-        if ENABLE_ANIME_FACE_DISPLAY:
-            self.face_display.start()
-            print(f"[INIT] Anime face display enabled")
-        else:
-            print(f"[INIT] Anime face display disabled (set ENABLE_ANIME_FACE_DISPLAY=true to enable)")
-        self._start_display_sync()
 
     def _set_face_mode(self, mode: str):
-        if self.camera_display_enabled:
-            return
-        if self.face_display is None or not self.face_display.is_running():
-            return
+        # Mirror the state to the centralized UI dashboard (best-effort, non-blocking).
+        threading.Thread(target=self._notify_ui_face_state, args=(mode,), daemon=True).start()
+
+    def _notify_ui_face_state(self, mode: str):
         try:
-            self.face_display.set_mode(mode)
-        except Exception as e:
-            print(f"[FACE] Failed to set mode '{mode}': {e}")
+            requests.post(
+                f"http://localhost:{CENTRALIZED_UI_PORT}/api/face_state",
+                json={"mode": mode},
+                timeout=1,
+            )
+        except Exception:
+            pass  # Dashboard may not be running; safe to ignore.
 
     def set_camera_display(self, enabled: bool):
         enabled = bool(enabled)
         set_camera_display_enabled(enabled)
-        self.camera_display_enabled = enabled
-
-        if enabled:
-            if self.face_display is not None:
-                self.face_display.hide()
-            print("[DISPLAY] Camera tracking window enabled.")
-            return
-
-        if self.face_display is not None:
-            self.face_display.show()
-        print("[DISPLAY] Anime face window enabled.")
+        print(f"[DISPLAY] Camera tracking window {'enabled' if enabled else 'disabled'}.")
 
     def toggle_camera_display(self):
-        self.set_camera_display(not self.camera_display_enabled)
-
-    def _display_sync_loop(self):
-        while not self.display_sync_stop_event.is_set():
-            enabled = is_camera_display_enabled(default=False)
-            self.camera_display_enabled = enabled
-
-            # Only sync face display if anime face display is enabled and running
-            if ENABLE_ANIME_FACE_DISPLAY and self.face_display is not None and self.face_display.is_running():
-                tracking_angles = read_tracking_angles()
-                self.face_display.set_pupil_angles(
-                    tracking_angles.get("pupil_pan_angle", 0.0),
-                    tracking_angles.get("pupil_tilt_angle", 0.0),
-                )
-                if enabled:
-                    self.face_display.hide()
-                else:
-                    self.face_display.show()
-            self.display_sync_stop_event.wait(DISPLAY_SYNC_INTERVAL)
-
-    def _start_display_sync(self):
-        if self.display_sync_thread and self.display_sync_thread.is_alive():
-            return
-
-        self.display_sync_stop_event.clear()
-        self.display_sync_thread = threading.Thread(
-            target=self._display_sync_loop,
-            name="display-sync",
-            daemon=True,
-        )
-        self.display_sync_thread.start()
-
-    def _stop_display_sync(self):
-        self.display_sync_stop_event.set()
-        if self.display_sync_thread and self.display_sync_thread.is_alive():
-            self.display_sync_thread.join(timeout=1.0)
-        self.display_sync_thread = None
-
+        self.set_camera_display(not is_camera_display_enabled(default=False))
 
     def _initialize_audio_and_recognizer(self):
         self.audio_processors = AudioProcessors()
@@ -206,13 +150,18 @@ class VoiceAssistant:
 
         openai_api_key = os.getenv("OPENAI_API_KEY")
         model = OpenAIModel(
-            model_id="gpt-5.4-mini",
+            model_id="gpt-6-luna",
             client_args={"api_key": openai_api_key},
-            params={"temperature": 0.7, "max_completion_tokens": 2000},
+            # Strands' OpenAI chat-completions backend does not support a
+            # non-default reasoning effort for function/tool calls. Keep it
+            # explicitly disabled for gpt-6-luna on this endpoint.
+            params={
+                "temperature": 0.7,
+                "max_completion_tokens": 2000,
+                "reasoning_effort": "none",
+            },
         )
 
-        print(f"[INIT] Face Display Controller: {self.face_display}")
-        print(f"[INIT] Face Display Running: {self.face_display.is_running() if self.face_display else 'N/A'}")
         
         self.command_processor = StrandsAgent(
             session_id=self.current_user,
@@ -221,10 +170,8 @@ class VoiceAssistant:
             recognizer=self.recognizer,
             audio_processors=self.audio_processors,
             state_callback=self._set_face_mode,
-            face_display=self.face_display,
         )
         
-        print(f"[INIT] Agent Created with face_display: {self.command_processor.face_display}")
 
 
     def _initialize_scheduling(self):
@@ -623,9 +570,6 @@ class VoiceAssistant:
 
         self.pixel_led.off()
         set_camera_display_enabled(False)
-        self._stop_display_sync()
-        if self.face_display is not None:
-            self.face_display.stop()
         self.event_scheduler.stop()
         self.event_executor.shutdown(wait=True)
         self._stop_camera_context_process()

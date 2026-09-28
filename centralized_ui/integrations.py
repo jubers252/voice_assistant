@@ -329,64 +329,6 @@ class HomeAutomationIntegration:
 
 
 # ============================================
-# ANIME FACE INTEGRATION
-# ============================================
-
-class AnimeFaceIntegration:
-    """Integrate with anime face display"""
-    
-    def __init__(self):
-        self.anime = None
-        
-    def initialize(self):
-        """Initialize anime face"""
-        try:
-            from anime_face_display import AnimeFaceDisplay
-            self.anime = AnimeFaceDisplay()
-            logger.info("Anime face display initialized")
-            return True
-        except ImportError as e:
-            logger.warning(f"Anime face module not found: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Anime face initialization error: {e}")
-            return False
-    
-    def set_emotion(self, emotion):
-        """Set anime face emotion"""
-        try:
-            if self.anime:
-                self.anime.set_emotion(emotion)
-                logger.info(f"Emotion set to: {emotion}")
-                return True
-        except Exception as e:
-            logger.error(f"Anime emotion error: {e}")
-            return False
-    
-    def start(self):
-        """Start anime face display"""
-        try:
-            if self.anime:
-                self.anime.start()
-                logger.info("Anime face started")
-                return True
-        except Exception as e:
-            logger.error(f"Anime start error: {e}")
-            return False
-    
-    def stop(self):
-        """Stop anime face display"""
-        try:
-            if self.anime:
-                self.anime.stop()
-                logger.info("Anime face stopped")
-                return True
-        except Exception as e:
-            logger.error(f"Anime stop error: {e}")
-            return False
-
-
-# ============================================
 # INTEGRATION MANAGER
 # ============================================
 
@@ -398,7 +340,6 @@ class IntegrationManager:
         self.weather = WeatherIntegration()
         self.music = MusicIntegration()
         self.automation = HomeAutomationIntegration()
-        self.anime = AnimeFaceIntegration()
         
     def initialize_all(self):
         """Initialize all available integrations"""
@@ -407,7 +348,6 @@ class IntegrationManager:
             'weather': self.weather.initialize(),
             'music': self.music.initialize(),
             'automation': self.automation.initialize(),
-            'anime': self.anime.initialize(),
         }
         
         logger.info(f"Integration results: {results}")
@@ -420,7 +360,6 @@ class IntegrationManager:
             'weather': self.weather.weather is not None,
             'music': self.music.current_provider is not None,
             'automation': self.automation.automation is not None,
-            'anime': self.anime.anime is not None,
         }
 
 

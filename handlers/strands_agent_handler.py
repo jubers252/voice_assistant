@@ -24,8 +24,10 @@ import warnings
 import urllib3
 import gc
 import cv2
+import math
 from connectors.zepto_order_database import ZeptoOrderDatabase
 from connectors.capture_while_running import capture_images_from_running_stream
+from camera.camera_context import request_servo_adjustment
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -61,33 +63,11 @@ from audio.audio_processor import AudioProcessors
 warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
 load_dotenv()
 
-openai_api_key = os.getenv("OPENAI_API_KEY")
-
 class StrandsAgent(Agent):
     """Strands Agent with tool usage and dynamic prompt generation"""
 
-    FACE_NUMBER_TO_MODE = {
-        "1": "neutral",
-        "2": "happy",
-        "3": "sad",
-        "4": "thinking",
-        "5": "listening",
-        "6": "speaking",
-        "7": "laughing",
-        "8": "dead",
-    }
-    FACE_SUPPORTED_MODES = tuple(FACE_NUMBER_TO_MODE.values())
-    HUMOR_TRIGGER_TERMS = (
-        "joke",
-        "funny",
-        "humor",
-        "humour",
-        "make me laugh",
-        "laugh",
-        "comedy",
-    )
     
-    def __init__(self, session_id: str, model:OpenAIModel, pixel_led=None, recognizer=None, audio_processors=None, state_callback=None, face_display=None):
+    def __init__(self, session_id: str, model:OpenAIModel, pixel_led=None, recognizer=None, audio_processors=None, state_callback=None):
         """Initialize the agent with connectors, conversation manager, and dynamic prompt generator."""
         
         # Initialize connectors
@@ -101,8 +81,6 @@ class StrandsAgent(Agent):
         self.home_automation = HomeAutomation()
         self.audio_processors = audio_processors or AudioProcessors()
         self.state_callback = state_callback
-        self.face_display = face_display
-        print(f"[AGENT INIT] Face Display: {self.face_display}")
       
         self.pixel_led = pixel_led
         if self.audio_processors:
@@ -129,17 +107,57 @@ class StrandsAgent(Agent):
             session_id=session_id,
             session_repository=repo
         )
-        # embedding model for rag
-        openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-                api_key= openai_api_key,
-                model_name="text-embedding-3-small"
-                )
-
         client = chromadb.PersistentClient(path="./chroma_memory")
+        local_ef = embedding_functions.DefaultEmbeddingFunction()
         self.collection = client.get_or_create_collection(
-                name="chat_history", 
-                embedding_function=openai_ef
-            )
+            name="chat_history_local",
+            embedding_function=local_ef,
+        )
+
+        # Preserve prior conversation memory by re-embedding the old OpenAI-vector
+        # collection locally. Keep the old collection intact as a rollback copy.
+        legacy_collection = (
+            client.get_collection(name="chat_history")
+            if "chat_history" in client.list_collections()
+            else None
+        )
+        migration_marker = "local_embedding_migration_complete"
+        if not (self.collection.metadata or {}).get(migration_marker):
+            migrated_ids = set()
+            offset = 0
+            page_size = 500
+            if legacy_collection is not None:
+                while True:
+                    batch = legacy_collection.get(
+                        limit=page_size,
+                        offset=offset,
+                        include=["documents", "metadatas"],
+                    )
+                    ids = batch.get("ids", [])
+                    if not ids:
+                        break
+
+                    # Skip already-copied records if startup is retried after an
+                    # interrupted migration.
+                    existing = self.collection.get(ids=ids, include=[]).get("ids", [])
+                    existing_ids = set(existing)
+                    missing_indices = [i for i, record_id in enumerate(ids) if record_id not in existing_ids]
+                    if missing_indices:
+                        documents = batch.get("documents") or []
+                        metadatas = batch.get("metadatas") or []
+                        self.collection.upsert(
+                            ids=[ids[i] for i in missing_indices],
+                            documents=[documents[i] for i in missing_indices],
+                            metadatas=[metadatas[i] for i in missing_indices] if metadatas else None,
+                        )
+                        migrated_ids.update(ids[i] for i in missing_indices)
+
+                    offset += len(ids)
+
+            metadata = dict(self.collection.metadata or {})
+            metadata[migration_marker] = True
+            self.collection.modify(metadata=metadata)
+            print(f"[MEMORY] Local embeddings ready; copied {len(migrated_ids)} legacy records.")
 
         super().__init__(
             model=model,
@@ -167,7 +185,6 @@ class StrandsAgent(Agent):
                 self._create_telegram_document_tool,
                 self._create_telegram_video_tool,
                 self.control_system_volume,
-                self.set_face_expression_tool,
                 self._zepto_ordering_tool,
                 self._create_zepto_order_history_tool,
                 self._create_zepto_order_again_tool,
@@ -183,6 +200,7 @@ class StrandsAgent(Agent):
                 self.get_images_tool,
                 self.get_video_tool,
                 self.capture_camera_image_tool,
+                self.adjust_camera_servo_tool,
             ],
             session_manager=session_manager,
             conversation_manager=conv_manager
@@ -241,101 +259,6 @@ class StrandsAgent(Agent):
 
         similarity = difflib.SequenceMatcher(None, current, previous).ratio()
         return similarity >= 0.68
-
-
-    def _should_use_laughing_expression(self, user_command: str) -> bool:
-        """Return True when command is likely requesting humor/jokes."""
-        text = (user_command or "").lower()
-        return any(term in text for term in self.HUMOR_TRIGGER_TERMS)
-
-
-    def _normalize_face_mode(self, mode: str):
-        """Convert numeric or text input into a valid face mode."""
-        value = (mode or "").strip().lower()
-        if value in self.FACE_NUMBER_TO_MODE:
-            return self.FACE_NUMBER_TO_MODE[value]
-        if value in self.FACE_SUPPORTED_MODES:
-            return value
-        return None
-
-
-    def _extract_face_mode_from_command(self, user_command: str):
-        """Detect explicit face-expression requests in user text."""
-        text = (user_command or "").lower().strip()
-        if not text:
-            return None
-
-        # Numeric shortcuts used in your face controller (1-8)
-        for key, mode in self.FACE_NUMBER_TO_MODE.items():
-            if f" {key} " in f" {text} " or text.endswith(f" {key}") or text.startswith(f"{key} "):
-                return mode
-
-        # Explicit mode names
-        for mode in self.FACE_SUPPORTED_MODES:
-            if mode in text:
-                return mode
-
-        # Common synonyms
-        if "smile" in text or "excited" in text or "glad" in text:
-            return "happy"
-        if "depress" in text or "upset" in text or "unhappy" in text:
-            return "sad"
-
-        return None
-
-
-    def _apply_face_mode(self, mode: str) -> str:
-        """Apply face mode to available runtime controllers."""
-        if self.face_display is None and self.state_callback is None:
-            return "Face display is not available in this runtime."
-
-        applied = False
-        errors = []
-
-        if self.face_display is not None:
-            try:
-                self.face_display.show()
-                self.face_display.set_mode(mode)
-                applied = True
-            except Exception as e:
-                errors.append(f"face_display error: {e}")
-
-        if self.state_callback is not None:
-            try:
-                self.state_callback(mode)
-                applied = True
-            except Exception as e:
-                errors.append(f"state_callback error: {e}")
-
-        if applied:
-            return f"Face expression changed to {mode}."
-        return "Failed to set face mode. " + "; ".join(errors)
-
-
-    def _schedule_expression_after_speech(self, mode: str, hold_seconds: float | None = 2.5) -> None:
-        """Apply a face mode after TTS completes.
-
-        If hold_seconds is set, switch back to neutral after that duration.
-        If hold_seconds is None, keep the mode until changed later.
-        """
-        if hold_seconds is not None:
-            hold_seconds = max(1.0, hold_seconds)
-
-        def _worker():
-            try:
-                # Give the speak task a moment to start, then wait until it finishes.
-                time.sleep(0.15)
-                while getattr(self.audio_processors, "is_speaking", False):
-                    time.sleep(0.1)
-
-                self._apply_face_mode(mode)
-                if hold_seconds is not None:
-                    time.sleep(hold_seconds)
-                    self._apply_face_mode("neutral")
-            except Exception as e:
-                print(f"[FACE] Post-speech expression failed: {e}")
-
-        threading.Thread(target=_worker, name="post-speech-face", daemon=True).start()
 
 
     def _augment_command_with_speaker_hint(self, user_command: str) -> str:
@@ -459,41 +382,100 @@ class StrandsAgent(Agent):
             return [f"Error searching videos: {str(e)}"]
 
     @tool
-    def capture_camera_image_tool(self, note: str = "manual_test") -> str:
+    def capture_camera_image_tool(self, count: int = 1, note: str = "manual_test") -> dict:
         """
-        Capture a single image frame from the live camera stream and save it locally.
-        Use when user asks: 'take a photo', 'capture image', 'click picture'.
-        
+        Capture one frame by default, or up to five when explicitly requested.
+
+        Each captured JPEG is attached for visual analysis and saved to a stable
+        latest_NN.jpg path, overwriting the previous capture set.
+
         Args:
-            note: Optional label to include in filename context.
-        
-        Returns:
-            Status message containing saved file path.
+            count: Number of frames to capture, from 1 to 5 (default 1).
+            note: Optional label retained for compatibility with existing calls.
         """
-        return capture_images_from_running_stream(count=1, note=note)
+        try:
+            images = capture_images_from_running_stream(
+                count=count,
+                note=note,
+            )
+
+            paths = [image_path for _, image_path in images]
+            content = [{
+                "text": (
+                    f"Captured {len(images)} image(s). Images are attached for visual analysis. "
+                    f"Saved paths: {', '.join(paths)}"
+                )
+            }]
+            content.extend(
+                {
+                    "image": {
+                        "format": "jpeg",
+                        "source": {"bytes": image_bytes},
+                    }
+                }
+                for image_bytes, _ in images
+            )
+
+            return {
+                "status": "success",
+                "content": content,
+            }
+        except (OSError, ValueError, RuntimeError) as exc:
+            return {
+                "status": "error",
+                "content": [
+                    {
+                        "text": f"Could not capture image: {exc}"
+                    }
+                ],
+            }
 
     @tool
-    def set_face_expression_tool(self, mode: str) -> str:
-        """Set anime face expression.
-
-        Use when user asks to change avatar expression, face mood, or emotion.
-        Accepts either a mode name or number 1-8.
-
-        Supported values:
-            1 neutral
-            2 happy
-            3 sad
-            4 thinking
-            5 listening
-            6 speaking
-            7 laughing
-            8 dead
+    def adjust_camera_servo_tool(
+        self,
+        pan_angle: float | None = None,
+        tilt_angle: float | None = None,
+        hold_seconds: float = 4,
+    ) -> str:
         """
-        normalized_mode = self._normalize_face_mode(mode)
-        if normalized_mode is None:
-            options = ", ".join(self.FACE_SUPPORTED_MODES)
-            return f"Unsupported face mode '{mode}'. Supported: {options} or 1-8."
-        return self._apply_face_mode(normalized_mode)
+        Set the camera to absolute pan/tilt servo angles. Pan range is -90 degrees
+        (camera view right) to 90 degrees (view left); tilt range is 0 to 60
+        degrees, with larger tilt pointing down.
+
+        Args:
+            pan_angle: Target pan from -90 (view right) to 90 (view left). Omit to keep current pan.
+            tilt_angle: Target tilt angle from 0 to 60 degrees. Omit to keep current tilt.
+            hold_seconds: Pause face tracking after the move, from 1 to 8 seconds.
+        """
+        try:
+            hold_seconds = float(hold_seconds)
+            if pan_angle is None and tilt_angle is None:
+                raise ValueError("Specify pan_angle, tilt_angle, or both")
+            if pan_angle is not None:
+                pan_angle = float(pan_angle)
+                if not math.isfinite(pan_angle) or not -90 <= pan_angle <= 90:
+                    raise ValueError("pan_angle must be between -90 and 90 degrees")
+            if tilt_angle is not None:
+                tilt_angle = float(tilt_angle)
+                if not math.isfinite(tilt_angle) or not 0 <= tilt_angle <= 60:
+                    raise ValueError("tilt_angle must be between 0 and 60 degrees")
+            if not math.isfinite(hold_seconds):
+                raise ValueError("hold_seconds must be finite")
+            if not 1 <= hold_seconds <= 8:
+                raise ValueError("hold_seconds must be between 1 and 8")
+
+            request_servo_adjustment(pan_angle, tilt_angle, hold_seconds)
+            targets = []
+            if pan_angle is not None:
+                targets.append(f"pan {pan_angle:.1f} degrees")
+            if tilt_angle is not None:
+                targets.append(f"tilt {tilt_angle:.1f} degrees")
+            return (
+                f"Camera target queued: {', '.join(targets)}. Face tracking will resume "
+                f"after {hold_seconds:.1f} seconds."
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            return f"Could not adjust camera: {exc}"
 
     @tool
     def add_event_tool(self, event_time: dt_time, prompt: str, event_id: str = None):
@@ -1612,11 +1594,13 @@ class StrandsAgent(Agent):
             
             print(f"Found song: {song['title']}, starting playback...")
             # Play the song directly (not through executor to ensure global state is updated)
-            youtube_api.play_with_mpv(song["url"], song["title"])
+            youtube_api.play_with_mpv(song["url"], song["title"], song_info=song)
             
             vol_label = f" at {volume}%" if volume is not None else ""
             return f"Now playing: {song['title']} by {song['channel']}{vol_label}"
         except Exception as e:
+            if self.recognizer:
+                self.recognizer.set_music_playing(False)
             print(f"Song tool error: {e}")
             import traceback
             traceback.print_exc()
@@ -1644,6 +1628,8 @@ class StrandsAgent(Agent):
             vol_label = f" at {volume}%" if volume is not None else ""
             return f"Starting playlist '{playlist_name}' with {len(songs)} songs{vol_label}"
         except Exception as e:
+            if self.recognizer:
+                self.recognizer.set_music_playing(False)
             print(f"Playlist tool error: {e}")
             import traceback
             traceback.print_exc()
@@ -1671,6 +1657,8 @@ class StrandsAgent(Agent):
             vol_label = f" at {volume}%" if volume is not None else ""
             return f"Now playing songs by {artist_name} ({len(songs)} tracks){vol_label}"
         except Exception as e:
+            if self.recognizer:
+                self.recognizer.set_music_playing(False)
             print(f"Artist tool error: {e}")
             import traceback
             traceback.print_exc()
@@ -1687,13 +1675,13 @@ class StrandsAgent(Agent):
             print(f"Control action: {action_lower}")
             
             if action_lower in ['pause', 'stop']:
-                youtube_api.toggle_pause()
+                youtube_api.control_playback({'action': action_lower})
                 if self.recognizer:
                     self.recognizer.set_music_playing(False)
-                return "Music paused"
+                return "Music stopped" if action_lower == "stop" else "Music paused"
             
             elif action_lower in ['resume', 'continue', 'play']:
-                youtube_api.toggle_pause()
+                youtube_api.control_playback({'action': 'play'})
                 if self.recognizer:
                     self.recognizer.set_music_playing(True)
                 return "Music resumed"
@@ -1718,8 +1706,15 @@ class StrandsAgent(Agent):
 
     @tool
     def _create_follow_up_question_tool(self, input_text: str):
-        """Ask user a follow-up question, wait for answer. Input: the question to ask.
-        Args:    input_text: The question to speak to the user (e.g. 'Which city do you want the weather for?')"""
+        """Ask the user one question and wait for their spoken answer.
+
+        Use this whenever Sofi needs to ask the user something that expects a
+        reply, including clarification, missing details, choices, and
+        confirmation. Do not ask that question in ordinary response text.
+
+        Args:
+            input_text: The single question to speak to the user.
+        """
 
         try:
             question = input_text.strip()
@@ -1816,16 +1811,6 @@ class StrandsAgent(Agent):
                 if self.state_callback:
                     self.state_callback("thinking")
 
-                requested_mode = self._extract_face_mode_from_command(user_command)
-                is_humor_request = self._should_use_laughing_expression(user_command)
-
-                # Reliability fallback: ensure humor requests trigger laughing face.
-                if is_humor_request:
-                    try:
-                        self.set_face_expression_tool("7")
-                    except Exception as face_err:
-                        print(f"[FACE] Failed to set laughing expression: {face_err}")
-
                 # Use the current agent instance and the actual user command.
                 effective_command = self._augment_command_with_speaker_hint(user_command)
                 raw_response = self(effective_command)
@@ -1846,11 +1831,6 @@ class StrandsAgent(Agent):
                 # Avoid speaking the same follow-up question twice (tool already spoke it).
                 if not self._is_repeat_of_recent_follow_up(response_text):
                     self.executor.submit(self.audio_processors.speak, response_text)
-                    if requested_mode is not None:
-                        # Keep explicitly requested expression after TTS completes.
-                        self._schedule_expression_after_speech(requested_mode, hold_seconds=None)
-                    elif is_humor_request:
-                        self._schedule_expression_after_speech("7", hold_seconds=3.0)
                 else:
                     print("Skipping duplicate follow-up question speech from final response")
                     # No speak() call queued to turn the LED off later, so clear it now.
@@ -1878,40 +1858,4 @@ class StrandsAgent(Agent):
             finally:
                 self._agent_lock.release()
         
-if __name__ == "__main__":
-    # Example of initializing the agent and testing a tool
-    # NOTE: face_display is provided by VoiceAssistant in normal operation
-    # For standalone testing, create a FaceDisplayController if you want face expressions
-    from anime_face_display import FaceDisplayController
     
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-
-    model = OpenAIModel(
-        model_id="gpt-5.4-mini",
-        client_args={
-            "api_key": openai_api_key,
-        },
-        params={
-            "temperature": 0.7,
-            "max_completion_tokens": 2000
-        }
-    )
-    
-    # Initialize face display for testing
-    face_display = FaceDisplayController(mode="neutral")
-    face_display.start()
-    
-    my_pi_agent = StrandsAgent(model=model, session_id="pi_01", face_display=face_display)
-    
-    # Test joke - should trigger show_laughing_expression
-    print("\n=== Testing Joke ===")
-    response = my_pi_agent.process_user_command("Tell me a funny joke")
-    print(response)
-    
-    # Test happy expression
-    print("\n=== Testing Happy ===")
-    response2 = my_pi_agent.process_user_command("play saiyyara song")
-    print(response2)
-    
-    # Clean up
-    face_display.stop()

@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import base64
 from dataclasses import asdict
 from typing import Optional, List, Any
 from strands.session.session_repository import SessionRepository
@@ -69,17 +70,41 @@ class MySQLiteRepository(SessionRepository):
                 "SELECT data FROM strands_store WHERE key LIKE ? ORDER BY created_at ASC", 
                 (f"msg_{session_id}_{agent_id}_%",)
             )
-            return [SessionMessage.from_dict(json.loads(row[0])) for row in cursor.fetchall()]
+            return [
+                SessionMessage.from_dict(
+                    json.loads(row[0], object_hook=self._json_object_hook)
+                )
+                for row in cursor.fetchall()
+            ]
 
     # --- HELPERS ---
     def _write(self, key: str, data: dict):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("INSERT OR REPLACE INTO strands_store (key, data) VALUES (?, ?)", (key, json.dumps(data)))
+            conn.execute(
+                "INSERT OR REPLACE INTO strands_store (key, data) VALUES (?, ?)",
+                (key, json.dumps(data, default=self._json_default)),
+            )
 
     def _read(self, key: str) -> Optional[dict]:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT data FROM strands_store WHERE key = ?", (key,)).fetchone()
-            return json.loads(row[0]) if row else None
+        return json.loads(row[0], object_hook=self._json_object_hook) if row else None
+
+    @staticmethod
+    def _json_default(value: Any):
+        """Encode binary tool content so image attachments survive session storage."""
+        if isinstance(value, bytes):
+            return {
+                "__strands_binary__": base64.b64encode(value).decode("ascii"),
+            }
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+    @staticmethod
+    def _json_object_hook(value: dict):
+        encoded = value.get("__strands_binary__")
+        if len(value) == 1 and isinstance(encoded, str):
+            return base64.b64decode(encoded)
+        return value
             
     def _delete(self, key: str):
         with sqlite3.connect(self.db_path) as conn:

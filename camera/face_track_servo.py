@@ -1,18 +1,18 @@
-"""
-Face/Hand tracking with Pan/Tilt Servo control.
+"""Pan/tilt servo control for face tracking."""
 
-Takes bounding boxes from screen and converts them to pan/tilt angles.
-Smooths movements to avoid jittery servo motion.
-"""
-
-import time
 import math
+import time
 from collections import deque
+
 from rpi_hardware_pwm import HardwarePWM
 
 
-# --- Servo Configuration ---
-MAX_ANGLE_LIMIT = 70
+PAN_MIN_ANGLE = -90
+PAN_MAX_ANGLE = 90
+TILT_MIN_ANGLE = 0
+TILT_MAX_ANGLE = 90
+# Kept as an alias for the older backup tracker.
+MAX_ANGLE_LIMIT = PAN_MAX_ANGLE
 PAN_SERVO_CHANNEL = 0
 TILT_SERVO_CHANNEL = 1
 PWM_FREQUENCY = 50
@@ -20,327 +20,186 @@ CHIP = 0
 PAN_NEUTRAL_ANGLE = 0
 TILT_NEUTRAL_ANGLE = 50
 
-# --- Tracking Configuration ---
 SCREEN_WIDTH = 640
 SCREEN_HEIGHT = 480
-CENTER_X = SCREEN_WIDTH // 2
-CENTER_Y = SCREEN_HEIGHT // 2
+SMOOTHING_WINDOW = 3
+DEADZONE_PAN = 60
+DEADZONE_TILT = 80
+MAX_ANGLE_DELTA = 2
+MIN_ANGLE_CHANGE = 0.6
+TRACKING_GAIN = 0.20
+PAN_DEG_PER_PIXEL = PAN_MAX_ANGLE / (SCREEN_WIDTH // 2)
+TILT_DEG_PER_PIXEL = TILT_MAX_ANGLE / (SCREEN_HEIGHT // 2)
 
-# Smoothing: number of detection updates to average (not frames)
-SMOOTHING_WINDOW = 7
 
-# Tracking deadzone: ignore small movements (pixels)
-# Face must be this many pixels off-center before servo moves at all
-DEADZONE_PAN = 50
-DEADZONE_TILT = 70
-
-# Max angle change per detection update (degrees)
-MAX_ANGLE_DELTA = 5
-
-# --- Calibration: Angle-to-Screen mapping ---
-# How many degrees per pixel of screen movement
-# Adjust these based on your servo FOV and camera
-PAN_DEG_PER_PIXEL = 70.0 / (SCREEN_WIDTH // 2)    # degrees per pixel
-TILT_DEG_PER_PIXEL = 70.0 / (SCREEN_HEIGHT // 2)   # degrees per pixel
-
-# Center offset corrections
-PAN_CENTER_OFFSET = PAN_NEUTRAL_ANGLE
-TILT_CENTER_OFFSET = TILT_NEUTRAL_ANGLE
+def _clamp(angle, minimum, maximum):
+    return max(minimum, min(maximum, float(angle)))
 
 
 class FaceTrackServo:
+    """Convert face positions or sensor readings into smoothed servo motion."""
+
     def __init__(self, verbose=False):
-        """Initialize servo control for face tracking."""
         self.verbose = verbose
         self.pan_pwm = None
         self.tilt_pwm = None
-        
-        # Smoothing buffers
         self.pan_angle_buffer = deque(maxlen=SMOOTHING_WINDOW)
         self.tilt_angle_buffer = deque(maxlen=SMOOTHING_WINDOW)
-        
-        # Last command for delta limiting
         self.last_pan_angle = PAN_NEUTRAL_ANGLE
         self.last_tilt_angle = TILT_NEUTRAL_ANGLE
-        
         self.initialized = False
-    
+
+    @staticmethod
+    def angle_to_duty_cycle(angle):
+        # A 180-degree pan servo maps -90..90 onto its 0.6..2.4 ms pulse range.
+        angle = _clamp(angle, PAN_MIN_ANGLE, PAN_MAX_ANGLE)
+        pulse_ms = 1.5 + (angle / 90.0) * 0.9
+        return pulse_ms / 20.0 * 100
+
     def initialize(self):
-        """Initialize PWM hardware."""
         try:
-            print("Initializing Hardware PWM for face tracking...")
-            self.pan_pwm = HardwarePWM(pwm_channel=PAN_SERVO_CHANNEL, hz=PWM_FREQUENCY, chip=CHIP)
-            self.tilt_pwm = HardwarePWM(pwm_channel=TILT_SERVO_CHANNEL, hz=PWM_FREQUENCY, chip=CHIP)
-            
-            # Start at the calibrated neutral position.
+            print("Initializing hardware PWM for face tracking...")
+            self.pan_pwm = HardwarePWM(
+                pwm_channel=PAN_SERVO_CHANNEL, hz=PWM_FREQUENCY, chip=CHIP
+            )
+            self.tilt_pwm = HardwarePWM(
+                pwm_channel=TILT_SERVO_CHANNEL, hz=PWM_FREQUENCY, chip=CHIP
+            )
             self.pan_pwm.start(self.angle_to_duty_cycle(PAN_NEUTRAL_ANGLE))
             self.tilt_pwm.start(self.angle_to_duty_cycle(TILT_NEUTRAL_ANGLE))
-            
             time.sleep(0.5)
             self.initialized = True
             print("Face tracking servos initialized.")
             return True
-        except Exception as e:
-            print(f"Error initializing servos: {e}")
+        except Exception as error:
+            print(f"Error initializing servos: {error}")
             self.initialized = False
             return False
-    
-    def angle_to_duty_cycle(self, angle):
-        """Convert angle (-MAX_ANGLE_LIMIT to +MAX_ANGLE_LIMIT) to PWM duty cycle %."""
-        angle = max(-MAX_ANGLE_LIMIT, min(MAX_ANGLE_LIMIT, angle))
-        pulse_ms = 1.5 + (angle / 80.0) * 0.9
-        duty_cycle = (pulse_ms / 20.0) * 100
-        return duty_cycle
-    
-    def bbox_to_angles(self, bbox):
-        """
-        Convert bounding box to pan/tilt correction angles.
-        
-        bbox: dict with keys:
-            'x': left edge (pixels)
-            'y': top edge (pixels)
-            'width': bbox width (pixels)
-            'height': bbox height (pixels)
-        
-        Returns: (pan_delta, tilt_delta) in degrees
-        """
+
+    @staticmethod
+    def bbox_to_angles(bbox):
+        """Return pan and tilt corrections for a pixel bounding box."""
         if not bbox:
             return None, None
-        
-        # Get bounding box center
-        bbox_center_x = bbox['x'] + bbox['width'] // 2
-        bbox_center_y = bbox['y'] + bbox['height'] // 2
-        
-        # Calculate offset from screen center
-        offset_x = bbox_center_x - CENTER_X
-        offset_y = bbox_center_y - CENTER_Y
-        
-        # Apply separate deadzones for pan and tilt
+
+        center_x = bbox["x"] + bbox["width"] // 2
+        center_y = bbox["y"] + bbox["height"] // 2
+        offset_x = center_x - SCREEN_WIDTH // 2
+        offset_y = center_y - SCREEN_HEIGHT // 2
         if abs(offset_x) < DEADZONE_PAN:
             offset_x = 0
         if abs(offset_y) < DEADZONE_TILT:
             offset_y = 0
-        
-        # Convert screen offset into servo corrections.
-        # When the face is centered, both corrections become 0 and the
-        # tracker holds the current pan/tilt angles instead of drifting
-        # back toward the neutral mount position.
-        pan_delta = -(offset_x * PAN_DEG_PER_PIXEL)
-        tilt_delta = offset_y * TILT_DEG_PER_PIXEL
+        return -offset_x * PAN_DEG_PER_PIXEL, offset_y * TILT_DEG_PER_PIXEL
 
-        return pan_delta, tilt_delta
-    
-    def smooth_angle(self, target_angle, buffer):
-        """Apply exponential smoothing to servo angle."""
-        if target_angle is None:
+    @staticmethod
+    def _step_toward(target, current):
+        difference = target - current
+        if abs(difference) < MIN_ANGLE_CHANGE:
+            return current
+        return current + max(-MAX_ANGLE_DELTA, min(MAX_ANGLE_DELTA, difference))
+
+    def _move_axis(self, axis, angle, smooth=False):
+        if not self.initialized:
             return None
-        
-        buffer.append(target_angle)
-        # Average the buffered values for smoothing
-        smoothed = sum(buffer) / len(buffer)
-        return smoothed
-    
-    def limit_angle_delta(self, target_angle, last_angle, max_delta):
-        """Limit rate of angle change to prevent jitter."""
-        if target_angle is None:
-            return last_angle
-        
-        delta = target_angle - last_angle
-        
-        # Clamp delta to max allowed change
-        if abs(delta) > max_delta:
-            delta = max_delta if delta > 0 else -max_delta
-        
-        return last_angle + delta
-    
-    def track_face(self, bbox):
-        """
-        Update servo position to track face/object at given bounding box.
-        
-        Args:\n            bbox: dict with 'x', 'y', 'width', 'height' in pixels, or None to center
-        
-        Returns:
-            (pan_angle, tilt_angle) actually commanded
-        """
+
+        is_pan = axis == "pan"
+        attr = "last_pan_angle" if is_pan else "last_tilt_angle"
+        buffer = self.pan_angle_buffer if is_pan else self.tilt_angle_buffer
+        pwm = self.pan_pwm if is_pan else self.tilt_pwm
+        current = getattr(self, attr)
+        minimum, maximum = (
+            (PAN_MIN_ANGLE, PAN_MAX_ANGLE)
+            if is_pan else (TILT_MIN_ANGLE, TILT_MAX_ANGLE)
+        )
+        target = _clamp(angle, minimum, maximum)
+
+        if smooth:
+            buffer.append(target)
+            target = sum(buffer) / len(buffer)
+            target = _clamp(
+                self._step_toward(target, current), minimum, maximum
+            )
+        else:
+            buffer.clear()
+            buffer.append(target)
+
+        if target != current:
+            pwm.change_duty_cycle(self.angle_to_duty_cycle(target))
+            setattr(self, attr, target)
+            if self.verbose:
+                print(f"{axis.title()}: {target:6.2f}°")
+        return getattr(self, attr)
+
+    def track_face(self, bbox, track_pan=True):
+        """Track a face; callers can disable pan when another sensor owns it."""
         if not self.initialized:
             return None, None
-        
-        # Get incremental corrections from the current face offset.
         pan_delta, tilt_delta = self.bbox_to_angles(bbox)
-
         if pan_delta is None:
             return None, None
 
-        # When the face is already centered, stale smoothing history can keep
-        # pushing the servo. Reset the buffers so the current angle is held.
-        if pan_delta == 0:
-            self.pan_angle_buffer.clear()
-            self.pan_angle_buffer.append(self.last_pan_angle)
-        if tilt_delta == 0:
-            self.tilt_angle_buffer.clear()
-            self.tilt_angle_buffer.append(self.last_tilt_angle)
-
-        pan_target = self.last_pan_angle + pan_delta
-        tilt_target = self.last_tilt_angle + tilt_delta
-
-        pan_target = max(-MAX_ANGLE_LIMIT, min(MAX_ANGLE_LIMIT, pan_target))
-        tilt_target = max(-MAX_ANGLE_LIMIT, min(MAX_ANGLE_LIMIT, tilt_target))
-        
-        # Smooth the angles
-        pan_smooth = self.smooth_angle(pan_target, self.pan_angle_buffer)
-        tilt_smooth = self.smooth_angle(tilt_target, self.tilt_angle_buffer)
-        
-        # Limit rate of change
-        pan_cmd = self.limit_angle_delta(pan_smooth, self.last_pan_angle, MAX_ANGLE_DELTA)
-        tilt_cmd = self.limit_angle_delta(tilt_smooth, self.last_tilt_angle, MAX_ANGLE_DELTA)
-        
-        # Hysteresis: only move servo if angle change exceeds threshold
-        # 1.5° threshold prevents bbox jitter (2-4px noise) from driving the servo
-        pan_change = abs(pan_cmd - self.last_pan_angle)
-        tilt_change = abs(tilt_cmd - self.last_tilt_angle)
-        
-        if pan_change < 1.5:
-            pan_cmd = self.last_pan_angle
-        if tilt_change < 1.5:
-            tilt_cmd = self.last_tilt_angle
-        
-        # Command servos
-        self.pan_pwm.change_duty_cycle(self.angle_to_duty_cycle(pan_cmd))
-        self.tilt_pwm.change_duty_cycle(self.angle_to_duty_cycle(tilt_cmd))
-        
-        # Update last commanded angles
-        self.last_pan_angle = pan_cmd
-        self.last_tilt_angle = tilt_cmd
-        
-        if self.verbose:
-            print(f"Pan: {pan_cmd:6.2f}° | Tilt: {tilt_cmd:6.2f}°")
-        
-        return pan_cmd, tilt_cmd
-    
-    def move_pan_to_angle(self, angle):
-        """
-        Move pan motor to a specific angle.
-        
-        Args:
-            angle: Target pan angle in degrees (-MAX_ANGLE_LIMIT to +MAX_ANGLE_LIMIT)
-        
-        Returns:
-            The actual angle commanded to the servo
-        """
-        if not self.initialized:
-            return None
-        
-        # Clamp angle to limits
-        pan_cmd = max(-MAX_ANGLE_LIMIT, min(MAX_ANGLE_LIMIT, angle))
-        
-        # Command servo
-        self.pan_pwm.change_duty_cycle(self.angle_to_duty_cycle(pan_cmd))
-        
-        # Update last commanded angle
-        self.last_pan_angle = pan_cmd
-        
-        # Clear smoothing buffer to avoid stale history
-        self.pan_angle_buffer.clear()
-        self.pan_angle_buffer.append(pan_cmd)
-        
-        if self.verbose:
-            print(f"Pan moved to: {pan_cmd:6.2f}°")
-        
-        return pan_cmd
-    
-    def move_pan_from_sensor(self, x, y, scale=1.0):
-        """
-        Move pan motor based on sensor X, Y coordinates.
-        
-        Calculates angle from atan2(x, y) and applies optional scaling.
-        Useful for RD03D or similar presence sensors that output XY coords.
-        
-        Args:
-            x: Sensor X coordinate (in sensor units)
-            y: Sensor Y coordinate (in sensor units)
-            scale: Scale factor to apply to the calculated angle (default: 1.0)
-                   Use scale < 1.0 to reduce sensitivity, > 1.0 to increase
-        
-        Returns:
-            The actual angle commanded to the servo
-        """
-        if not self.initialized or y == 0:
-            return None
-        
-        # Calculate angle from sensor coordinates (same as RD03D sensor logic)
-        angle = math.degrees(math.atan2(x, y)) * scale
-        
-        # Use the standard move method
-        return self.move_pan_to_angle(angle)
-    
-    def center(self):
-        """Return servos to the calibrated neutral position."""
-        if self.initialized:
-            self.pan_pwm.change_duty_cycle(self.angle_to_duty_cycle(PAN_NEUTRAL_ANGLE))
-            self.tilt_pwm.change_duty_cycle(self.angle_to_duty_cycle(TILT_NEUTRAL_ANGLE))
-            self.last_pan_angle = PAN_NEUTRAL_ANGLE
-            self.last_tilt_angle = TILT_NEUTRAL_ANGLE
-            self.pan_angle_buffer.clear()
-            self.tilt_angle_buffer.clear()
-            print(
-                f"Servos centered at pan={PAN_NEUTRAL_ANGLE}°, "
-                f"tilt={TILT_NEUTRAL_ANGLE}°."
+        pan = self.last_pan_angle
+        if track_pan:
+            pan = self._move_axis(
+                "pan", self.last_pan_angle + pan_delta * TRACKING_GAIN, smooth=True
             )
-    
+        tilt = self._move_axis(
+            "tilt", self.last_tilt_angle + tilt_delta * TRACKING_GAIN, smooth=True
+        )
+        return pan, tilt
+
+    def move_pan_to_angle(self, angle):
+        return self._move_axis("pan", angle)
+
+    def move_tilt_to_angle(self, angle):
+        return self._move_axis("tilt", angle)
+
+    def move_pan_from_sensor(self, x, y, scale=1.0):
+        if y == 0:
+            return None
+        return self.move_pan_to_angle(math.degrees(math.atan2(x, y)) * scale)
+
+    def center(self):
+        if not self.initialized:
+            return
+        self.move_pan_to_angle(PAN_NEUTRAL_ANGLE)
+        self.move_tilt_to_angle(TILT_NEUTRAL_ANGLE)
+        print(f"Servos centered at pan={PAN_NEUTRAL_ANGLE}°, tilt={TILT_NEUTRAL_ANGLE}°.")
+
     def stop(self):
-        """Stop and cleanup servos."""
-        if self.initialized:
-            try:
-                self.pan_pwm.stop()
-                self.tilt_pwm.stop()
-                print("Face tracking servos stopped.")
-            except Exception as e:
-                print(f"Error stopping servos: {e}")
+        if not self.initialized:
+            return
+        try:
+            self.pan_pwm.stop()
+            self.tilt_pwm.stop()
+            print("Face tracking servos stopped.")
+        except Exception as error:
+            print(f"Error stopping servos: {error}")
+        finally:
             self.initialized = False
 
 
-# Singleton instance for easy access
 _tracker = None
 
+
 def get_tracker():
-    """Get or create the singleton tracker instance."""
+    """Return the module's shared tracker instance."""
     global _tracker
     if _tracker is None:
         _tracker = FaceTrackServo()
     return _tracker
 
 
-# Simple test function
 if __name__ == "__main__":
     tracker = FaceTrackServo(verbose=True)
-    
     if not tracker.initialize():
-        print("Failed to initialize servos!")
-        exit(1)
-    
+        raise SystemExit(1)
     try:
-        print("\nTest 1: Face at screen center")
-        # bbox = {'x': 280, 'y': 200, 'width': 80, 'height': 80}
-        # tracker.track_face(bbox)
-        # time.sleep(1)
-        
-        # print("\nTest 2: Face at top-right")
-        # bbox = {'x': 450, 'y': 100, 'width': 80, 'height': 80}
-        # for _ in range(5):
-        #     tracker.track_face(bbox)
-        #     time.sleep(0.1)
-        
-        # print("\nTest 3: Face at bottom-left")
-        # bbox = {'x': 100, 'y': 350, 'width': 80, 'height': 80}
-        # for _ in range(5):
-        #     tracker.track_face(bbox)
         tracker.move_pan_to_angle(30)
         time.sleep(0.1)
-        
-        print("\nTest 4: Return to center")
         tracker.center()
-        
     except KeyboardInterrupt:
-        print("\nInterrupted.")
+        pass
     finally:
         tracker.stop()

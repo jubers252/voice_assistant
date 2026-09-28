@@ -10,6 +10,10 @@ class AmazonInConstants:
     Custom constants class for Amazon India (amazon.in) domain.
     """
 
+    def __init__(self, config=None):
+        """Accept the config object passed by amazon-orders when loading constants."""
+        self.config = config
+
     ##########################################################################
     # General URL - Modified for Amazon India
     ##########################################################################

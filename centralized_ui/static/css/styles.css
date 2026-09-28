@@ -349,7 +349,8 @@ html, body {
 .camera-container {
     position: relative;
     width: 100%;
-    aspect-ratio: 16 / 9;
+    flex: 1;
+    min-height: 320px;
     background-color: var(--bg-dark);
     border-radius: 8px;
     overflow: hidden;
@@ -361,7 +362,18 @@ html, body {
 .camera-feed {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
+}
+
+#camera-content .widget-full {
+    flex: 1;
+    min-height: 0;
+}
+
+#cameraMessage {
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-secondary);
 }
 
 .camera-overlay {
@@ -387,12 +399,95 @@ html, body {
    ============================================ */
 
 .anime-container {
+    --particle-color: #9fb8d2;
+    --particle-speed: 1;
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    min-height: 320px;
+    flex: 1;
+    border-radius: 8px;
+    background: radial-gradient(ellipse at center, #182a43 0%, #0b1325 65%, #080e1c 100%);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 2rem;
     height: 100%;
+}
+
+.orb-particles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+}
+
+.orb-particle {
+    position: absolute;
+    width: var(--size);
+    height: var(--size);
+    border-radius: 50%;
+    background: var(--particle-color);
+    color: var(--particle-color);
+    box-shadow: 0 0 7px currentColor;
+    opacity: 0.55;
+    animation: orb-particle-drift calc(var(--duration) * var(--particle-speed)) ease-in-out var(--delay) infinite alternate;
+    transition: background-color 0.6s, color 0.6s;
+}
+
+.anime-container[data-mode="listening"] {
+    --particle-color: #5aebff;
+    --particle-speed: 0.7;
+}
+
+.anime-container[data-mode="thinking"] {
+    --particle-color: #dc8aff;
+    --particle-speed: 0.5;
+}
+
+.anime-container[data-mode="speaking"] {
+    --particle-color: #69ddff;
+    --particle-speed: 0.3;
+}
+
+.anime-container[data-mode="speaking"] .orb-particle:nth-child(2n) {
+    --particle-color: #db8aff;
+}
+
+.anime-container[data-mode="happy"],
+.anime-container[data-mode="laughing"] {
+    --particle-color: #ffd782;
+    --particle-speed: 0.6;
+}
+
+.anime-container[data-mode="sad"] {
+    --particle-color: #7ca9e8;
+    --particle-speed: 1.6;
+}
+
+.anime-container[data-mode="dead"] {
+    --particle-color: #758399;
+    --particle-speed: 2;
+}
+
+@keyframes orb-particle-drift {
+    0% { transform: translate3d(0, 0, 0) scale(0.8); opacity: 0.25; }
+    50% { opacity: 0.8; }
+    100% { transform: translate3d(var(--drift-x), var(--drift-y), 0) scale(1.15); opacity: 0.4; }
+}
+
+.tab-content:not(.active) .orb-particle,
+.orb-particles.is-paused .orb-particle {
+    animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .orb-particle,
+    .ai-orb,
+    .ai-orb::before {
+        animation: none !important;
+    }
 }
 
 .anime-face-large {
@@ -411,6 +506,167 @@ html, body {
     font-size: 2rem;
     font-weight: 600;
     color: var(--text-secondary);
+}
+
+/* ============================================
+   AI ORB - CINEMATIC MOVIE-STYLE ANIMATIONS
+   ============================================ */
+
+.ai-orb {
+    position: relative;
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #5aebff 0%, #3bc9ff 25%, #2896ff 50%, #0f5fb5 75%, #051c42 100%);
+    box-shadow: 
+        0 0 100px 20px rgba(90, 235, 255, 0.4),
+        0 0 60px 10px rgba(90, 235, 255, 0.3),
+        inset -20px -20px 60px rgba(0, 0, 0, 0.3),
+        inset 20px 20px 40px rgba(255, 255, 255, 0.1);
+    transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    filter: drop-shadow(0 0 30px rgba(90, 235, 255, 0.5));
+}
+
+/* Animated outer ring */
+.ai-orb::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    right: -8px;
+    bottom: -8px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    border-top-color: rgba(90, 235, 255, 0.6);
+    border-right-color: rgba(90, 235, 255, 0.3);
+    border-bottom-color: transparent;
+    border-left-color: rgba(90, 235, 255, 0.2);
+    animation: orb-spin-ring 3s linear infinite;
+}
+
+/* Inner accent ring */
+.ai-orb::after {
+    content: '';
+    position: absolute;
+    top: 10%;
+    left: 10%;
+    right: 10%;
+    bottom: 10%;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: inset 0 0 20px rgba(90, 235, 255, 0.3);
+}
+
+.ai-orb-neutral {
+    background: radial-gradient(circle at 35% 35%, #5a6b7a 0%, #3d4a5c 35%, #2d3a4a 65%, #1a2332 100%);
+    box-shadow: 
+        0 0 50px 8px rgba(90, 107, 122, 0.25),
+        0 0 25px 4px rgba(90, 107, 122, 0.15),
+        inset -15px -15px 40px rgba(0, 0, 0, 0.4),
+        inset 15px 15px 30px rgba(255, 255, 255, 0.05);
+    filter: drop-shadow(0 0 15px rgba(90, 107, 122, 0.3));
+    animation: orb-breathe-gentle 5s ease-in-out infinite;
+}
+
+.ai-orb-thinking {
+    background: radial-gradient(circle at 35% 35%, #ff6bff 0%, #d946ff 30%, #8b3aff 60%, #4a1a8f 100%);
+    box-shadow: 
+        0 0 120px 25px rgba(255, 107, 255, 0.5),
+        0 0 70px 15px rgba(255, 107, 255, 0.35),
+        inset -20px -20px 60px rgba(0, 0, 0, 0.4),
+        inset 20px 20px 40px rgba(255, 255, 255, 0.15);
+    filter: drop-shadow(0 0 40px rgba(255, 107, 255, 0.6));
+    animation: orb-spin-fast 2s linear infinite;
+}
+
+.ai-orb-listening {
+    background: radial-gradient(circle at 35% 35%, #5aebff 0%, #3bc9ff 28%, #0f9fbf 60%, #051c42 100%);
+    box-shadow: 
+        0 0 100px 20px rgba(90, 235, 255, 0.4),
+        0 0 60px 12px rgba(90, 235, 255, 0.3),
+        inset -20px -20px 60px rgba(0, 0, 0, 0.3),
+        inset 20px 20px 40px rgba(255, 255, 255, 0.12);
+    filter: drop-shadow(0 0 35px rgba(90, 235, 255, 0.5));
+    animation: orb-pulse-breathing 1.8s cubic-bezier(0.43, 0.13, 0.23, 0.96) infinite;
+}
+
+.ai-orb-speaking {
+    background: radial-gradient(circle at 35% 35%, #5aebff 0%, #1e90ff 25%, #be3cff 50%, #8b1f8f 75%, #2d1b4e 100%);
+    box-shadow: 
+        0 0 150px 30px rgba(190, 60, 255, 0.5),
+        0 0 90px 20px rgba(90, 235, 255, 0.35),
+        inset -25px -25px 80px rgba(0, 0, 0, 0.35),
+        inset 25px 25px 50px rgba(255, 255, 255, 0.2);
+    filter: drop-shadow(0 0 50px rgba(190, 60, 255, 0.7));
+    animation: orb-pulse-energetic 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+/* Breathing animation - calm and natural */
+@keyframes orb-breathe-gentle {
+    0%, 100% { 
+        transform: scale(1);
+        opacity: 0.8;
+    }
+    25% { 
+        transform: scale(1.05);
+        opacity: 0.95;
+    }
+    50% { 
+        transform: scale(1.1);
+        opacity: 1;
+    }
+    75% { 
+        transform: scale(1.05);
+        opacity: 0.95;
+    }
+}
+
+/* Listening pulse - rhythmic and attentive */
+@keyframes orb-pulse-breathing {
+    0%, 100% { 
+        transform: scale(1);
+        filter: brightness(1);
+    }
+    50% { 
+        transform: scale(1.15);
+        filter: brightness(1.2);
+    }
+}
+
+/* Speaking pulse - rapid and energetic */
+@keyframes orb-pulse-energetic {
+    0%, 100% { 
+        transform: scale(1);
+        filter: brightness(1);
+    }
+    50% { 
+        transform: scale(1.2);
+        filter: brightness(1.3);
+    }
+}
+
+/* Spinning ring for thinking state */
+@keyframes orb-spin-ring {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Fast spin for thinking/processing */
+@keyframes orb-spin-fast {
+    0% { 
+        transform: scale(1) rotate(0deg);
+        filter: hue-rotate(0deg) brightness(1);
+    }
+    100% { 
+        transform: scale(1.05) rotate(360deg);
+        filter: hue-rotate(360deg) brightness(1.1);
+    }
+}
+
+/* Scan line effect overlay for cinematic look */
+@keyframes scan-lines {
+    0% { background-position: 0 0; }
+    100% { background-position: 0 100px; }
 }
 
 /* ============================================
@@ -575,34 +831,70 @@ html, body {
     max-width: 400px;
 }
 
-.progress-bar {
+.progress-bar,
+.volume-slider {
     flex: 1;
-    height: 8px;
-    border-radius: 4px;
-    background-color: var(--bg-dark);
-    outline: none;
+    min-width: 0;
+    height: 48px;
+    margin: 0;
+    background: transparent;
+    appearance: none;
     -webkit-appearance: none;
     cursor: pointer;
+    touch-action: none;
 }
 
-.progress-bar::-webkit-slider-thumb {
+.progress-bar {
+    --slider-track: var(--bg-dark);
+    --slider-thumb: var(--primary-color);
+}
+
+.volume-slider {
+    --slider-track: var(--border-color);
+    --slider-thumb: var(--success-color);
+}
+
+.progress-bar::-webkit-slider-runnable-track,
+.volume-slider::-webkit-slider-runnable-track {
+    height: 16px;
+    border-radius: 8px;
+    background: var(--slider-track);
+}
+
+.progress-bar::-moz-range-track,
+.volume-slider::-moz-range-track {
+    height: 16px;
+    border-radius: 8px;
+    background: var(--slider-track);
+}
+
+.progress-bar::-webkit-slider-thumb,
+.volume-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background-color: var(--primary-color);
-    cursor: pointer;
-    box-shadow: var(--shadow-md);
-}
-
-.progress-bar::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background-color: var(--primary-color);
-    cursor: pointer;
+    width: 36px;
+    height: 36px;
+    margin-top: -10px;
     border: none;
+    border-radius: 50%;
+    background: var(--slider-thumb);
     box-shadow: var(--shadow-md);
+}
+
+.progress-bar::-moz-range-thumb,
+.volume-slider::-moz-range-thumb {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 50%;
+    background: var(--slider-thumb);
+    box-shadow: var(--shadow-md);
+}
+
+.progress-bar:focus-visible,
+.volume-slider:focus-visible {
+    outline: 2px solid var(--slider-thumb);
+    outline-offset: 2px;
+    border-radius: 8px;
 }
 
 .time {
@@ -669,34 +961,6 @@ html, body {
 
 .volume-control-large span:first-child {
     font-size: 2rem;
-}
-
-.volume-slider {
-    flex: 1;
-    height: 8px;
-    border-radius: 4px;
-    background-color: var(--border-color);
-    outline: none;
-    -webkit-appearance: none;
-    cursor: pointer;
-}
-
-.volume-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background-color: var(--success-color);
-    cursor: pointer;
-}
-
-.volume-slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background-color: var(--success-color);
-    cursor: pointer;
-    border: none;
 }
 
 #volumeValue {
@@ -1186,4 +1450,13 @@ html, body {
 .loading {
     opacity: 0.5;
     pointer-events: none;
+}
+.automation-btn-large:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+#automationMessage {
+    margin: 0 0 1rem;
+    color: var(--text-secondary, #aab2c0);
 }

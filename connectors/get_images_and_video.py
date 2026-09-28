@@ -205,16 +205,16 @@ def search_videos(query, num_videos=5):
 # Test
 if __name__ == "__main__":
     # Test image search
-    result = search_and_download_images("oppo find x9 ultra orange colour", num_images=5)
+    # result = search_and_download_images("oppo find x9 ultra orange colour", num_images=5)
   
-    print(result["images"])
+    # print(result["images"])
     
     # Test video search
-    # print("\n--- Video Search ---")
-    # video_result = search_videos("salhaudding ayyubi episode 87 season", num_videos=5)
-    # print(f"✓ Success: {video_result['success']}")
-    # print(f"✓ Message: {video_result['message']}")
-    # print(f"✓ Found: {len(video_result['videos'])} videos")
-    # if video_result['videos']:
-    #     for vid in video_result['videos']:
-    #         print(f"  - {vid['title']}: {vid['url']}")
+    print("\n--- Video Search ---")
+    video_result = search_videos("tata safari adventure x plus petrol royal blue colour", num_videos=5)
+    print(f"✓ Success: {video_result['success']}")
+    print(f"✓ Message: {video_result['message']}")
+    print(f"✓ Found: {len(video_result['videos'])} videos")
+    if video_result['videos']:
+        for vid in video_result['videos']:
+            print(f"  - {vid['title']}: {vid['url']}")
