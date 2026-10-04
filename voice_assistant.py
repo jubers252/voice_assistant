@@ -129,7 +129,7 @@ class VoiceAssistant:
         self.recognizer = SpeechRecognizer(
             shared_recognizer,
             self.audio_processors,
-            device_index=1,
+            device_index=0,
             pixel_led=self.pixel_led,
         )
 
@@ -445,12 +445,7 @@ class VoiceAssistant:
             # Wait a moment for server to start
             time.sleep(2)
             
-            # Show URL info regardless
-            print(f"\n[UI] ✅ Dashboard available at:")
-            print(f"[UI] 📱 Local:  http://localhost:{CENTRALIZED_UI_PORT}")
-            print(f"[UI] 🌐 Network: http://<your-raspberry-pi-ip>:{CENTRALIZED_UI_PORT}")
-            print(f"[UI] Find your IP with: hostname -I\n")
-            
+         
             # Optionally open browser
             if CENTRALIZED_UI_OPEN_BROWSER:
                 self._open_ui_in_browser()

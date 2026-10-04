@@ -21,7 +21,7 @@ class WakeWordManager:
     SAMPLE_RATE = 16000
     CHUNK_SIZE = 1280  # 80 ms @ 16 kHz
     DEBUG_SCORES = True
-    CUSTOM_MODEL_PATH = r"C:\Users\JUBER\Documents\voice_assistant\Sofi_20260609_092546.onnx"
+    CUSTOM_MODEL_PATH = "/home/pi/Documents/voice_assistant/Sofi_20260609_092546.onnx"
 
     # Wakeword triggers
     WAKEWORD_DETECTION_THRESHOLD = 0.40
