@@ -25,7 +25,6 @@ import urllib3
 import gc
 import cv2
 import math
-from connectors.zepto_order_database import ZeptoOrderDatabase
 from connectors.capture_while_running import capture_images_from_running_stream
 from camera.camera_context import request_servo_adjustment
 
@@ -37,7 +36,6 @@ import chromadb
 from chromadb.utils import embedding_functions
 from handlers.system_prompt import SOFI_SYSTEM_PROMPT
 import nest_asyncio
-from playwright.sync_api import sync_playwright
 # Import your existing connectors
 from connectors.volume_control import VolumeController 
 from connectors.weather_connector import handle_tool_requests
@@ -49,7 +47,7 @@ from connectors.telegram_bot import TelegramBot
 from connectors.reminder_manager import ReminderManager
 from speech.speech_recognizer import SpeechRecognizer
 from connectors.bigbasket_connector import BigBasketTools
-from connectors.zepto_order_automation import ZeptoScraper
+from connectors.zepto_mcp import ZeptoMCPClient, format_result
 from connectors.home_automation import HomeAutomation
 from connectors import youtube_api
 from connectors.map import get_travel_time_with_traffic
@@ -62,6 +60,28 @@ from handlers.event_scheduler import EventScheduler
 from audio.audio_processor import AudioProcessors
 warnings.filterwarnings("ignore", message=".*Failed to establish a new connection.*")
 load_dotenv()
+
+
+def _extract_zepto_order_id(value):
+    """Find an orderId in a nested MCP response without assuming its shape."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key.lower() == "orderid" and isinstance(item, (str, int)):
+                return str(item)
+            found = _extract_zepto_order_id(item)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _extract_zepto_order_id(item)
+            if found:
+                return found
+    elif isinstance(value, str):
+        try:
+            return _extract_zepto_order_id(json.loads(value))
+        except (TypeError, ValueError):
+            return None
+    return None
 
 class StrandsAgent(Agent):
     """Strands Agent with tool usage and dynamic prompt generation"""
@@ -77,7 +97,6 @@ class StrandsAgent(Agent):
         self.telegram_bot = TelegramBot()
         self.reminder_manager = ReminderManager()
         self.bigbasket_tools = BigBasketTools()
-        self.zepto_db = ZeptoOrderDatabase()
         self.home_automation = HomeAutomation()
         self.audio_processors = audio_processors or AudioProcessors()
         self.state_callback = state_callback
@@ -92,10 +111,9 @@ class StrandsAgent(Agent):
             self.spotify_connector.set_speech_recognizer(recognizer)
 
 
-        zepto_phone = os.getenv('ZEPTO_PHONE_NUMBER', '9028129764')
-  
-        self.zepto_scraper = ZeptoScraper(zepto_phone, headless=True)
-
+        self.zepto_mcp = ZeptoMCPClient()
+        self._zepto_pending_payment_method = None
+        self._zepto_past_items = None
         self._zepto_loop = None
         self._zepto_thread = None
         self._setup_zepto_loop()
@@ -185,10 +203,18 @@ class StrandsAgent(Agent):
                 self._create_telegram_document_tool,
                 self._create_telegram_video_tool,
                 self.control_system_volume,
-                self._zepto_ordering_tool,
-                self._create_zepto_order_history_tool,
-                self._create_zepto_order_again_tool,
-                self._create_zepto_track_orders_tool,
+                self._zepto_mcp_view_cart_tool,
+                self._zepto_mcp_search_products_tool,
+                self._zepto_mcp_search_multiple_products_tool,
+                self._zepto_mcp_update_cart_tool,
+                self._zepto_mcp_order_tool,
+                self._zepto_mcp_order_history_tool,
+                self._zepto_mcp_past_order_items_tool,
+                self._zepto_mcp_addresses_tool,
+                self._zepto_mcp_select_address_tool,
+                self._zepto_mcp_check_serviceability_tool,
+                self._zepto_mcp_select_store_tool,
+                self._zepto_mcp_order_detail_tool,
                 self._create_youtube_music_play_song_tool,
                 self._create_youtube_music_play_playlist_tool,
                 self._create_youtube_music_play_artist_tool,
@@ -323,6 +349,19 @@ class StrandsAgent(Agent):
             return "Operation timed out"
         except Exception as e:
             raise e
+
+    def close_zepto_mcp(self):
+        """Close the persistent MCP transport and its dedicated event loop."""
+        if self._zepto_loop is None:
+            return
+        if self.zepto_mcp is not None:
+            try:
+                self._run_in_zepto_loop(self.zepto_mcp.close(), timeout=10)
+            except Exception as exc:
+                print(f"[ZEPTO MCP] Error while closing connection: {type(exc).__name__}")
+        self._zepto_loop.call_soon_threadsafe(self._zepto_loop.stop)
+        if self._zepto_thread and self._zepto_thread.is_alive():
+            self._zepto_thread.join(timeout=5)
 
     def save_and_embed_message(self, role, content):
        
@@ -1298,284 +1337,231 @@ class StrandsAgent(Agent):
             return f"Volume control error: {str(e)}"
 
     @tool
-    def _zepto_ordering_tool(self, input_str: str):
-        """Zepto grocery ordering and database check. ACTIONS: 1) get_latest - check for incomplete order in database (CALL THIS FIRST), 2) login, 3) clear_cart, 4) search|product_name, 5) add_product|product_name|quantity|index, 6) order_details, 7) checkout, 8) place_order, 9) cleanup. Format: 'action|product|quantity|index'. ALWAYS use get_latest first when user mentions Zepto/order. ALWAYS ask user confirmation before place_order.
-        ARGS: input_str: A string containing the action and parameters for Zepto ordering, formatted as 'action|product_name|quantity|product_index'. """
-        
+    def _zepto_mcp_view_cart_tool(self):
+        """Read the current cart from the authenticated Zepto MCP session. This does not change the cart."""
         try:
-            # Parse from RIGHT to handle product names with pipes
-            # Format: action|product_name|quantity|product_index
-            # Example: add_product|Maccain French Fires | Crispy $ ready to cook|2|4
-            
-            parts = input_str.split("|")
-            
-            action = parts[0].lower().strip()
-            
-            # NEW: Check latest incomplete order from database
-            if action == "get_latest":
-                latest_order = self.zepto_db.get_latest_order()
-                
-                if not latest_order:
-                    return "No incomplete Zepto orders found in the database. Ready to start a fresh order!"
-                
-                # Format the order for the agent to understand and act on
-                order_id = latest_order.get('id', 'N/A')
-                status = latest_order.get('status', 'unknown')
-                current_task = latest_order.get('current_task', 'order_details')
-                items = latest_order.get('items', [])
-                total_price = latest_order.get('total_price', 0)
-                created_at = latest_order.get('created_at', 'N/A')
-                if "payment" in current_task.lower() or "checkout" in current_task.lower():
-                    current_task = "order_details"
-                # Format items list
-                items_str = ', '.join(items) if items else 'No items'
-                
-                result = f"""INCOMPLETE ZEPTO ORDER FOUND:
-                Order ID: {order_id}
-                Status: {status}
-                Current Task: {current_task}
-                Items: {items_str}
-                Total Price: ₹{total_price}
-                Created: {created_at}
-
-                DO NOT START FRESH. This order must be resumed. Ask user: "I found your incomplete order with {items_str} at ₹{total_price}. Should I continue from where we left off?"
-
-                If user says YES: Call zepto_ordering with action "{current_task}" to resume
-                If user says NO: Call zepto_ordering with "clear_cart" to start fresh"""
-                return result
-
-            quantity = 1
-            product_index = 0
-            product = ""
-            
-            if len(parts) >= 4:
-                last_part = parts[-1].strip()
-                if last_part.isdigit():
-                    product_index = int(last_part)
-                else:
-                    pass
-                
-                second_last = parts[-2].strip()
-                if second_last.isdigit():
-                    quantity = int(second_last)
-                else:
-                    pass
-                
-                product = "|".join(parts[1:-2]).strip()
-                
-            elif len(parts) >= 3:
-                last_part = parts[-1].strip()
-                if last_part.isdigit():
-                    quantity = int(last_part)
-                else:
-                    pass
-                
-                product = "|".join(parts[1:-1]).strip()
-                
-            elif len(parts) >= 2:
-                product = parts[1].strip()
-            
-            # Validate for add_product action
-            if action == "add_product":
-                if not product:
-                    return "Error: Product name is empty. Format: add_product|product_name|quantity|index"
-                if quantity < 1:
-                    return f"Error: Invalid quantity {quantity}. Must be >= 1"
-                if product_index < 0:
-                    return f"Error: Invalid product index {product_index}. Must be >= 0"
-            
-            if action == "login":
-                self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                # Save initial order state
-                order_id = self.zepto_db.save_order(status="pending", current_task="login", items=[], total_price=0.0, error=False)
-                return "Zepto login initiated."
-            elif action == "clear_cart":
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                result = self._run_in_zepto_loop(self.zepto_scraper.clear_cart())
-                return f"Zepto clear cart result: {result}"
-            elif action == "search":
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                product_list = self._run_in_zepto_loop(self.zepto_scraper.search_and_extract_products(product))
-                # Update order task to searching
-                latest_order = self.zepto_db.get_latest_order()
-                if latest_order:
-                    self.zepto_db.update_task(latest_order['id'], "searching", f"Searched for: {product}")
-                else:
-                    order_id = self.zepto_db.save_order(status="pending", current_task="searching", items=[], error=False, context=f"Searched for: {product}")
-                return f"Zepto search results: {product_list}"
-            elif action == "add_product":
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                result = self._run_in_zepto_loop(self.zepto_scraper.add_product_to_cart(product, quantity, product_index))
-                
-                # Update order with new item
-                latest_order = self.zepto_db.get_latest_order()
-                if latest_order:
-                    items = latest_order.get('items', [])
-                    # Add or update item in list
-                    item_str = f"{product} x{quantity}"
-                    if item_str not in items:
-                        items.append(item_str)
-                    self.zepto_db.update_items(latest_order['id'], items)
-                    self.zepto_db.update_task(latest_order['id'], "item_added", f"Added: {product} x{quantity}")
-                else:
-                    order_id = self.zepto_db.save_order(status="pending", current_task="item_added", items=[f"{product} x{quantity}"], error=False, context=f"Added: {product} x{quantity}")
-                
-                return f"Zepto add product result: {result}"
-            elif action == "order_details":
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                order_info = self._run_in_zepto_loop(self.zepto_scraper.get_order_details())
-                return f"Zepto order details: {order_info}"
-            elif action == "checkout":
-                if not self._run_in_zepto_loop(self.zepto_scraper.is_logged_in()):
-                    self._run_in_zepto_loop(self.zepto_scraper.setup_browser())
-                payment_result = self._run_in_zepto_loop(self.zepto_scraper.checkout())
-                
-                # Update order status to payment
-                latest_order = self.zepto_db.get_latest_order()
-                if latest_order:
-                    self.zepto_db.update_task(latest_order['id'], "payment_confirmation", "Checkout initiated")
-                
-                # Add confirmation prompt for COD payment
-                if payment_result.get('cod_available'):
-                    methods_str = ', '.join(payment_result.get('payment_methods', ['Cash on Delivery']))
-                    return (f"Payment page is ready. Cash on Delivery (COD) has been selected. "
-                            f"Payment methods available: {methods_str}. "
-                            f"Do you want to confirm and proceed with Cash on Delivery payment?")
-                else:
-                    return f"Zepto payment result: {payment_result}"
-            elif action == "place_order":
-                result = self._run_in_zepto_loop(self.zepto_scraper.click_proceed_final())
-                if result and result.get("status") == "clicked":
-                    # Update order to completed
-                    latest_order = self.zepto_db.get_latest_order()
-                    if latest_order:
-                        self.zepto_db.update_status(latest_order['id'], "completed")
-                        self.zepto_db.update_task(latest_order['id'], "order_placed", "Order successfully placed")
-                    return "Zepto order placed successfully."
-                else:
-                    # Set error flag
-                    latest_order = self.zepto_db.get_latest_order()
-                    if latest_order:
-                        self.zepto_db.set_error(latest_order['id'], True, "Failed to place order")
-                self._run_in_zepto_loop(self.zepto_scraper.cleanup())
-            elif action == "cleanup":
-                self._run_in_zepto_loop(self.zepto_scraper.cleanup())
-                return "Zepto browser closed."
-            else:
-                return f"Unknown action: {action}. Supported: login, search, add_product, order_details, checkout, place_order, cleanup"
-        except Exception as e:
-            # Set error flag when exception occurs
-            latest_order = self.zepto_db.get_latest_order()
-            if latest_order:
-                self.zepto_db.set_error(latest_order['id'], True, str(e))
-            return f"Zepto tool error: {str(e)}"
-
+            result = self._run_in_zepto_loop(self.zepto_mcp.call_tool("view_cart"))
+            return format_result(result)
+        except Exception as exc:
+            return f"Could not read the Zepto MCP cart: {type(exc).__name__}: {exc}"
 
     @tool
-    def _create_zepto_order_history_tool(self, max_orders: str = "3"):
-        """Get recent Zepto order history. Input: number of orders to fetch (default 3). Returns list of recent orders with status, date, amount, and item count.
-        Args:    max_orders: A string representing the number of recent orders to retrieve (e.g., '3'). Defaults to '3' if not provided or invalid."""
-        
+    def _zepto_mcp_search_products_tool(self, query: str, page_number: int = 0):
+        """Search Zepto products. Call this before adding an item; results include product IDs required by the cart tool."""
         try:
-            # Parse max_orders
-            try:
-                max_orders_int = int(max_orders.strip())
-            except:
-                max_orders_int = 3
-            
-            # Get order history
-            orders = self._run_in_zepto_loop(
-                self.zepto_scraper.get_order_history(max_orders=max_orders_int)
-            )
-            
-            if not orders:
-                return "No orders found in your Zepto order history."
-            
-            # Format response
-            result = f"Found {len(orders)} recent orders:\n"
-            for order in orders:
-                result += f"\n{order['order_number']}. {order['status']} - {order['amount']}"
-                result += f"\n   Date: {order['date']}"
-                result += f"\n   Items: {order['item_count']}"
-                result += f"\n   Order ID: {order['order_id'][:16]}..."
-            
-            return result
-        except Exception as e:
-            return f"Failed to get order history: {str(e)}"
-
-
-    @tool
-    def _create_zepto_order_again_tool(self, order_index: str = "0"):
-        """Reorder a previous Zepto order. Input: order index (0 for most recent, 1 for second most recent, etc.). This adds all items from that order to your cart.
-        Args:    order_index: A string representing the index of the order to reorder (e.g., '0' for most recent, '1' for second most recent)."""
-    
-        try:
-            # Parse order index
-            try:
-                index = int(order_index.strip())
-            except:
-                return "Invalid order index. Please provide a number (0 for most recent order)."
-            
-            # Reorder
-            success = self._run_in_zepto_loop(
-                self.zepto_scraper.order_again(order_index=index)
-            )
-            
-            if success:
-                return f"Successfully added order {index} to cart! Use order_details to see cart contents, then checkout to proceed."
-            else:
-                return f"Failed to reorder. Please check if order index {index} exists using order_history first."
-        except Exception as e:
-            return f"Failed to reorder: {str(e)}"
-    
-   
-    @tool
-    def _create_zepto_track_orders_tool(self, params: str = "3|none"):
-        """Track recent Zepto orders with optional detailed info. Input format: 'max_orders|detail_index' (e.g., '5|0' to get 5 orders with details for first one) or just 'max_orders' (e.g., '3'). Returns order summaries with status, date, amount. If detail_index provided, includes tracking info for that order.
-        Args:    params: A string containing the parameters for tracking orders, formatted as 'max_orders|detail_index' or just 'max_orders'."""
-    
-        try:
-            # Parse params: "max_orders|detail_index" or just "max_orders"
-            parts = params.split('|')
-            max_orders = int(parts[0].strip()) if parts[0].strip().isdigit() else 3
-            detail_index = int(parts[1].strip()) if len(parts) > 1 and parts[1].strip().isdigit() else None
-            
-            # Track orders
-            result = self._run_in_zepto_loop(
-                self.zepto_scraper.track_recent_orders(
-                    max_orders=max_orders,
-                    get_details_for_index=detail_index
+            if self._zepto_past_items is None:
+                self._zepto_past_items = self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool("get_past_order_items")
+                )
+            search = self._run_in_zepto_loop(
+                self.zepto_mcp.call_tool(
+                    "search_products",
+                    {"query": query, "pageNumber": page_number},
                 )
             )
-            
-            if result['total_orders'] == 0:
-                return "No orders found."
-            
-            # Format response
-            response = f"Found {result['total_orders']} orders:\n"
-            for order in result['orders']:
-                response += f"\n[{order['order_number']-1}] {order['status']} - {order['amount']}"
-                response += f"\n    {order['date']} | {order['item_count']} items"
-            
-            # Add detailed info if requested
-            if result['detailed_order']:
-                details = result['detailed_order']
-                response += f"\n\nDetailed info for order {detail_index}:"
-                response += f"\n  Status: {details.get('status', 'N/A')}"
-                response += f"\n  Amount: {details.get('total_amount', 'N/A')}"
-                response += f"\n  Order Date: {details.get('order_date', 'N/A')}"
-                if details.get('arriving_in'):
-                    response += f"\n  Arriving in: {details['arriving_in']}"
-            
-            return response
-        except Exception as e:
-            return f"Failed to track orders: {str(e)}"
-    
-   
+            return format_result({"past_order_items": self._zepto_past_items, "search_results": search})
+        except Exception as exc:
+            return f"Zepto product search failed: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_search_multiple_products_tool(self, queries: list[str], page_number: int = 0):
+        """Search Zepto for multiple products in parallel. Provide one normalized product name per query."""
+        try:
+            if self._zepto_past_items is None:
+                self._zepto_past_items = self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool("get_past_order_items")
+                )
+            search = self._run_in_zepto_loop(
+                self.zepto_mcp.call_tool(
+                    "search_multiple_products",
+                    {"queries": queries, "pageNumber": page_number},
+                )
+            )
+            return format_result({"past_order_items": self._zepto_past_items, "search_results": search})
+        except Exception as exc:
+            return f"Zepto product search failed: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_update_cart_tool(self, cart_items_json: str):
+        """Add, change, or remove specific Zepto cart items using IDs from search results. This never replaces the whole cart; ask before removing items."""
+        try:
+            cart_items = json.loads(cart_items_json)
+            if not isinstance(cart_items, list) or not cart_items:
+                return "cart_items_json must be a non-empty JSON array."
+            for item in cart_items:
+                if not isinstance(item, dict) or not all(
+                    key in item for key in ("productVariantId", "storeProductId", "quantity")
+                ):
+                    return "Each cart item must include productVariantId, storeProductId, and quantity."
+                if float(item["quantity"]) < 0:
+                    return "Item quantity cannot be negative; use zero to remove an item."
+            cart_before = self._run_in_zepto_loop(
+                self.zepto_mcp.call_tool("view_cart")
+            )
+            result = self._run_in_zepto_loop(
+                self.zepto_mcp.call_tool(
+                    "update_cart",
+                    {
+                        "deviceId": self.zepto_mcp.device_id,
+                        "cartItems": cart_items,
+                        "replaceCart": False,
+                    },
+                )
+            )
+            if not result.get("isError"):
+                self._zepto_pending_payment_method = None
+            return format_result({"cart_before_update": cart_before, "update_result": result})
+        except Exception as exc:
+            return f"Zepto cart update failed: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_order_tool(
+        self,
+        payment_method: str,
+        confirm_order: bool = False,
+        user_address_id: str = "",
+    ):
+        """Prepare a Zepto order preview, then place it only after the user explicitly confirms. Supported payment_method values: COD, online, wallet, UPI reserve pay. First call with confirm_order=false; call again with true only after the user confirms the preview."""
+        methods = {
+            "cod": "create_order",
+            "cash on delivery": "create_order",
+            "online": "create_online_payment_order",
+            "upi": "create_online_payment_order",
+            "wallet": "create_wallet_order",
+            "upi reserve pay": "create_upi_reserve_pay_order",
+        }
+        method_key = payment_method.strip().lower()
+        tool_name = methods.get(method_key)
+        if not tool_name:
+            return "Choose COD, online, wallet, or UPI reserve pay."
+        if confirm_order and self._zepto_pending_payment_method != method_key:
+            return "There is no matching prepared order to confirm. Review the cart and ask for an order preview first."
+        try:
+            cart = self._run_in_zepto_loop(
+                self.zepto_mcp.call_tool("view_cart")
+            )
+            payment_methods = self._run_in_zepto_loop(
+                self.zepto_mcp.call_tool("get_payment_methods")
+            )
+            arguments = {"confirmOrder": confirm_order}
+            if user_address_id:
+                arguments["userAddressId"] = user_address_id
+            result = self._run_in_zepto_loop(
+                self.zepto_mcp.call_tool(tool_name, arguments)
+            )
+            if not confirm_order and not result.get("isError"):
+                self._zepto_pending_payment_method = method_key
+            elif confirm_order:
+                self._zepto_pending_payment_method = None
+            response = {
+                "cart_review": cart,
+                "available_payment_methods": payment_methods,
+                "order_result": result,
+            }
+            if confirm_order and tool_name == "create_online_payment_order":
+                order_id = _extract_zepto_order_id(result)
+                if order_id:
+                    response["payment_status"] = self._run_in_zepto_loop(
+                        self.zepto_mcp.call_tool(
+                            "check_payment_status", {"orderId": order_id, "poll": False}
+                        )
+                    )
+            return format_result(response)
+        except Exception as exc:
+            return f"Zepto order request failed: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_order_history_tool(self, limit: int = 5, page_number: int = 0):
+        """Read recent Zepto order history, including order IDs and status."""
+        try:
+            return format_result(
+                self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool(
+                        "list_order_history",
+                        {"limit": max(1, min(limit, 20)), "pageNumber": max(0, page_number)},
+                    )
+                )
+            )
+        except Exception as exc:
+            return f"Could not read Zepto order history: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_past_order_items_tool(self):
+        """Read products from past Zepto orders to help match the user's preferred brands and sizes."""
+        try:
+            if self._zepto_past_items is None:
+                self._zepto_past_items = self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool("get_past_order_items")
+                )
+            return format_result(self._zepto_past_items)
+        except Exception as exc:
+            return f"Could not read past Zepto items: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_addresses_tool(self):
+        """List saved Zepto delivery addresses so the user can choose one."""
+        try:
+            return format_result(
+                self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool("list_saved_addresses")
+                )
+            )
+        except Exception as exc:
+            return f"Could not read Zepto addresses: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_select_address_tool(self, address_id: str):
+        """Select a saved Zepto delivery address after the user chooses it."""
+        try:
+            return format_result(
+                self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool(
+                        "select_saved_address", {"addressId": address_id}
+                    )
+                )
+            )
+        except Exception as exc:
+            return f"Could not select Zepto address: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_check_serviceability_tool(self, latitude: float, longitude: float):
+        """Check if Zepto delivers to the chosen saved address coordinates and return nearby store details."""
+        try:
+            return format_result(
+                self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool(
+                        "get_location_serviceability",
+                        {"latitude": latitude, "longitude": longitude},
+                    )
+                )
+            )
+        except Exception as exc:
+            return f"Could not check Zepto delivery availability: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_select_store_tool(self, store_id: str):
+        """Select the Zepto store ID returned for the user's chosen delivery location."""
+        try:
+            return format_result(
+                self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool("select_store", {"storeId": store_id})
+                )
+            )
+        except Exception as exc:
+            return f"Could not select Zepto store: {type(exc).__name__}: {exc}"
+
+    @tool
+    def _zepto_mcp_order_detail_tool(self, order_id: str):
+        """Read details and delivery status for a Zepto order ID."""
+        try:
+            return format_result(
+                self._run_in_zepto_loop(
+                    self.zepto_mcp.call_tool("get_order_detail", {"orderId": order_id})
+                )
+            )
+        except Exception as exc:
+            return f"Could not read Zepto order details: {type(exc).__name__}: {exc}"
+
     @tool
     def _create_youtube_music_play_song_tool(self, song_name: str, volume: int = None):
         """Play a specific song on YouTube Music. Use when: 'play [song name]', 'put on [song]'. Input: song name (e.g., 'Bohemian Rhapsody').
@@ -1720,35 +1706,12 @@ class StrandsAgent(Agent):
             question = input_text.strip()
             print("Follow-up tool asking:", question)
 
-            # Speak question and wait until fully played before opening mic.
-            # Note: LED control is handled by audio_processor.speak() to ensure
-            # the green light stays on throughout audio generation and playback
-            self.executor.submit(self.audio_processors.speak, question)
+            # speak() is synchronous: it returns after TTS generation and
+            # playback complete. Calling it directly prevents the follow-up
+            # listener (and the next tool action) from starting over speech.
+            self.audio_processors.speak(question)
             self._last_follow_up_question = question
             self._last_follow_up_question_at = time.time()
-
-            # Wait for executor thread to start and audio to be processed
-            # Give it up to 15 seconds (accounting for Azure TTS latency)
-            max_wait_time = 15.0
-            start_wait = time.time()
-            
-            # First, wait for the thread to start (is_speaking becomes True)
-            thread_started = False
-            while not thread_started and (time.time() - start_wait) < 2.0:
-                if getattr(self.audio_processors, 'is_speaking', False):
-                    thread_started = True
-                    break
-                time.sleep(0.05)
-            
-            if thread_started:
-                print("[DEBUG] Speak thread started, waiting for completion...")
-                # Poll until TTS and audio playback finish
-                while getattr(self.audio_processors, 'is_speaking', False) and (time.time() - start_wait) < max_wait_time:
-                    time.sleep(0.1)
-            else:
-                print("[DEBUG] Speak thread didn't start within 2s, using fallback timeout")
-                # Fallback: just wait a bit longer in case it starts late
-                time.sleep(3.0)
 
             time.sleep(0.5)  # Settle so speaker output clears before mic opens
 
@@ -1859,3 +1822,21 @@ class StrandsAgent(Agent):
                 self._agent_lock.release()
         
     
+
+if __name__ == "__main__":
+    # Example usage
+    model = OpenAIModel(
+        model_id="gpt-6-luna",
+        client_args={"api_key": os.getenv("OPENAI_API_KEY")},
+        params={
+            "temperature": 0.7,
+            "max_completion_tokens": 2000,
+            "reasoning_effort": "none",
+        },
+    )
+
+    handler = StrandsAgent(session_id="zepto-tool-test", model=model)
+    result = handler.process_user_command(
+        "order chitale milk 500 ml 2 pack full cow milk from zepto"
+    )
+    print(result)

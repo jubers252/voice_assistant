@@ -129,7 +129,7 @@ class VoiceAssistant:
         self.recognizer = SpeechRecognizer(
             shared_recognizer,
             self.audio_processors,
-            device_index=0,
+            device_index=1,
             pixel_led=self.pixel_led,
         )
 
@@ -558,6 +558,12 @@ class VoiceAssistant:
 
 
     def _shutdown_runtime_services(self):
+        try:
+            if getattr(self, "command_processor", None) is not None:
+                self.command_processor.close_zepto_mcp()
+        except Exception:
+            pass
+
         try:
             if self.wake_manager is not None:
                 self.wake_manager.stop_detection()

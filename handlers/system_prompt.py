@@ -29,9 +29,13 @@ CRITICAL LOGIC & CORRECTIONS
 
 SHOPPING & EXECUTION
 - ZEPTO SHOPPING RULES:
-- For Zepto ordering, first check for existing or incomplete order context before starting fresh
-- Always show product options and get quantity/confirmation before adding to cart or placing orders.
-- During checkout: Verify current page is cart page (place order button only available there). If not on cart page, guide user to navigate to cart first, then proceed with checkout and place order
+- Use the Zepto MCP tools for the complete shopping flow.
+- Before changing the cart, inspect it. If it contains items, summarize them and use the follow-up question tool to ask whether to keep them, add the requested items, or remove specific items. Never remove items without explicit approval.
+- Before product searches, check past order items for preferred brands and sizes. Search a single product with `search_products` or multiple products with `search_multiple_products`. Present options, then get the user's selection and quantity before updating the cart. Use product and store IDs from the search results.
+- When needed, list saved delivery addresses, ask which one to use, and select only the address the user chose. If store context is required, check serviceability for that address and select a returned store.
+- Before checkout, inspect the cart and fetch available payment methods. Prepare an order preview with `confirm_order=false`; summarize the items, total, address, and payment details returned. Ask for explicit confirmation with the follow-up question tool. Set `confirm_order=true` only after the user confirms that preview; an earlier request to shop does not count as order confirmation.
+- After an online order is confirmed, check payment status as required by the MCP response. If an MCP call fails or its result is unclear, do not automatically retry a state-changing action.
+
 
 - AMAZON SHOPPING RULES:
 - For Amazon product lookups, prefer single-product tool for exact product requests and multi-product tool for comparison requests

@@ -1478,61 +1478,80 @@ class ZeptoScraper(ZeptoLoginAsync):
     async def get_cart_info(self):
         """Get detailed information about all products currently in cart."""
         logger.info("Getting cart information")
-        
+
         try:
-         
             cart_items = []
-            
-            # Find all product containers in cart (using class from HTML)
-            product_containers = await self.page.query_selector_all("div.__6RuoF")
-            
-            if not product_containers:
-                logger.info("Cart is empty")
-                return {"items": [], "total_items": 0, "total_price": None}
-            
-            for container in product_containers:
+
+            # Current Zepto cart rows expose a cart-qty test id, while the
+            # product wrapper classes change between deployments.
+            cart_screen = self.page.locator("[data-testid='cart-screen']")
+            qty_nodes = cart_screen.locator("[data-testid*='cart-qty']")
+            qty_count = await qty_nodes.count()
+
+            if not qty_count:
+                screen_text = (await cart_screen.inner_text()).lower() if await cart_screen.count() else ""
+                empty_markers = ("your cart is empty", "no items in cart", "no items in your cart")
+                if any(marker in screen_text for marker in empty_markers):
+                    logger.info("Cart is empty")
+                    return {"items": [], "total_items": 0, "total_price": None}
+                logger.warning("Cart contents could not be confirmed from the current page")
+                return None
+
+            for index in range(qty_count):
                 try:
-                    # Extract product name
-                    name = await self._extract_text(container, "p.ngKou")
-                    
-                    # Extract quantity/pack size
-                    quantity_text = await self._extract_text(container, "p.__4SHbK")
-                    
-                    # Extract current quantity in cart
-                    cart_qty = await self._extract_text(container, "p[data-testid*='cart-qty']")
-                    
-                    # Extract price
-                    price_text = await self._extract_text(container, "p.cTJX6L")
-                    price = None
-                    if price_text:
-                        match = self.PRICE_REGEX.search(price_text)
-                        if match:
-                            price = match.group(0).replace(' ', '')
-                    
+                    qty_node = qty_nodes.nth(index)
+                    cart_qty = (await qty_node.inner_text()).strip()
+                    row = qty_node.locator("xpath=ancestor::div[contains(@class, 'border-b')][1]")
+
+                    paragraphs = await row.locator("p").all_inner_texts()
+                    paragraphs = [" ".join(text.split()) for text in paragraphs if text.strip()]
+                    name = next(
+                        (text for text in paragraphs if text != cart_qty and not re.search(r"\b(pack|pc)\s*\(", text, re.I)),
+                        None,
+                    )
+                    pack_size = next(
+                        (text for text in paragraphs if re.search(r"\b(pack|pc)\s*\(", text, re.I)),
+                        "N/A",
+                    )
+
+                    row_text = await row.inner_text()
+                    prices = self.PRICE_REGEX.findall(row_text)
+                    price = prices[-1].replace(" ", "") if prices else "Price not found"
+
                     if name:
                         cart_items.append({
-                            'name': name,
-                            'pack_size': quantity_text or 'N/A',
-                            'quantity': cart_qty or '1',
-                            'price': price or 'Price not found'
+                            "name": name,
+                            "pack_size": pack_size,
+                            "quantity": cart_qty or "1",
+                            "price": price,
                         })
-                
+                    else:
+                        logger.warning("Found a cart quantity control but could not parse its item row")
+
                 except Exception as e:
                     logger.debug(f"Failed to parse cart item: {e}")
                     continue
-            
-            # Try to get total price if available
+
+            # Read the amount from the explicit "To Pay" line so delivery
+            # fees and discounts are reflected in the total.
             total_price = None
             try:
-                total_elem = await self.page.query_selector("p:has-text('Total'), span:has-text('Total')")
-                if total_elem:
-                    total_text = await total_elem.evaluate("el => el.parentElement.innerText")
-                    match = self.PRICE_REGEX.search(total_text)
-                    if match:
-                        total_price = match.group(0).replace(' ', '')
-            except:
-                pass
-            
+                to_pay = cart_screen.locator("text=To Pay").first
+                if await to_pay.count():
+                    total_row = to_pay.locator("xpath=ancestor::div[contains(@class, 'justify-between')][1]")
+                    prices = self.PRICE_REGEX.findall(await total_row.inner_text())
+                    if prices:
+                        total_price = prices[-1].replace(" ", "")
+            except Exception as e:
+                logger.debug(f"Could not read cart total: {e}")
+
+            if len(cart_items) != qty_count:
+                logger.warning(
+                    "Parsed %s of %s cart rows; refusing to report a partial cart",
+                    len(cart_items), qty_count,
+                )
+                return None
+
             result = {
                 'items': cart_items,
                 'total_items': len(cart_items),
@@ -1727,59 +1746,98 @@ class ZeptoScraper(ZeptoLoginAsync):
             return {'status': 'error', 'error': 'Not logged in'}
         
         try:
-            if not ensure_cart:
-                await self.goto_cart()
-              
+            if ensure_cart:
+                if not await self.goto_cart():
+                    return {'status': 'not_found', 'url': self.page.url}
 
             await self.page.wait_for_timeout(700)
 
-            # Common selectors for the pay/proceed button
-            pay_selectors = [
-                "button:has-text('Click to Pay')",
-                "button:has-text('Proceed to pay')",
-                "button.bg-skin-primary",
-                "div:has(button:has-text('Click to Pay')) button",
-            ]
-
-            clicked = False
-            for sel in pay_selectors:
+            # The current cart UI can render its footer CTA as a disabled
+            # spinner while checkout data is loading. Do not inspect or click
+            # checkout controls until that state settles.
+            cart_screen = self.page.locator("[data-testid='cart-screen']")
+            if await cart_screen.count():
                 try:
-                    btn = await self.page.wait_for_selector(sel, timeout=1500)
-                    if btn and await btn.is_visible():
-                        await btn.scroll_into_view_if_needed()
-                        await btn.click()
-                        clicked = True
-                        await self.page.wait_for_timeout(1500)
-                        logger.info(f"Clicked pay button using selector: {sel}")
-                        break
+                    await cart_screen.locator("button svg.animate-spin").first.wait_for(
+                        state="hidden", timeout=15000
+                    )
                 except Exception:
-                    continue
+                    logger.warning("Cart checkout is still showing its loading spinner")
+                    return {'status': 'loading', 'url': self.page.url}
+                await self.page.wait_for_timeout(500)
+
+            async def payment_screen_visible():
+                # Use distinctive payment method labels. A generic "Pay" match
+                # also matches the cart CTA, so it cannot confirm navigation.
+                indicators = (
+                    "text=UPI",
+                    "text=Netbanking",
+                    "text=Debit Card",
+                    "text=Credit Card",
+                    "text=Pay On Delivery",
+                    "text=Cash On Delivery",
+                    "button:has-text('Place Order')",
+                )
+                for selector in indicators:
+                    try:
+                        locator = self.page.locator(selector).first
+                        if await locator.is_visible():
+                            return True
+                    except Exception:
+                        continue
+                return False
+
+            if await payment_screen_visible():
+                return {'status': 'payment_page', 'url': self.page.url}
+
+            # Zepto sometimes opens the "Missed something?" sheet first. That
+            # sheet has a second Click to Pay CTA, so follow visible pay CTAs
+            # until the payment methods appear or the CTA is gone.
+            clicked = False
+            for attempt in range(2):
+                candidates = []
+                try:
+                    buttons = await self.page.locator("button").all()
+                except Exception:
+                    buttons = []
+
+                for button in buttons:
+                    try:
+                        if not await button.is_visible():
+                            continue
+                        label = " ".join((await button.inner_text()).split()).lower()
+                        if label.startswith("click to pay") or label.startswith("proceed to pay"):
+                            candidates.append(button)
+                    except Exception:
+                        continue
+
+                if not candidates:
+                    if clicked:
+                        return {'status': 'payment_page', 'url': self.page.url}
+                    break
+
+                # If the cart CTA and sheet CTA coexist, the sheet CTA is the
+                # later visible button in DOM order and is the one to activate.
+                button = candidates[-1]
+                await button.scroll_into_view_if_needed()
+                await button.click()
+                clicked = True
+                logger.info("Clicked visible pay CTA (attempt %s)", attempt + 1)
+                await self.page.wait_for_timeout(1800)
+
+                if await payment_screen_visible():
+                    logger.info("Payment page appears to be loaded")
+                    return {'status': 'payment_page', 'url': self.page.url}
 
             if not clicked:
                 logger.warning("Pay button not found")
                 return {'status': 'not_found', 'url': self.page.url}
 
-            # Wait a bit and check for payment method indicators
-            await self.page.wait_for_timeout(1000)
-            indicators = [
-                "text=UPI",
-                "text=Netbanking",
-                "text=Debit Card",
-                "text=Credit Card",
-                "text=Pay",
-                "button:has-text('Place Order')",
-            ]
-
-            for ind in indicators:
-                try:
-                    el = await self.page.wait_for_selector(ind, timeout=2000)
-                    if el:
-                        logger.info("Payment page appears to be loaded")
-                        return {'status': 'payment_page', 'url': self.page.url}
-                except Exception:
-                    continue
-
-            # If no explicit indicators found, return current URL anyway
+            # If the CTA remains after both attempts and no payment method was
+            # detected, do not report a successful transition.
+            if candidates:
+                logger.warning("Pay CTA is still visible; payment screen was not confirmed")
+                return {'status': 'not_found', 'url': self.page.url}
             return {'status': 'payment_page', 'url': self.page.url}
 
         except Exception as e:
@@ -1886,17 +1944,15 @@ class ZeptoScraper(ZeptoLoginAsync):
 
             # Common selectors for COD / Pay On Delivery
             cod_selectors = [
+                "text=/Pay by Cash \/ UPI on delivery/i",
                 "text=Pay On Delivery",
-               
+                "text=Cash On Delivery",
             ]
-
-            # also try common abbreviations
-            cod_selectors += ["text=Pay On Delivery", "text=Cash On Delivery"]
 
             for sel in cod_selectors:
                 try:
-                    el = await page.query_selector(sel)
-                    if el and await el.is_visible():
+                    el = page.locator(sel).first
+                    if await el.count() and await el.is_visible():
                         try:
                             await el.scroll_into_view_if_needed()
                         except Exception:
@@ -1935,7 +1991,13 @@ class ZeptoScraper(ZeptoLoginAsync):
                 "button[aria-label*='Proceed to Pay']",
                 "button:has-text('Proceed to Pay')",
                 "button:has-text('Proceed to pay')",
+                "button:has-text('Place Order')",
+                "button:has-text('Place order')",
+                "button:has-text('Confirm Order')",
+                "button:has-text('Confirm order')",
                 "button:has-text('Proceed')",
+                "[role='button']:has-text('Place Order')",
+                "[role='button']:has-text('Confirm Order')",
                 "div[role='button'][testid='btn_pay']",
             ]
 
@@ -2008,14 +2070,23 @@ class ZeptoScraper(ZeptoLoginAsync):
         if not payment_methods:
             return False   
         
-        cod_keywords = 'COD is currently unavailable'
+        unavailable_keywords = (
+            'cod is currently unavailable',
+            'cash on delivery unavailable',
+            'pay on delivery unavailable',
+        )
         for method in payment_methods:
-            if cod_keywords.lower() == method.lower():
+            if any(keyword in method.lower() for keyword in unavailable_keywords):
                 logger.info("Cash On Delivery (COD) is not available")
                 return False
 
-        logger.info("Cash On Delivery (COD) is available")
-        return True
+        available = any(
+            keyword in method.lower()
+            for method in payment_methods
+            for keyword in ('pay by cash', 'cash on delivery', 'pay on delivery')
+        )
+        logger.info("Cash On Delivery (COD) is %s", "available" if available else "not listed")
+        return available
     
     async def checkout(self, ensure_cart=True):
         """Combined checkout function for agent usage.
@@ -2065,6 +2136,15 @@ class ZeptoScraper(ZeptoLoginAsync):
                 select_method = await self.select_payment_method("Pay On Delivery")  
                 if select_method:
                     logger.info("COD method selected successfully")
+                else:
+                    logger.warning("COD is listed but could not be selected")
+                    return {
+                        'status': 'cod_selection_failed',
+                        'payment_url': payment_url,
+                        'payment_methods': methods,
+                        'cod_available': False,
+                        'error': 'Cash on Delivery was listed but could not be selected. Do not place the order yet.'
+                    }
                 # await self.click_proceed_final()
             else:
                 logger.info("COD not available — please add more items upto minimum order value 100rs.")
@@ -2117,9 +2197,9 @@ class ZeptoScraper(ZeptoLoginAsync):
             # result = await self.get_order_history()
             # print(result)
             # await self.order_again(order_index=0)
-            # product = await self.search_and_extract_products("milk")
-            # print(f"Product: {product}")
-            # await self.add_product_to_cart(product_index=0)
+            product = await self.search_and_extract_products("chitale milk")
+            print(f"Product: {product}")
+            await self.add_product_to_cart(product_index=0)
             cart_info = await self.get_order_details()
             print(f"Cart Info: {cart_info}")
             payment_url = await self.go_to_payment()
