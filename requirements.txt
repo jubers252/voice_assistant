@@ -143,6 +143,7 @@ sounddevice==0.5.5
 soundfile==0.14.0
 soupsieve==2.8.4
 SpeechRecognition==3.16.1
+PyAudio==0.2.14
 spidev==3.8
 spotipy==2.26.0
 sse-starlette==3.4.4

@@ -1,6 +1,7 @@
 """Smoke check: authenticate to Zepto MCP and save the current tool schemas."""
 
 import asyncio
+import argparse
 import json
 import sys
 from datetime import datetime, timezone
@@ -12,6 +13,19 @@ from connectors.zepto_mcp import MCP_URL, ZeptoMCPClient  # noqa: E402
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reauthenticate",
+        action="store_true",
+        help="delete the saved project token and sign in to Zepto again",
+    )
+    args = parser.parse_args()
+
+    token_path = Path(__file__).resolve().parents[1] / "zepto_token"
+    if args.reauthenticate and token_path.exists():
+        token_path.unlink()
+        print(f"Removed saved token: {token_path}")
+
     client = ZeptoMCPClient()
     try:
         print("Connecting to Zepto MCP...")

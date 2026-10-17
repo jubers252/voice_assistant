@@ -101,8 +101,6 @@ class SpeechRecognizer:
         # Check if we have more attempts left
         if attempt < max_retries:
             # Still have retries left - continue loop
-            if self.pixel_led:
-                self.pixel_led.set_error()
             print(f"[ERROR] {error_message} - Retrying...")
             time.sleep(1.0)  # Give audio time to settle
             if self.pixel_led:
@@ -124,7 +122,7 @@ class SpeechRecognizer:
             max_retries: Number of times to retry if no speech detected
         """
        
-        if self.is_music_playing:
+        if self.is_music_playing and not is_follow_up:
             timeout = 5
             print("[ASSISTANT] Music is playing - using 5s timeout")
         phrase_time_limit = 5 if timeout == 5 else 20  # Increased from 15 to 20 seconds for more speaking time

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import uuid
 import webbrowser
@@ -29,15 +30,14 @@ REDIRECT_URI = "http://localhost/callback"
 
 
 def _data_dir() -> Path:
-    if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / "voice_assistant"
+    # Keep credentials beside this checkout so desktop and service launches
+    # from the same project use the same OAuth session, even under different
+    # home-directory environment settings.
+    return Path(__file__).resolve().parents[1] / ".local" / "zepto"
 
 
 def _token_path() -> Path:
-    return _data_dir() / "zepto_mcp_tokens.bin"
+    return Path(__file__).resolve().parents[1] / "zepto_token"
 
 
 def _protect(data: bytes) -> bytes:
@@ -78,32 +78,27 @@ class ZeptoTokenStorage(TokenStorage):
         if not self.path.exists():
             return None
         try:
-            return OAuthToken.model_validate(json.loads(_unprotect(self.path.read_bytes())))
+            token_data = _unprotect(self.path.read_bytes())
+            return OAuthToken.model_validate(json.loads(token_data))
         except Exception as exc:
             print(f"Saved Zepto token could not be loaded ({type(exc).__name__}); sign in again.")
             return None
+
+    def _write_token_file(self, data: bytes) -> None:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            self.path.parent.chmod(0o700)
+        self.path.write_bytes(data)
+        if os.name != "nt":
+            self.path.chmod(0o600)
 
     async def get_tokens(self) -> OAuthToken | None:
         return self.tokens
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if os.name != "nt":
-            self.path.parent.chmod(0o700)
-        raw = _protect(tokens.model_dump_json().encode("utf-8"))
-        fd, temp_path = tempfile.mkstemp(prefix="zepto-mcp-", suffix=".tmp", dir=self.path.parent)
-        try:
-            with os.fdopen(fd, "wb") as file:
-                file.write(raw)
-                file.flush()
-                os.fsync(file.fileno())
-            os.replace(temp_path, self.path)
-            if os.name != "nt":
-                self.path.chmod(0o600)
-            self.tokens = tokens
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        data = _protect(tokens.model_dump_json().encode("utf-8"))
+        self._write_token_file(data)
+        self.tokens = tokens
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         return self.client_info
@@ -215,3 +210,34 @@ class ZeptoMCPClient:
 def format_result(result: dict) -> str:
     """Return readable JSON for Strands while preserving structured MCP data."""
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
+
+
+async def _test_token_storage() -> None:
+    """Check token serialization in a temporary directory; does not contact Zepto."""
+    token = OAuthToken(
+        access_token="test-access-token",
+        token_type="Bearer",
+        expires_in=3600,
+        scope="test",
+        refresh_token="test-refresh-token",
+    )
+    with tempfile.TemporaryDirectory(prefix="zepto-token-test-") as temp_dir:
+        path = Path(temp_dir) / "tokens.bin"
+        storage = ZeptoTokenStorage()
+        storage.path = path
+        await storage.set_tokens(token)
+
+        reloaded = ZeptoTokenStorage()
+        reloaded.path = path
+        saved = await reloaded.get_tokens()
+        if saved is None or saved.access_token != token.access_token:
+            raise AssertionError("Saved access token did not load")
+        if saved.refresh_token != token.refresh_token:
+            raise AssertionError("Saved refresh token did not load")
+        print(f"Token storage round-trip passed ({path.stat().st_size} bytes).")
+
+
+if __name__ == "__main__" and "--test-token-storage" in sys.argv:
+    import asyncio
+
+    asyncio.run(_test_token_storage())

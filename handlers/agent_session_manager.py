@@ -67,7 +67,7 @@ class MySQLiteRepository(SessionRepository):
         with sqlite3.connect(self.db_path) as conn:
             # Sort by created_at to maintain the Tool -> Result chain
             cursor = conn.execute(
-                "SELECT data FROM strands_store WHERE key LIKE ? ORDER BY created_at ASC", 
+                "SELECT data FROM strands_store WHERE key LIKE ? ORDER BY created_at ASC, rowid ASC", 
                 (f"msg_{session_id}_{agent_id}_%",)
             )
             return [
@@ -111,7 +111,11 @@ class MySQLiteRepository(SessionRepository):
             conn.execute("DELETE FROM strands_store WHERE key = ?", (key,))
 
     def _prune_old_messages(self, session_id, agent_id, limit=100):
-        """Atomic cleanup to keep the SQLite DB small."""
+        """Atomic cleanup to keep the SQLite DB small.
+
+        Keep the newest messages in insertion order. A timestamp tie is resolved
+        by rowid, which is stable for the lifetime of the stored row.
+        """
         prefix = f"msg_{session_id}_{agent_id}_%"
         
         with sqlite3.connect(self.db_path) as conn:
@@ -121,7 +125,7 @@ class MySQLiteRepository(SessionRepository):
                 AND key NOT IN (
                     SELECT key FROM strands_store 
                     WHERE key LIKE ? 
-                    ORDER BY created_at DESC 
+                    ORDER BY created_at DESC, rowid DESC
                     LIMIT {limit}
                 )
             """, (prefix, prefix))

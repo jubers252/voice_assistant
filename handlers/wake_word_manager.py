@@ -24,7 +24,7 @@ class WakeWordManager:
     CUSTOM_MODEL_PATH = "/home/pi/Documents/voice_assistant/Sofi_20260609_092546.onnx"
 
     # Wakeword triggers
-    WAKEWORD_DETECTION_THRESHOLD = 0.40
+    WAKEWORD_DETECTION_THRESHOLD = 0.25
     WAKEWORD_COOLDOWN_MS = 500
 
     # VAD configuration

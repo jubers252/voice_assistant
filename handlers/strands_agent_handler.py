@@ -19,7 +19,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import time
 import re
-import difflib
 import warnings
 import urllib3
 import gc
@@ -236,7 +235,9 @@ class StrandsAgent(Agent):
         self._agent_lock = threading.Lock()  # Prevent concurrent LLM calls (not thread-safe)
         self._last_follow_up_question = ""
         self._last_follow_up_question_at = 0.0
-        self.session_id = session_id
+        # Agent.session_id is a read-only property owned by Strands. Keep our
+        # current session identifier separately for session switching.
+        self._active_session_id = session_id
         self.repo = repo
 
 
@@ -246,7 +247,7 @@ class StrandsAgent(Agent):
         Args:
             new_session_id: Unique identifier for the new user session
         """
-        self.session_id = new_session_id
+        self._active_session_id = new_session_id
         print(f"[AGENT] Session switched to: {new_session_id}")
 
         # Create new session manager with the new session ID
@@ -261,15 +262,15 @@ class StrandsAgent(Agent):
      
 
     def _normalize_text(self, text: str) -> str:
-        """Normalize text for robust similarity checks."""
-        text = (text or "").lower().strip()
+        """Normalize Unicode text while preserving letters in every language."""
+        text = (text or "").casefold().strip()
         text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'[^a-z0-9\s]', '', text)
+        text = re.sub(r'[^\w\s]', '', text, flags=re.UNICODE)
         return text
 
 
     def _is_repeat_of_recent_follow_up(self, response_text: str) -> bool:
-        """Return True if response is a near-duplicate of a recently spoken follow-up question."""
+        """Return True only when this response repeats the spoken question exactly."""
         if not self._last_follow_up_question:
             return False
 
@@ -279,12 +280,7 @@ class StrandsAgent(Agent):
         if not current or not previous:
             return False
 
-        # Exact/containment checks first, then fuzzy similarity for paraphrases.
-        if current == previous or current in previous or previous in current:
-            return True
-
-        similarity = difflib.SequenceMatcher(None, current, previous).ratio()
-        return similarity >= 0.68
+        return current == previous
 
 
     def _augment_command_with_speaker_hint(self, user_command: str) -> str:
@@ -1726,7 +1722,13 @@ class StrandsAgent(Agent):
             self.audio_processors.play_beep_sound()
             time.sleep(0.2)
 
-            follow_up_command = recognizer.listen_for_command(is_follow_up=True, timeout=20, max_retries=0)
+            # Follow-up answers need time even when music is marked as playing,
+            # and one missed transcription should not end the conversation.
+            follow_up_command = recognizer.listen_for_command(
+                is_follow_up=True,
+                timeout=30,
+                max_retries=1,
+            )
             
             if follow_up_command:
                 # Return the response in a way that makes it clear this is answering the question
@@ -1776,6 +1778,10 @@ class StrandsAgent(Agent):
 
                 # Use the current agent instance and the actual user command.
                 effective_command = self._augment_command_with_speaker_hint(user_command)
+                # A prior turn's question must not affect whether this response
+                # gets spoken. The follow-up tool will set this during this turn.
+                self._last_follow_up_question = ""
+                self._last_follow_up_question_at = 0.0
                 raw_response = self(effective_command)
 
                 if isinstance(raw_response, dict):
