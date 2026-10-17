@@ -399,6 +399,10 @@ def youtube_extract_command(url):
     # Use the assistant's installed version, not the older system executable.
     command = [sys.executable, '-m', 'yt_dlp', '--no-playlist', '--no-cache-dir',
                '--socket-timeout', '10', '-f', 'bestaudio/best', '-g']
+    # Cookies exported from a logged-in browser get past YouTube's bot check.
+    cookies = os.environ.get('YOUTUBE_COOKIES_FILE') or str(Path(__file__).parent / 'youtube_cookies.txt')
+    if os.path.isfile(cookies):
+        command.extend(['--cookies', cookies])
     node = shutil.which('node')
     if not node:
         playwright = importlib.util.find_spec('playwright')
@@ -427,12 +431,26 @@ def _start_mpv(url, title):
         if os.path.exists(MPV_SOCKET):
             os.remove(MPV_SOCKET)
 
-        result = subprocess.run(youtube_extract_command(url), capture_output=True,
-                                text=True, timeout=45)
-        streams = result.stdout.strip().splitlines()
-        if result.returncode != 0 or not streams:
-            print('YouTube extraction failed:', result.stderr[-2000:])
-            raise RuntimeError('YouTube could not provide an audio stream. Please try another song.')
+        # Some videos fail transiently ("page needs to be reloaded"); retry,
+        # switching YouTube player client on later attempts.
+        streams = []
+        for attempt, client in enumerate((None, 'tv', 'web_safari'), start=1):
+            command = youtube_extract_command(url)
+            if client:
+                command[-1:-1] = ['--extractor-args', f'youtube:player_client={client}']
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=45)
+            except subprocess.TimeoutExpired:
+                print(f'YouTube extraction attempt {attempt} timed out.')
+                continue
+            streams = result.stdout.strip().splitlines()
+            if result.returncode == 0 and streams:
+                break
+            streams = []
+            print(f'YouTube extraction attempt {attempt} failed:', result.stderr[-1000:])
+            time.sleep(1)
+        if not streams:
+            raise RuntimeError('YouTube could not provide an audio stream after 3 attempts. Please try again or pick another song.')
 
         mpv_cmd = ['mpv', '--no-video', '--no-sub', '--no-terminal',
                    f'--title={title}', '--volume=70',

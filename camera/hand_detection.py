@@ -1,5 +1,6 @@
 import os
 import socket
+import json
 import select
 import subprocess
 import threading
@@ -47,13 +48,13 @@ HAND_LANDMARKER_MODEL_PATH = os.path.join(MP_MODELS_DIR, "hand_landmarker.task")
 STREAM_PORT = 8002
 RELAY_STREAM_PORT = 8003
 RELAY_STREAM_HOST = os.getenv("FRAME_RELAY_HOST", "127.0.0.1")
-RELAY_PUBLISH_EVERY_N_FRAMES = 4
+RELAY_PUBLISH_EVERY_N_FRAMES = 2
 CAMERA_INDEX = "0"
 WIDTH = 640
 HEIGHT = 480
 FPS = 30
 FACE_DETECT_EVERY_N_FRAMES = 2  # Update face tracking up to 15 times per second at 30 FPS.
-DETECT_EVERY_N_FRAMES = 3      # Keep hand/gesture detection at 7.5 times per second.
+DETECT_EVERY_N_FRAMES = 2      # Hand/gesture detection at 15 times per second.
 FACE_RECOGNITION_EVERY_N_FRAMES = 30  # Recognize every 30 frames (reduce CPU)
 PROCESS_SCALE = 0.35             # Much smaller = faster (was 0.5)
 FACE_DB_PATH = "my_db"
@@ -67,6 +68,12 @@ TILT_SEARCH_INTERVAL_SECONDS = 0.25
 WAKE_GESTURE_PATTERN = ("fist", "open_hand", "fist", "open_hand")
 WAKE_GESTURE_MAX_STEP_SECONDS = 1.2
 WAKE_GESTURE_TRIGGER_COOLDOWN_SECONDS = 2.0
+# Holding a fist toggles music pause/resume. The hold is longer than the wake
+# gesture's per-step window so the quick fist/open sequence never triggers it.
+MUSIC_FIST_HOLD_SECONDS = 1.5
+MUSIC_FIST_COOLDOWN_SECONDS = 3.0
+MUSIC_FIST_DROPOUT_SECONDS = 0.4
+MUSIC_PLAYER_SOCKET = "/tmp/youtube-player.sock"
 # Hand gesture constants
 FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 
@@ -201,6 +208,9 @@ class FrameRelayServer:
         self.stop_event = threading.Event()
         self.clients = []
         self.clients_lock = threading.Lock()
+        self.frame_ready = threading.Event()
+        self.pending_frame = None
+        self.send_thread = None
 
     def start(self):
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -210,6 +220,8 @@ class FrameRelayServer:
         self.server_sock.settimeout(0.5)
         self.accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
         self.accept_thread.start()
+        self.send_thread = threading.Thread(target=self._send_loop, daemon=True)
+        self.send_thread.start()
         print(f"[RELAY] Frame relay listening on tcp://{self.host}:{self.port}", flush=True)
 
     def _accept_loop(self):
@@ -228,33 +240,46 @@ class FrameRelayServer:
                 break
 
     def publish_frame(self, frame):
+        # Encoding and socket writes happen off the capture loop; only the
+        # newest frame is kept so a slow client can never add display lag.
         with self.clients_lock:
             if not self.clients:
                 return
+        self.pending_frame = frame.copy()
+        self.frame_ready.set()
 
-        ok, encoded = cv2.imencode(
-            ".jpg",
-            frame,
-            [int(cv2.IMWRITE_JPEG_QUALITY), 80],
-        )
-        if not ok:
-            return
+    def _send_loop(self):
+        while not self.stop_event.is_set():
+            if not self.frame_ready.wait(timeout=0.5):
+                continue
+            self.frame_ready.clear()
+            frame, self.pending_frame = self.pending_frame, None
+            if frame is None:
+                continue
 
-        payload = encoded.tobytes()
-        dead_clients = []
-        with self.clients_lock:
-            for client_sock in self.clients:
-                try:
-                    client_sock.sendall(payload)
-                except OSError:
-                    dead_clients.append(client_sock)
+            ok, encoded = cv2.imencode(
+                ".jpg",
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+            )
+            if not ok:
+                continue
 
-            for client_sock in dead_clients:
-                try:
-                    client_sock.close()
-                except OSError:
-                    pass
-                self.clients.remove(client_sock)
+            payload = encoded.tobytes()
+            dead_clients = []
+            with self.clients_lock:
+                for client_sock in self.clients:
+                    try:
+                        client_sock.sendall(payload)
+                    except OSError:
+                        dead_clients.append(client_sock)
+
+                for client_sock in dead_clients:
+                    try:
+                        client_sock.close()
+                    except OSError:
+                        pass
+                    self.clients.remove(client_sock)
 
     def stop(self):
         self.stop_event.set()
@@ -527,6 +552,53 @@ def reset_wake_gesture_state(wake_gesture_state, clear_center=False):
         wake_gesture_state["center"] = None
 
 
+def _music_player_request(payload):
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(10)
+        client.connect(MUSIC_PLAYER_SOCKET)
+        client.sendall((json.dumps(payload) + "\n").encode())
+        with client.makefile("rb") as stream:
+            return json.loads(stream.readline(1024 * 1024))
+
+
+def toggle_music_playback():
+    """Pause if music is playing, otherwise resume. Runs in a worker thread."""
+    try:
+        status = _music_player_request({"action": "status"}).get("status", {})
+        if status.get("loading"):
+            return
+        action = "pause" if status.get("is_playing") else "play"
+        _music_player_request({"action": action})
+        print(f"[GESTURE] Fist hold -> music {action}", flush=True)
+    except (OSError, ValueError) as error:
+        print(f"[GESTURE] Music toggle skipped: {error}", flush=True)
+
+
+def detect_fist_hold(hand_result, state, now):
+    """Return True once when a fist has been held long enough."""
+    gesture = None
+    if hand_result and hand_result.hand_landmarks:
+        info = get_hand_gesture(hand_result.hand_landmarks[0])
+        gesture = info.get("gesture") if info else None
+
+    if gesture == "fist":
+        state["last_fist_at"] = now
+        if state["start"] is None:
+            state["start"] = now
+        if (
+            not state["fired"]
+            and now - state["start"] >= MUSIC_FIST_HOLD_SECONDS
+            and now - state["last_trigger_at"] >= MUSIC_FIST_COOLDOWN_SECONDS
+        ):
+            state["fired"] = True
+            state["last_trigger_at"] = now
+            return True
+    elif now - state["last_fist_at"] > MUSIC_FIST_DROPOUT_SECONDS:
+        state["start"] = None
+        state["fired"] = False
+    return False
+
+
 def detect_wake_gesture(hand_result, wake_gesture_state, now):
     """Detect the sequence fist -> open_hand -> fist -> open_hand within a timeout."""
     result = {
@@ -693,13 +765,37 @@ def process_detection_frame(frame, face_detector, hands, run_face=True, run_hand
     return compat_face_result, hand_result
 
 
+_recognition_lock = threading.Lock()
+_recognition_busy = False
+_recognition_labels = None
+
+
 def update_face_labels(frame, face_result, frame_count, known_encodings, known_names, last_labels):
+    """Recognize faces in a worker thread so dlib never stalls the video loop."""
+    global _recognition_busy, _recognition_labels
     if not face_result or not face_result.detections:
         return []
 
+    with _recognition_lock:
+        if _recognition_labels is not None:
+            last_labels, _recognition_labels = _recognition_labels, None
+
     should_recognize = frame_count % FACE_RECOGNITION_EVERY_N_FRAMES == 0
-    if should_recognize:
-        return recognize_faces(frame, face_result.detections, known_encodings, known_names)
+    if should_recognize and not _recognition_busy:
+        _recognition_busy = True
+        frame_copy = frame.copy()
+        detections = list(face_result.detections)
+
+        def worker():
+            global _recognition_busy, _recognition_labels
+            try:
+                labels = recognize_faces(frame_copy, detections, known_encodings, known_names)
+                with _recognition_lock:
+                    _recognition_labels = labels
+            finally:
+                _recognition_busy = False
+
+        threading.Thread(target=worker, daemon=True).start()
 
     return last_labels
 
@@ -820,6 +916,7 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
     }
 
     using_radar_pan = False
+    fist_hold_state = {"start": None, "last_fist_at": 0.0, "last_trigger_at": 0.0, "fired": False}
 
     display_enabled = is_camera_display_enabled(default=False)
     display_visible = set_display_visibility(display_enabled, False)
@@ -857,7 +954,9 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
             # Run face detection more often than hand detection so tracking
             # stays responsive without doubling the gesture model workload.
             run_face_detection = frame_count % FACE_DETECT_EVERY_N_FRAMES == 0
-            run_hand_detection = frame_count % DETECT_EVERY_N_FRAMES == 0
+            # Offset from face detection so the two models alternate frames instead of
+            # running on the same frame.
+            run_hand_detection = frame_count % DETECT_EVERY_N_FRAMES == DETECT_EVERY_N_FRAMES - 1
             if run_face_detection or run_hand_detection:
                 face_result, hand_result = process_detection_frame(
                     processing_frame,
@@ -900,6 +999,9 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                 print("[WAKE] Wake gesture detected! Waking up assistant...", flush=True)
                 set_wake_request(source="hand_gesture")
             
+            if detect_fist_hold(latest_hand_result, fist_hold_state, now):
+                threading.Thread(target=toggle_music_playback, daemon=True).start()
+
             # Draw wake gesture progress on screen
             if wake_result["progress"] > 0:
                 progress_text = f"Wake Gesture: {'/'.join(wake_result['matched'])} ({wake_result['progress']}/{len(WAKE_GESTURE_PATTERN)})"
@@ -990,7 +1092,7 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
             if relay_server and frame_count % RELAY_PUBLISH_EVERY_N_FRAMES == 0:
                 relay_server.publish_frame(frame)
             if display_visible:
-                display_frame = cv2.resize(frame, (720, 1280), interpolation=cv2.INTER_LINEAR)
+                display_frame = cv2.resize(frame, (720, 1280), interpolation=cv2.INTER_NEAREST)
                 draw_display_toggle_button(display_frame, "Hide Camera")
                 cv2.imshow("Face and Hand Detection", display_frame)
 
