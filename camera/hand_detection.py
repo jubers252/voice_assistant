@@ -31,6 +31,7 @@ from face_track_servo import (
     TILT_NEUTRAL_ANGLE,
 )
 from sensor_reader import SensorReader
+from presence_automation import PresenceAutomation
 
 try:
     import face_recognition
@@ -84,6 +85,7 @@ SENSOR_TRACKING_TIMEOUT = 3.0  # Hold the last pan target after radar data goes 
 SENSOR_FALLBACK_ENABLE = True  # Enable radar pan tracking.
 
 DISPLAY_STATE_CHECK_SECONDS = 0.2
+SERVO_ADJUSTMENT_POLL_SECONDS = 0.1
 DISPLAY_BUTTON_BOUNDS = (510, 40, 680, 105)
 MAX_PUPIL_ANGLE = math.pi / 2
 
@@ -334,7 +336,7 @@ def read_frames(sock):
         if not data:
             break
 
-        latest_frame = None
+        latest_jpg = None
         while True:
             buffer += data
             if len(buffer) > max_buffer_size:
@@ -342,17 +344,16 @@ def read_frames(sock):
 
             while True:
                 start = buffer.find(b"\xff\xd8")
-                end = buffer.find(b"\xff\xd9")
-                if start == -1 or end == -1 or end <= start:
+                end = buffer.find(b"\xff\xd9", start + 2) if start != -1 else -1
+                if start == -1 or end == -1:
+                    if start > 0:
+                        buffer = buffer[start:]
                     break
 
-                jpg = buffer[start:end + 2]
+                latest_jpg = buffer[start:end + 2]
                 buffer = buffer[end + 2:]
-                frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
-                if frame is not None:
-                    latest_frame = frame
 
-            # Discard queued old frames and track the newest complete frame.
+            # Discard queued old frames; only the newest one is decoded.
             readable, _, _ = select.select([sock], [], [], 0)
             if not readable:
                 break
@@ -360,6 +361,10 @@ def read_frames(sock):
             if not data:
                 return
 
+        latest_frame = (
+            cv2.imdecode(np.frombuffer(latest_jpg, np.uint8), cv2.IMREAD_COLOR)
+            if latest_jpg is not None else None
+        )
         if latest_frame is not None:
             yield latest_frame
 
@@ -861,6 +866,37 @@ def draw_hand_overlays(frame, hand_result, mp_draw, hand_connections, frame_coun
                   f"gesture={gesture_info['gesture']}")
 
 
+class RadarPanThread(threading.Thread):
+    """Moves the pan servo from radar samples at a fixed rate, independent of
+    video processing, so slow frames can never make the motor lag."""
+
+    def __init__(self, servo_tracker, sensor_reader, period=0.02):
+        super().__init__(daemon=True)
+        self.servo_tracker = servo_tracker
+        self.sensor_reader = sensor_reader
+        self.period = period
+        self.enabled = False
+        self.active = False
+        self.stop_event = threading.Event()
+
+    def run(self):
+        while not self.stop_event.wait(self.period):
+            sample = self.sensor_reader.get_latest() if self.enabled else None
+            self.active = bool(
+                sample
+                and time.time() - sample.get("timestamp", 0) <= SENSOR_TRACKING_TIMEOUT
+            )
+            if not self.active:
+                continue
+            previous = self.servo_tracker.last_pan_angle
+            self.servo_tracker.move_pan_smooth(sample.get("pan_angle", 0))
+            if self.servo_tracker.last_pan_angle != previous:
+                publish_tracking_angles(self.servo_tracker)
+
+    def stop(self):
+        self.stop_event.set()
+
+
 def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=None):
     """Main detection loop for face and hand tracking.
     
@@ -905,6 +941,8 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
     next_tilt_search_at = 0.0
     last_servo_command_id = 0
     manual_servo_until = 0.0
+    last_adjustment_check_at = 0.0
+    last_radar_log_at = 0.0
 
     # Wake gesture detection state
     wake_gesture_state = {
@@ -916,6 +954,10 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
     }
 
     using_radar_pan = False
+    radar_thread = None
+    if sensor_reader and SENSOR_FALLBACK_ENABLE:
+        radar_thread = RadarPanThread(servo_tracker, sensor_reader)
+        radar_thread.start()
     fist_hold_state = {"start": None, "last_fist_at": 0.0, "last_trigger_at": 0.0, "fired": False}
 
     display_enabled = is_camera_display_enabled(default=False)
@@ -1011,7 +1053,10 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
             face_visible = bool(
                 latest_face_result and latest_face_result.detections
             )
-            adjustment = get_servo_adjustment(after_command_id=last_servo_command_id)
+            adjustment = None
+            if now - last_adjustment_check_at >= SERVO_ADJUSTMENT_POLL_SECONDS:
+                last_adjustment_check_at = now
+                adjustment = get_servo_adjustment(after_command_id=last_servo_command_id)
             if adjustment:
                 last_servo_command_id = adjustment["command_id"]
                 if adjustment.get("pan_angle") is not None:
@@ -1028,8 +1073,11 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                     flush=True,
                 )
 
-            if run_face_detection and now >= manual_servo_until:
-                if face_visible:
+            if radar_thread:
+                radar_thread.enabled = not face_visible and now >= manual_servo_until
+
+            if now >= manual_servo_until and (run_face_detection or not face_visible):
+                if face_visible and run_face_detection:
                     primary_face = latest_face_result.detections[0]
                     face_bbox = get_face_bbox(primary_face, frame.shape[1], frame.shape[0])
                     _, tilt_correction = servo_tracker.bbox_to_angles(face_bbox)
@@ -1039,7 +1087,7 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                     publish_tracking_angles(servo_tracker)
                     last_face_seen_at = now
                     using_radar_pan = False
-                else:
+                elif not face_visible:
                     # Radar may help reacquire a face after it leaves view,
                     # but cannot override face-based tracking while visible.
                     sensor_sample = (
@@ -1047,15 +1095,8 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                         if sensor_reader and SENSOR_FALLBACK_ENABLE
                         else None
                     )
-                    using_radar_pan = bool(
-                        sensor_sample
-                        and now - sensor_sample.get("timestamp", 0) <= SENSOR_TRACKING_TIMEOUT
-                    )
+                    using_radar_pan = bool(radar_thread and radar_thread.active)
                     if using_radar_pan:
-                        previous_pan = servo_tracker.last_pan_angle
-                        servo_tracker.move_pan_to_angle(sensor_sample.get("pan_angle", 0))
-                        if servo_tracker.last_pan_angle != previous_pan:
-                            publish_tracking_angles(servo_tracker)
                         cv2.putText(frame, "● RADAR REACQUIRE", (10, 50),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
@@ -1108,6 +1149,9 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                     print(f"Exiting. Total frames: {frame_count}")
                     break
     finally:
+        if radar_thread:
+            radar_thread.stop()
+            radar_thread.join(timeout=1.0)
         servo_tracker.stop()
         hands.close()
         face_detector.close()
@@ -1124,6 +1168,7 @@ def main():
     sock = None
     servo_tracker = FaceTrackServo(verbose=False)
     sensor_reader = None
+    presence = None
     relay_server = None
 
     try:
@@ -1147,6 +1192,8 @@ def main():
                 )
                 sensor_reader.start()
                 print("[SENSOR] Sensor reader started for fallback tracking", flush=True)
+                presence = PresenceAutomation(sensor_reader)
+                presence.start()
             except Exception as e:
                 print(f"[WARNING] Could not initialize sensor reader: {e}")
                 sensor_reader = None
@@ -1154,6 +1201,8 @@ def main():
         detect_face_and_hands(sock, servo_tracker, relay_server=relay_server, sensor_reader=sensor_reader)
     
     finally:
+        if presence:
+            presence.stop()
         servo_tracker.stop()
         if sensor_reader and sensor_reader.running:
             sensor_reader.stop()

@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 
 
@@ -20,10 +21,17 @@ def _read_json_file(path):
 
 
 def _write_json_file(path, payload):
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as output_file:
-        json.dump(payload, output_file)
-    os.replace(temp_path, path)
+    # A unique temp name per writer avoids collisions between processes/threads.
+    temp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as output_file:
+            json.dump(payload, output_file)
+        os.replace(temp_path, path)
+    finally:
+        try:
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
 
 
 def _normalized_people(visible_people):

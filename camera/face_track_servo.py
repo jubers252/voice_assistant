@@ -1,6 +1,7 @@
 """Pan/tilt servo control for face tracking."""
 
 import math
+import threading
 import time
 from collections import deque
 
@@ -48,6 +49,7 @@ class FaceTrackServo:
         self.last_pan_angle = PAN_NEUTRAL_ANGLE
         self.last_tilt_angle = TILT_NEUTRAL_ANGLE
         self.initialized = False
+        self._lock = threading.RLock()
 
     @staticmethod
     def angle_to_duty_cycle(angle):
@@ -100,6 +102,10 @@ class FaceTrackServo:
         return current + max(-MAX_ANGLE_DELTA, min(MAX_ANGLE_DELTA, difference))
 
     def _move_axis(self, axis, angle, smooth=False):
+        with self._lock:
+            return self._move_axis_locked(axis, angle, smooth)
+
+    def _move_axis_locked(self, axis, angle, smooth=False):
         if not self.initialized:
             return None
 
@@ -151,6 +157,9 @@ class FaceTrackServo:
 
     def move_pan_to_angle(self, angle):
         return self._move_axis("pan", angle)
+
+    def move_pan_smooth(self, angle):
+        return self._move_axis("pan", angle, smooth=True)
 
     def move_tilt_to_angle(self, angle):
         return self._move_axis("tilt", angle)

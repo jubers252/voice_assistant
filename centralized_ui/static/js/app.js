@@ -120,6 +120,11 @@ class TabbedDashboardManager {
             startBtn.addEventListener('click', () => this.startAssistant());
         }
 
+        const minimizeBtn = document.getElementById('minimizeBtn');
+        if (minimizeBtn) {
+            minimizeBtn.addEventListener('click', () => this.minimizeDashboard());
+        }
+
         // Anime face controls
         const toggleAnimeFace = document.getElementById('toggleAnimeFace');
         if (toggleAnimeFace) {
@@ -340,6 +345,24 @@ class TabbedDashboardManager {
                 setTimeout(() => this.checkAssistantStatus(), 3000);
             })
             .catch(error => console.error('Stop request error:', error));
+    }
+
+    async minimizeDashboard() {
+        const minimizeBtn = document.getElementById('minimizeBtn');
+        if (minimizeBtn) minimizeBtn.disabled = true;
+
+        try {
+            const response = await fetch('/api/window/minimize', { method: 'POST' });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.error || 'Could not minimize the dashboard');
+            }
+        } catch (error) {
+            console.error('Minimize request error:', error);
+            window.alert(error.message);
+        } finally {
+            if (minimizeBtn) minimizeBtn.disabled = false;
+        }
     }
 
     /* ============================================

@@ -314,6 +314,47 @@ def assistant_status():
     pid = _find_assistant_pid()
     return jsonify({'running': pid is not None, 'pid': pid})
 
+@app.route('/api/window/minimize', methods=['POST'])
+def minimize_dashboard():
+    """Minimize the kiosk browser window using the desktop window manager."""
+    env = os.environ.copy()
+    env.setdefault('DISPLAY', ':0')
+    env.setdefault('XAUTHORITY', '/home/pi/.Xauthority')
+
+    try:
+        result = subprocess.run(
+            ['xdotool', 'search', '--onlyvisible', '--name', 'Voice Assistant Dashboard'],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=5
+        )
+        window_ids = result.stdout.split()
+        if result.returncode != 0 or not window_ids:
+            logger.warning("[UI] Dashboard window not found for minimize")
+            return jsonify({'error': 'Dashboard window was not found'}), 404
+
+        for window_id in window_ids:
+            subprocess.run(
+                ['xdotool', 'windowminimize', window_id],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=5
+            )
+
+        return jsonify({'success': True})
+    except FileNotFoundError:
+        logger.error("[UI] Cannot minimize dashboard: xdotool is not installed")
+        return jsonify({'error': 'Minimize requires xdotool to be installed'}), 503
+    except subprocess.CalledProcessError as e:
+        logger.error("[UI] Failed to minimize dashboard window: %s", e.stderr.strip())
+        return jsonify({'error': 'Could not minimize the dashboard window'}), 500
+    except subprocess.TimeoutExpired:
+        logger.error("[UI] Timed out while minimizing dashboard window")
+        return jsonify({'error': 'Timed out while minimizing the dashboard window'}), 504
+
 @app.route('/api/assistant/start', methods=['POST'])
 def assistant_start():
     """Launch voice_assistant.py from the dashboard's Start button."""

@@ -56,6 +56,13 @@ class SensorReader(threading.Thread):
         self.servo = None
         self.verbose = verbose
         self.servo_speed = servo_speed
+        self.thread_alive = True
+        self.last_sample_time = 0
+        self.consecutive_errors = 0
+        self.reconnect_delay = 1.0
+        self.max_reconnect_attempts = 5
+        # The radar sends nothing while it has no target, so silence is normal.
+        self.idle_reconnect_seconds = 60.0
         
         # Servo stability controls
         self.angle_smoothing_buffer = []
@@ -64,9 +71,10 @@ class SensorReader(threading.Thread):
         self.last_servo_angle = 0.0
         
     def run(self):
-        """Main sensor reading loop"""
+        """Main sensor reading loop with automatic reconnection"""
         if not HAS_SERIAL:
             print("[SENSOR] Serial module not available")
+            self.thread_alive = False
             return
         
         # Initialize servo if enabled
@@ -81,73 +89,127 @@ class SensorReader(threading.Thread):
         else:
             print("[SENSOR] Servo tracking disabled")
         
-        try:
-            ser = serial.Serial(self.port, self.baudrate, timeout=1)
-            print(f"[SENSOR] Connected to {self.port} at {self.baudrate} baud")
-            self.running = True
-            
-            while self.running:
-                try:
-                    data = ser.read(24)
-                    
-                    if len(data) != 24:
-                        continue
-                    
-                    # Check frame header
-                    if data[0] != 0xAA or data[1] != 0xFF:
-                        continue
-                    
-                    # Extract coordinates
-                    raw_x = struct.unpack("<H", data[4:6])[0]
-                    raw_y = struct.unpack("<H", data[6:8])[0]
-                    
-                    x = self._decode_coord(raw_x)
-                    y = self._decode_coord(raw_y)
-                    
-                    if y == 0:
-                        continue
-                    
-                    # Calculate pan angle (horizontal)
-                    pan_angle = math.degrees(math.atan2(x, y))
-                    
-                    sample = {
-                        "x": x,
-                        "y": y,
-                        "pan_angle": pan_angle,
-                        "motion_detected": True,
-                        "timestamp": time.time()
-                    }
-                    
-                    self.latest_sample = sample
-                    self.error_count = 0
-                    
-                    # Control servo if enabled
-                    if self.servo:
-                        self._control_servo(pan_angle)
-                    
-                    # Try to add to queue (non-blocking)
+        self.running = True
+        reconnect_attempts = 0
+        
+        while self.running:
+            try:
+                ser = serial.Serial(self.port, self.baudrate, timeout=1)
+                print(f"[SENSOR] Connected to {self.port} at {self.baudrate} baud")
+                reconnect_attempts = 0
+                self.consecutive_errors = 0
+                
+                buffer = bytearray()
+                ser.reset_input_buffer()
+                last_data_at = time.time()
+                
+                while self.running:
                     try:
-                        self.sample_queue.put_nowait(sample)
-                    except:
-                        pass
-                    
-                except Exception as e:
-                    self.error_count += 1
-                    if self.error_count >= self.max_errors:
-                        print(f"[SENSOR] Too many errors ({self.error_count}), stopping reader")
-                        break
+                        chunk = ser.read(max(ser.in_waiting, 1))
+                        if chunk:
+                            buffer.extend(chunk)
+                            last_data_at = time.time()
+                        elif time.time() - last_data_at > self.idle_reconnect_seconds:
+                            print(f"[SENSOR] No serial data for {self.idle_reconnect_seconds:.0f}s, reconnecting...")
+                            break
+                        
+                        # Resync on the frame header so one dropped byte can't
+                        # misalign every following read.
+                        start = buffer.find(b"\xAA\xFF")
+                        if start < 0:
+                            del buffer[:-1]
+                            continue
+                        if start > 0:
+                            del buffer[:start]
+                        if len(buffer) < 8:
+                            continue
+                        data = bytes(buffer[:8])
+                        del buffer[:2]
+                        if len(buffer) > 512:
+                            del buffer[:-64]
+                        
+                        # Extract coordinates
+                        raw_x = struct.unpack("<H", data[4:6])[0]
+                        raw_y = struct.unpack("<H", data[6:8])[0]
+                        
+                        x = self._decode_coord(raw_x)
+                        y = self._decode_coord(raw_y)
+                        
+                        if y == 0:
+                            continue
+                        
+                        # Calculate pan angle (horizontal)
+                        pan_angle = math.degrees(math.atan2(x, y))
+                        
+                        sample = {
+                            "x": x,
+                            "y": y,
+                            "pan_angle": pan_angle,
+                            # Coordinates are in mm: y is forward depth, distance is straight-line.
+                            "depth_m": abs(y) / 1000.0,
+                            "distance_m": math.hypot(x, y) / 1000.0,
+                            "motion_detected": True,
+                            "timestamp": time.time()
+                        }
+                        
+                        self.latest_sample = sample
+                        self.last_sample_time = time.time()
+                        self.consecutive_errors = 0
+                        
+                        # Control servo if enabled
+                        if self.servo:
+                            self._control_servo(pan_angle)
+                        
+                        # Try to add to queue (non-blocking)
+                        try:
+                            self.sample_queue.put_nowait(sample)
+                        except:
+                            pass
+                        
+                    except serial.SerialException as e:
+                        self.consecutive_errors += 1
+                        if self.verbose:
+                            print(f"[SENSOR] Serial error (#{self.consecutive_errors}): {e}")
+                        if self.consecutive_errors > 5:
+                            print(f"[SENSOR] Too many serial errors, attempting reconnection...")
+                            break
+                    except Exception as e:
+                        self.consecutive_errors += 1
+                        if self.verbose:
+                            print(f"[SENSOR] Read error (#{self.consecutive_errors}): {e}")
+                        if self.consecutive_errors > 10:
+                            print(f"[SENSOR] Too many errors, attempting reconnection...")
+                            break
+                
+                try:
+                    ser.close()
+                except:
+                    pass
+                
+            except FileNotFoundError:
+                print(f"[SENSOR] Serial port {self.port} not found")
+                reconnect_attempts += 1
+            except serial.SerialException as e:
+                print(f"[SENSOR] Serial connection error: {e}")
+                reconnect_attempts += 1
+            except Exception as e:
+                print(f"[SENSOR] Unexpected error: {e}")
+                reconnect_attempts += 1
             
-            ser.close()
-            print("[SENSOR] Connection closed")
-            
-        except FileNotFoundError:
-            print(f"[SENSOR] Serial port {self.port} not found")
-        except Exception as e:
-            print(f"[SENSOR] Error: {e}")
-        finally:
-            self.running = False
-            if self.servo:
-                self.servo = None
+            if self.running and reconnect_attempts < self.max_reconnect_attempts:
+                if self.verbose:
+                    print(f"[SENSOR] Reconnecting in {self.reconnect_delay:.1f}s (attempt {reconnect_attempts}/{self.max_reconnect_attempts})...")
+                time.sleep(self.reconnect_delay)
+            elif reconnect_attempts >= self.max_reconnect_attempts:
+                print(f"[SENSOR] Max reconnection attempts ({self.max_reconnect_attempts}) reached, stopping reader")
+                break
+        
+        self.running = False
+        self.thread_alive = False
+        if self.servo:
+            self.servo = None
+        print("[SENSOR] Reader thread stopped")
+
     
     @staticmethod
     def _decode_coord(raw):
@@ -223,6 +285,51 @@ class SensorReader(threading.Thread):
         """Get latest sensor sample (non-blocking)"""
         return self.latest_sample
     
+    def is_healthy(self, timeout=5.0):
+        """
+        Check if sensor reader is still providing fresh data.
+        
+        Args:
+            timeout: Maximum seconds since last sample (default 5.0)
+        
+        Returns:
+            True if thread is alive and has recent data, False otherwise
+        """
+        now = time.time()
+        
+        # Check if thread has stopped
+        if not self.thread_alive or not self.running:
+            return False
+        
+        # Check if data is fresh
+        if self.latest_sample is None:
+            return False
+        
+        time_since_sample = now - self.latest_sample.get("timestamp", 0)
+        if time_since_sample > timeout:
+            return False
+        
+        return True
+    
+    def get_diagnostics(self):
+        """Get sensor health diagnostics"""
+        now = time.time()
+        time_since_sample = (
+            now - self.latest_sample.get("timestamp", 0)
+            if self.latest_sample
+            else float('inf')
+        )
+        
+        return {
+            "thread_alive": self.thread_alive,
+            "running": self.running,
+            "is_healthy": self.is_healthy(),
+            "consecutive_errors": self.consecutive_errors,
+            "latest_sample": self.latest_sample,
+            "time_since_sample": time_since_sample,
+            "has_latest_sample": self.latest_sample is not None,
+        }
+    
     def stop(self):
         """Stop the sensor reader thread"""
         self.running = False
@@ -247,16 +354,7 @@ if __name__ == "__main__":
     reader.start()
     
     try:
-        print("\n[SENSOR] Starting servo tracking...\nX        Y        Pan      Motion")
-        print("-" * 45)
         while True:
-            sample = reader.get_latest()
-            if sample:
-                pan = sample.get('pan_angle', 0)
-                x = sample['x']
-                y = sample['y']
-                motion = "✓" if sample['motion_detected'] else "✗"
-                print(f"{x:6d}   {y:6d}   {pan:7.2f}°  {motion}")
             time.sleep(0.1)
     except KeyboardInterrupt:
         print("\n\nStopping...")

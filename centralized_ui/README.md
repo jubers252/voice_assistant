@@ -29,6 +29,11 @@ python app.py
 
 The dashboard will be available at `http://localhost:5000`
 
+The dashboard's Minimize button minimizes the fullscreen Chromium window so you
+can switch to other desktop tasks. If needed, install `xdotool` on the
+Raspberry Pi with `sudo apt install xdotool`; restore the dashboard from the
+desktop's window switcher or taskbar.
+
 ### 3. Setup for Network Access
 
 Access from any device on your network:
