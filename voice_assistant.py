@@ -44,6 +44,36 @@ ENABLE_CENTRALIZED_UI = os.getenv("ENABLE_CENTRALIZED_UI", "true").lower() in ("
 CENTRALIZED_UI_OPEN_BROWSER = os.getenv("CENTRALIZED_UI_OPEN_BROWSER", "false").lower() in ("true", "1", "yes")
 CENTRALIZED_UI_PORT = int(os.getenv("CENTRALIZED_UI_PORT", "5000"))
 CENTRALIZED_UI_PATH = os.path.join(current_dir, "centralized_ui")
+PLAYWRIGHT_MCP_PATH = os.path.join(current_dir, ".playwright-mcp")
+PLAYWRIGHT_MCP_RETENTION_SECONDS = 3 * 24 * 60 * 60
+
+
+def _cleanup_old_playwright_files():
+    cutoff = time.time() - PLAYWRIGHT_MCP_RETENTION_SECONDS
+    try:
+        with os.scandir(PLAYWRIGHT_MCP_PATH) as entries:
+            deleted = 0
+            for entry in entries:
+                try:
+                    if (
+                        entry.is_file(follow_symlinks=False)
+                        and entry.stat(follow_symlinks=False).st_mtime < cutoff
+                    ):
+                        os.unlink(entry.path)
+                        deleted += 1
+                except FileNotFoundError:
+                    continue
+                except OSError as error:
+                    print(f"[CLEANUP] Could not remove {entry.name}: {error}")
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        print(f"[CLEANUP] Could not scan {PLAYWRIGHT_MCP_PATH}: {error}")
+        return
+
+    if deleted:
+        print(f"[CLEANUP] Removed {deleted} old Playwright file(s).")
+
 
 def _is_port_in_use(port, host="127.0.0.1"):
     import socket
@@ -631,4 +661,5 @@ def _run_main_loop():
 
 
 if __name__ == "__main__":
+    _cleanup_old_playwright_files()
     _run_main_loop()

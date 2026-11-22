@@ -39,7 +39,7 @@ class PresenceAutomationTests(unittest.TestCase):
 
     def test_sample_outside_range_does_not_count_as_presence(self):
         self.automation.sensor_reader.samples = [
-            {"distance_m": 3.01, "timestamp": 100.0}
+            {"distance_m": 3.31, "timestamp": 100.0}
         ]
 
         with patch("camera.presence_automation.time.time", return_value=100.5):
