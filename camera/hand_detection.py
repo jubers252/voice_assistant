@@ -34,6 +34,12 @@ from sensor_reader import SensorReader
 from presence_automation import PresenceAutomation
 
 try:
+    from sensor_dual_230deg import DualSensor230Degree
+except ImportError as dual_sensor_error:
+    DualSensor230Degree = None
+    print(f"[DUAL-SENSOR] Dual sensor disabled: {dual_sensor_error}", flush=True)
+
+try:
     import face_recognition
 except ImportError:
     face_recognition = None
@@ -79,7 +85,8 @@ MUSIC_PLAYER_SOCKET = "/tmp/youtube-player.sock"
 FINGER_THRESHOLD = 0.05  # Distance threshold for finger detection
 
 # Sensor-based tracking fallback
-SENSOR_PORT = os.getenv("SENSOR_PORT", "/dev/ttyAMA0")
+LEFT_SENSOR_PORT = os.getenv("LEFT_SENSOR_PORT", os.getenv("SENSOR_PORT", "/dev/ttyAMA0"))
+RIGHT_SENSOR_PORT = os.getenv("RIGHT_SENSOR_PORT", "/dev/ttyAMA1")
 SENSOR_BAUDRATE = 256000
 SENSOR_TRACKING_TIMEOUT = 3.0  # Hold the last pan target after radar data goes stale.
 SENSOR_FALLBACK_ENABLE = True  # Enable radar pan tracking.
@@ -889,7 +896,11 @@ class RadarPanThread(threading.Thread):
             if not self.active:
                 continue
             previous = self.servo_tracker.last_pan_angle
-            self.servo_tracker.move_pan_smooth(sample.get("pan_angle", 0))
+            target_angle = sample.get(
+                "absolute_pan_angle",
+                sample.get("pan_angle", 0),
+            )
+            self.servo_tracker.move_pan_smooth(target_angle)
             if self.servo_tracker.last_pan_angle != previous:
                 publish_tracking_angles(self.servo_tracker)
 
@@ -897,7 +908,7 @@ class RadarPanThread(threading.Thread):
         self.stop_event.set()
 
 
-def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=None):
+def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=None, radar_thread=None):
     """Main detection loop for face and hand tracking.
     
     Args:
@@ -905,6 +916,7 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
         servo_tracker: FaceTrackServo instance for face tracking
         relay_server: Optional frame relay for downstream consumers
         sensor_reader: Optional SensorReader instance for fallback tracking when face not detected
+        radar_thread: Optional radar pan worker started before camera initialization
     """
     mp_draw = mp_vision.drawing_utils
     hand_connections = mp_vision.HandLandmarksConnections.HAND_CONNECTIONS
@@ -954,10 +966,6 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
     }
 
     using_radar_pan = False
-    radar_thread = None
-    if sensor_reader and SENSOR_FALLBACK_ENABLE:
-        radar_thread = RadarPanThread(servo_tracker, sensor_reader)
-        radar_thread.start()
     fist_hold_state = {"start": None, "last_fist_at": 0.0, "last_trigger_at": 0.0, "fired": False}
 
     display_enabled = is_camera_display_enabled(default=False)
@@ -1100,34 +1108,32 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                         cv2.putText(frame, "● RADAR REACQUIRE", (10, 50),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
 
-                if not face_visible and now - last_face_seen_at >= FACE_LOST_CENTER_DELAY:
-                    # Search only around the configured default tilt position.
-                    # The endpoints are hard limits for this recovery motion.
-                    if now >= next_tilt_search_at:
-                        lower = max(
-                            TILT_MIN_ANGLE,
-                            TILT_NEUTRAL_ANGLE - TILT_SEARCH_RANGE_DEGREES,
-                        )
-                        upper = min(
-                            TILT_MAX_ANGLE,
-                            TILT_NEUTRAL_ANGLE + TILT_SEARCH_RANGE_DEGREES,
-                        )
-                        target_tilt = (
-                            servo_tracker.last_tilt_angle
-                            + tilt_search_direction * TILT_SEARCH_STEP_DEGREES
-                        )
-                        if target_tilt >= upper:
-                            target_tilt = upper
-                            tilt_search_direction = -1
-                        elif target_tilt <= lower:
-                            target_tilt = lower
-                            tilt_search_direction = 1
+                    if now - last_face_seen_at >= FACE_LOST_CENTER_DELAY:
+                        if now >= next_tilt_search_at:
+                            lower = max(
+                                TILT_MIN_ANGLE,
+                                TILT_NEUTRAL_ANGLE - TILT_SEARCH_RANGE_DEGREES,
+                            )
+                            upper = min(
+                                TILT_MAX_ANGLE,
+                                TILT_NEUTRAL_ANGLE + TILT_SEARCH_RANGE_DEGREES,
+                            )
+                            target_tilt = (
+                                servo_tracker.last_tilt_angle
+                                + tilt_search_direction * TILT_SEARCH_STEP_DEGREES
+                            )
+                            if target_tilt >= upper:
+                                target_tilt = upper
+                                tilt_search_direction = -1
+                            elif target_tilt <= lower:
+                                target_tilt = lower
+                                tilt_search_direction = 1
 
-                        previous_tilt = servo_tracker.last_tilt_angle
-                        servo_tracker.move_tilt_to_angle(target_tilt)
-                        if servo_tracker.last_tilt_angle != previous_tilt:
-                            publish_tracking_angles(servo_tracker)
-                        next_tilt_search_at = now + TILT_SEARCH_INTERVAL_SECONDS
+                            previous_tilt = servo_tracker.last_tilt_angle
+                            servo_tracker.move_tilt_to_angle(target_tilt)
+                            if servo_tracker.last_tilt_angle != previous_tilt:
+                                publish_tracking_angles(servo_tracker)
+                            next_tilt_search_at = now + TILT_SEARCH_INTERVAL_SECONDS
             
             # Dashboard frames are published independently of the desktop window.
             if relay_server and frame_count % RELAY_PUBLISH_EVERY_N_FRAMES == 0:
@@ -1149,9 +1155,6 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                     print(f"Exiting. Total frames: {frame_count}")
                     break
     finally:
-        if radar_thread:
-            radar_thread.stop()
-            radar_thread.join(timeout=1.0)
         servo_tracker.stop()
         hands.close()
         face_detector.close()
@@ -1163,56 +1166,87 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
 
 
 def main():
-    process = start_stream()
-    threading.Thread(target=print_stream_logs, args=(process,), daemon=True).start()
+    process = None
     sock = None
     servo_tracker = FaceTrackServo(verbose=False)
     sensor_reader = None
     presence = None
     relay_server = None
+    radar_thread = None
 
     try:
-        sock = connect_stream(process)
-        relay_server = FrameRelayServer()
-        relay_server.start()
-        
-        # Initialize servo tracking (optional - will skip if hardware not available)
         if not servo_tracker.initialize():
             print("[WARNING] Could not initialize servo hardware - face tracking disabled")
         
-        # Initialize sensor-based fallback tracking (optional)
+        # Initialize two-sensor fallback tracking (optional)
         if SENSOR_FALLBACK_ENABLE:
             try:
-                sensor_reader = SensorReader(
-                    port=SENSOR_PORT,
-                    baudrate=SENSOR_BAUDRATE,
-                    daemon=True,
-                    enable_servo=False,  # Servo controlled by face detector, not sensor
-                    verbose=False
-                )
-                sensor_reader.start()
-                print("[SENSOR] Sensor reader started for fallback tracking", flush=True)
+                if DualSensor230Degree is not None:
+                    sensor_reader = DualSensor230Degree(
+                        left_port=LEFT_SENSOR_PORT,
+                        right_port=RIGHT_SENSOR_PORT,
+                        enable_servo=False,
+                        verbose=False,
+                    )
+                    sensor_reader.start()
+                    print(
+                        "[DUAL-SENSOR] Two-sensor reader started "
+                        f"(left={LEFT_SENSOR_PORT}, right={RIGHT_SENSOR_PORT})",
+                        flush=True,
+                    )
+                else:
+                    sensor_reader = SensorReader(
+                        port=LEFT_SENSOR_PORT,
+                        baudrate=SENSOR_BAUDRATE,
+                        daemon=True,
+                        enable_servo=False,
+                        verbose=False,
+                    )
+                    sensor_reader.start()
+                    print("[SENSOR] Single-sensor fallback reader started", flush=True)
                 presence = PresenceAutomation(sensor_reader)
                 presence.start()
             except Exception as e:
                 print(f"[WARNING] Could not initialize sensor reader: {e}")
                 sensor_reader = None
+
+        if sensor_reader:
+            radar_thread = RadarPanThread(servo_tracker, sensor_reader)
+            radar_thread.enabled = True
+            radar_thread.start()
+
+        process = start_stream()
+        threading.Thread(target=print_stream_logs, args=(process,), daemon=True).start()
+        sock = connect_stream(process)
+        relay_server = FrameRelayServer()
+        relay_server.start()
         
-        detect_face_and_hands(sock, servo_tracker, relay_server=relay_server, sensor_reader=sensor_reader)
+        detect_face_and_hands(
+            sock,
+            servo_tracker,
+            relay_server=relay_server,
+            sensor_reader=sensor_reader,
+            radar_thread=radar_thread,
+        )
     
     finally:
         if presence:
             presence.stop()
+        if radar_thread:
+            radar_thread.stop()
+            radar_thread.join(timeout=1.0)
         servo_tracker.stop()
-        if sensor_reader and sensor_reader.running:
+        if sensor_reader:
             sensor_reader.stop()
-            sensor_reader.join(timeout=2.0)
+            if hasattr(sensor_reader, "join"):
+                sensor_reader.join(timeout=2.0)
         if relay_server:
             relay_server.stop()
         if sock:
             sock.close()
-        process.terminate()
-        process.wait()
+        if process:
+            process.terminate()
+            process.wait()
         cv2.destroyAllWindows()
 
 

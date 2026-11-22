@@ -5,7 +5,10 @@ import threading
 import time
 from collections import deque
 
-from rpi_hardware_pwm import HardwarePWM
+try:
+    from rpi_hardware_pwm import HardwarePWM
+except ImportError:
+    HardwarePWM = None
 
 
 PAN_MIN_ANGLE = -90
@@ -59,6 +62,10 @@ class FaceTrackServo:
         return pulse_ms / 20.0 * 100
 
     def initialize(self):
+        if HardwarePWM is None:
+            print("Error initializing servos: rpi-hardware-pwm is not installed.")
+            self.initialized = False
+            return False
         try:
             print("Initializing hardware PWM for face tracking...")
             self.pan_pwm = HardwarePWM(

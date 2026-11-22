@@ -32,7 +32,7 @@ except ImportError:
 class SensorReader(threading.Thread):
     """Read person position data from serial sensor (RD03D or similar)"""
     
-    def __init__(self, port="/dev/ttyAMA0", baudrate=256000, daemon=False, enable_servo=True, verbose=False, servo_speed=5):
+    def __init__(self, port="/dev/ttyAMA1", baudrate=256000, daemon=False, enable_servo=True, verbose=False, servo_speed=5):
         """
         Initialize sensor reader thread.
         
@@ -61,8 +61,6 @@ class SensorReader(threading.Thread):
         self.consecutive_errors = 0
         self.reconnect_delay = 1.0
         self.max_reconnect_attempts = 5
-        # The radar sends nothing while it has no target, so silence is normal.
-        self.idle_reconnect_seconds = 60.0
         
         # Servo stability controls
         self.angle_smoothing_buffer = []
@@ -101,17 +99,14 @@ class SensorReader(threading.Thread):
                 
                 buffer = bytearray()
                 ser.reset_input_buffer()
-                last_data_at = time.time()
                 
                 while self.running:
                     try:
+                        # Silence is normal (no target in view), so only serial
+                        # exceptions below trigger a reconnect.
                         chunk = ser.read(max(ser.in_waiting, 1))
                         if chunk:
                             buffer.extend(chunk)
-                            last_data_at = time.time()
-                        elif time.time() - last_data_at > self.idle_reconnect_seconds:
-                            print(f"[SENSOR] No serial data for {self.idle_reconnect_seconds:.0f}s, reconnecting...")
-                            break
                         
                         # Resync on the frame header so one dropped byte can't
                         # misalign every following read.
@@ -152,6 +147,10 @@ class SensorReader(threading.Thread):
                             "timestamp": time.time()
                         }
                         
+                        print(
+                            f"[SENSOR DATA] x={x:.0f}mm y={y:.0f}mm "
+                            f"distance={sample['distance_m']:.2f}m pan={pan_angle:.1f}deg"
+                        )
                         self.latest_sample = sample
                         self.last_sample_time = time.time()
                         self.consecutive_errors = 0

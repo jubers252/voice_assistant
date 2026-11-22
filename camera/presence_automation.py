@@ -28,11 +28,19 @@ class PresenceAutomation(threading.Thread):
         self.turned_off = None  # appliances we switched off; None while someone is present
 
     def _someone_near(self):
-        sample = self.sensor_reader.get_latest()
-        return bool(
+        get_presence_samples = getattr(self.sensor_reader, "get_presence_samples", None)
+        if callable(get_presence_samples):
+            samples = get_presence_samples()
+        else:
+            sample = self.sensor_reader.get_latest()
+            samples = [sample] if sample else []
+
+        now = time.time()
+        return any(
             sample
-            and time.time() - sample["timestamp"] <= SAMPLE_FRESH_SECONDS
-            and sample["distance_m"] <= PRESENCE_DISTANCE_M
+            and 0 <= now - sample.get("timestamp", 0) <= SAMPLE_FRESH_SECONDS
+            and sample.get("distance_m", float("inf")) <= PRESENCE_DISTANCE_M
+            for sample in samples
         )
 
     def _turn_off_active(self):
@@ -68,7 +76,10 @@ class PresenceAutomation(threading.Thread):
                     continue
                 else:
                     away_since = away_since or now
-                    done = now - away_since < AWAY_DELAY_SECONDS or self._turn_off_active()
+                    done = (
+                        now - away_since < AWAY_DELAY_SECONDS
+                        or self._turn_off_active()
+                    )
             except Exception as error:
                 print(f"[PRESENCE] Error: {error}", flush=True)
                 done = False
@@ -77,3 +88,21 @@ class PresenceAutomation(threading.Thread):
 
     def stop(self):
         self.stop_event.set()
+
+if __name__ == "__main__":
+    from camera.sensor_dual_230deg import DualSensor230Degree
+
+    sensor_reader = DualSensor230Degree(enable_servo=False)
+    presence_automation = PresenceAutomation(sensor_reader)
+    try:
+        sensor_reader.start()
+        presence_automation.start()
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        presence_automation.stop()
+        if presence_automation.is_alive():
+            presence_automation.join(timeout=2)
+        sensor_reader.stop()
