@@ -144,6 +144,14 @@ class DetectionWorker(threading.Thread):
         with self.lock:
             return self.detections
 
+    def has_recent_person(self, max_age_seconds=2.0):
+        with self.lock:
+            if self.updated_at <= 0:
+                return None
+            if not 0 <= time.time() - self.updated_at <= max_age_seconds:
+                return None
+            return bool(self.detections)
+
     def run(self):
         while not self.stop_event.is_set():
             if not self.has_work.wait(timeout=0.5):
@@ -153,7 +161,11 @@ class DetectionWorker(threading.Thread):
                 frame, self.pending = self.pending, None
             if frame is None:
                 continue
-            detections = self.detector.detect(frame)
+            try:
+                detections = self.detector.detect(frame)
+            except Exception as error:
+                print(f"[PERSON] Detection failed: {error}", flush=True)
+                detections = []
             with self.lock:
                 self.detections = detections
                 self.updated_at = time.time()

@@ -24,6 +24,11 @@ import urllib3
 import gc
 import cv2
 import math
+import shutil
+from pathlib import Path
+from mcp import StdioServerParameters
+from mcp.client.stdio import stdio_client
+from strands.tools.mcp import MCPClient
 from connectors.capture_while_running import capture_images_from_running_stream
 from camera.camera_context import request_servo_adjustment
 
@@ -116,6 +121,59 @@ class StrandsAgent(Agent):
         self._zepto_loop = None
         self._zepto_thread = None
         self._setup_zepto_loop()
+        playwright_npx = os.getenv("PLAYWRIGHT_MCP_NPX_PATH") or shutil.which("npx")
+        self.playwright_mcp = None
+        if playwright_npx:
+            playwright_npx = os.path.abspath(os.path.expanduser(playwright_npx))
+            playwright_browser = os.getenv(
+                "PLAYWRIGHT_MCP_EXECUTABLE_PATH",
+                "/usr/lib/chromium/chromium",
+            )
+            playwright_env = {
+                name: os.environ[name]
+                for name in (
+                    "HOME",
+                    "LOGNAME",
+                    "PATH",
+                    "SHELL",
+                    "TERM",
+                    "USER",
+                    "DISPLAY",
+                    "XAUTHORITY",
+                    "XDG_RUNTIME_DIR",
+                    "PULSE_SERVER",
+                )
+                if os.environ.get(name)
+            }
+            playwright_env["PATH"] = os.pathsep.join(
+                filter(
+                    None,
+                    (str(Path(playwright_npx).parent), playwright_env.get("PATH")),
+                )
+            )
+            self.playwright_mcp = MCPClient(
+                lambda: stdio_client(
+                    StdioServerParameters(
+                        command=playwright_npx,
+                        env=playwright_env,
+                        args=[
+                            "-y",
+                            "@playwright/mcp@latest",
+                            "--executable-path",
+                            playwright_browser,
+                            "--user-data-dir",
+                            str(Path.home() / ".cache" / "sofi-youtube"),
+                        ],
+                    )
+                ),
+                prefix="youtube",
+            )
+        else:
+            print(
+                "[PLAYWRIGHT MCP] Disabled: npx was not found. Install Node.js 20+ "
+                "and set PLAYWRIGHT_MCP_NPX_PATH or add npx to PATH.",
+                flush=True,
+            )
         nest_asyncio.apply()
         # Sliding window for the "last 10 messages" logic
         conv_manager = SlidingWindowConversationManager(window_size=10)
@@ -226,6 +284,11 @@ class StrandsAgent(Agent):
                 self.get_video_tool,
                 self.capture_camera_image_tool,
                 self.adjust_camera_servo_tool,
+                *(
+                    [self.playwright_mcp]
+                    if self.playwright_mcp is not None
+                    else []
+                ),
             ],
             session_manager=session_manager,
             conversation_manager=conv_manager
@@ -346,18 +409,26 @@ class StrandsAgent(Agent):
         except Exception as e:
             raise e
 
-    def close_zepto_mcp(self):
-        """Close the persistent MCP transport and its dedicated event loop."""
-        if self._zepto_loop is None:
-            return
+    def close_mcp_connections(self):
+        """Close persistent MCP transports and the Zepto event loop."""
         if self.zepto_mcp is not None:
+            if self._zepto_loop is not None:
+                try:
+                    self._run_in_zepto_loop(self.zepto_mcp.close(), timeout=10)
+                except Exception as exc:
+                    print(f"[ZEPTO MCP] Error while closing connection: {type(exc).__name__}")
+                self._zepto_loop.call_soon_threadsafe(self._zepto_loop.stop)
+                if self._zepto_thread and self._zepto_thread.is_alive():
+                    self._zepto_thread.join(timeout=5)
+        if self.playwright_mcp is not None:
             try:
-                self._run_in_zepto_loop(self.zepto_mcp.close(), timeout=10)
+                self.playwright_mcp.stop(None, None, None)
             except Exception as exc:
-                print(f"[ZEPTO MCP] Error while closing connection: {type(exc).__name__}")
-        self._zepto_loop.call_soon_threadsafe(self._zepto_loop.stop)
-        if self._zepto_thread and self._zepto_thread.is_alive():
-            self._zepto_thread.join(timeout=5)
+                print(
+                    f"[PLAYWRIGHT MCP] Error while closing connection: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
 
     def save_and_embed_message(self, role, content):
        

@@ -9,16 +9,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from connectors.home_automation import HomeAutomation
 
+RADAR_PRESENCE_AUTOMATION_ENABLE = os.getenv(
+    "RADAR_PRESENCE_AUTOMATION_ENABLE", "true"
+).lower() in ("true", "1", "yes")
 PRESENCE_DISTANCE_M = 3.30
 AWAY_DELAY_SECONDS = 5.0
 SAMPLE_FRESH_SECONDS = 3.0
 CHECK_PERIOD_SECONDS = 0.5
 RETRY_SECONDS = 5.0
+DISTANCE_LOG_INTERVAL_SECONDS = 1.0
 
 
 class PresenceAutomation(threading.Thread):
     """Switch off whatever is on when nobody is within range, and switch back
-    on only those appliances when someone returns."""
+    on only those appliances when a person returns."""
 
     def __init__(self, sensor_reader, home=None):
         super().__init__(daemon=True)
@@ -26,6 +30,7 @@ class PresenceAutomation(threading.Thread):
         self.home = home or HomeAutomation()
         self.stop_event = threading.Event()
         self.turned_off = None  # appliances we switched off; None while someone is present
+        self.last_distance_log_at = 0.0
 
     def _someone_near(self):
         get_presence_samples = getattr(self.sensor_reader, "get_presence_samples", None)
@@ -35,13 +40,25 @@ class PresenceAutomation(threading.Thread):
             sample = self.sensor_reader.get_latest()
             samples = [sample] if sample else []
 
+        now = time.monotonic()
+        if now - self.last_distance_log_at >= DISTANCE_LOG_INTERVAL_SECONDS:
+            distances = [
+                f"{sample['distance_m']:.2f} m"
+                for sample in samples
+                if sample and "distance_m" in sample
+            ]
+            reading = ", ".join(distances) if distances else "unavailable"
+            print(f"[PRESENCE] Distance reading: {reading}", flush=True)
+            self.last_distance_log_at = now
+
         now = time.time()
-        return any(
+        radar_near = any(
             sample
             and 0 <= now - sample.get("timestamp", 0) <= SAMPLE_FRESH_SECONDS
             and sample.get("distance_m", float("inf")) <= PRESENCE_DISTANCE_M
             for sample in samples
         )
+        return radar_near
 
     def _turn_off_active(self):
         status = self.home.get_status()
@@ -69,7 +86,11 @@ class PresenceAutomation(threading.Thread):
             if now < retry_at:
                 continue
             try:
-                if self._someone_near():
+                someone_near = self._someone_near()
+                if someone_near is None:
+                    away_since = None
+                    continue
+                if someone_near:
                     away_since = None
                     done = self.turned_off is None or self._restore()
                 elif self.turned_off is not None:
@@ -96,7 +117,10 @@ if __name__ == "__main__":
     presence_automation = PresenceAutomation(sensor_reader)
     try:
         sensor_reader.start()
-        presence_automation.start()
+        if RADAR_PRESENCE_AUTOMATION_ENABLE:
+            presence_automation.start()
+        else:
+            print("[PRESENCE] Radar-based appliance automation disabled.", flush=True)
         while True:
             time.sleep(1)
     except KeyboardInterrupt:

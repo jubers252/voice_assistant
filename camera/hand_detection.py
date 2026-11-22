@@ -31,7 +31,10 @@ from face_track_servo import (
     TILT_NEUTRAL_ANGLE,
 )
 from sensor_reader import SensorReader
-from presence_automation import PresenceAutomation
+from presence_automation import (
+    PresenceAutomation,
+    RADAR_PRESENCE_AUTOMATION_ENABLE,
+)
 
 try:
     from sensor_dual_230deg import DualSensor230Degree
@@ -90,11 +93,16 @@ RIGHT_SENSOR_PORT = os.getenv("RIGHT_SENSOR_PORT", "/dev/ttyAMA1")
 SENSOR_BAUDRATE = 256000
 SENSOR_TRACKING_TIMEOUT = 3.0  # Hold the last pan target after radar data goes stale.
 SENSOR_FALLBACK_ENABLE = True  # Enable radar pan tracking.
+PERSON_MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo_models", "yolov8n.onnx")
+PERSON_DETECT_EVERY_N_FRAMES = 15
 
 DISPLAY_STATE_CHECK_SECONDS = 0.2
 SERVO_ADJUSTMENT_POLL_SECONDS = 0.1
 DISPLAY_BUTTON_BOUNDS = (510, 40, 680, 105)
 MAX_PUPIL_ANGLE = math.pi / 2
+TRACKING_STATE_PUBLISH_INTERVAL = 0.1
+_tracking_state_publish_lock = threading.Lock()
+_last_tracking_state_publish_at = 0.0
 
 
 class _RelativeBoundingBox:
@@ -164,13 +172,19 @@ def servo_angles_to_pupil_angles(pan_angle, tilt_angle):
 
 
 def publish_tracking_angles(servo_tracker):
+    global _last_tracking_state_publish_at
     pan_angle = getattr(servo_tracker, "last_pan_angle", None)
     tilt_angle = getattr(servo_tracker, "last_tilt_angle", None)
     if pan_angle is None or tilt_angle is None:
         return
 
-    pupil_pan_angle, pupil_tilt_angle = servo_angles_to_pupil_angles(pan_angle, tilt_angle)
-    write_tracking_angles(pupil_pan_angle, pupil_tilt_angle)
+    with _tracking_state_publish_lock:
+        now = time.monotonic()
+        if now - _last_tracking_state_publish_at < TRACKING_STATE_PUBLISH_INTERVAL:
+            return
+        pupil_pan_angle, pupil_tilt_angle = servo_angles_to_pupil_angles(pan_angle, tilt_angle)
+        write_tracking_angles(pupil_pan_angle, pupil_tilt_angle)
+        _last_tracking_state_publish_at = now
 
 
 def start_stream():
@@ -573,15 +587,16 @@ def _music_player_request(payload):
             return json.loads(stream.readline(1024 * 1024))
 
 
-def toggle_music_playback():
-    """Pause if music is playing, otherwise resume. Runs in a worker thread."""
+def pause_music_on_fist_hold():
+    """Pause playing music on a fist hold; never resume it implicitly."""
     try:
         status = _music_player_request({"action": "status"}).get("status", {})
         if status.get("loading"):
             return
-        action = "pause" if status.get("is_playing") else "play"
-        _music_player_request({"action": action})
-        print(f"[GESTURE] Fist hold -> music {action}", flush=True)
+        if not status.get("is_playing"):
+            return
+        _music_player_request({"action": "pause"})
+        print("[GESTURE] Fist hold -> music pause", flush=True)
     except (OSError, ValueError) as error:
         print(f"[GESTURE] Music toggle skipped: {error}", flush=True)
 
@@ -908,7 +923,10 @@ class RadarPanThread(threading.Thread):
         self.stop_event.set()
 
 
-def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=None, radar_thread=None):
+def detect_face_and_hands(
+    sock, servo_tracker, relay_server=None, sensor_reader=None, radar_thread=None,
+    person_worker=None,
+):
     """Main detection loop for face and hand tracking.
     
     Args:
@@ -1001,6 +1019,9 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                     interpolation=cv2.INTER_LINEAR
                 )
 
+            if person_worker and frame_count % PERSON_DETECT_EVERY_N_FRAMES == 0:
+                person_worker.submit(processing_frame.copy())
+
             # Run face detection more often than hand detection so tracking
             # stays responsive without doubling the gesture model workload.
             run_face_detection = frame_count % FACE_DETECT_EVERY_N_FRAMES == 0
@@ -1050,7 +1071,7 @@ def detect_face_and_hands(sock, servo_tracker, relay_server=None, sensor_reader=
                 set_wake_request(source="hand_gesture")
             
             if detect_fist_hold(latest_hand_result, fist_hold_state, now):
-                threading.Thread(target=toggle_music_playback, daemon=True).start()
+                threading.Thread(target=pause_music_on_fist_hold, daemon=True).start()
 
             # Draw wake gesture progress on screen
             if wake_result["progress"] > 0:
@@ -1171,10 +1192,24 @@ def main():
     servo_tracker = FaceTrackServo(verbose=False)
     sensor_reader = None
     presence = None
+    person_worker = None
     relay_server = None
     radar_thread = None
 
     try:
+        try:
+            from person_detector import DetectionWorker, PersonDetector
+
+            person_worker = DetectionWorker(
+                PersonDetector(PERSON_MODEL_PATH, threads=1)
+            )
+            person_worker.start()
+        except Exception as error:
+            print(
+                f"[PRESENCE] Person detector unavailable; automatic presence switching disabled: {error}",
+                flush=True,
+            )
+
         if not servo_tracker.initialize():
             print("[WARNING] Could not initialize servo hardware - face tracking disabled")
         
@@ -1204,8 +1239,14 @@ def main():
                     )
                     sensor_reader.start()
                     print("[SENSOR] Single-sensor fallback reader started", flush=True)
-                presence = PresenceAutomation(sensor_reader)
-                presence.start()
+                if RADAR_PRESENCE_AUTOMATION_ENABLE:
+                    presence = PresenceAutomation(sensor_reader)
+                    presence.start()
+                else:
+                    print(
+                        "[PRESENCE] Radar-based appliance automation disabled.",
+                        flush=True,
+                    )
             except Exception as e:
                 print(f"[WARNING] Could not initialize sensor reader: {e}")
                 sensor_reader = None
@@ -1227,11 +1268,14 @@ def main():
             relay_server=relay_server,
             sensor_reader=sensor_reader,
             radar_thread=radar_thread,
+            person_worker=person_worker,
         )
     
     finally:
         if presence:
             presence.stop()
+        if person_worker:
+            person_worker.stop()
         if radar_thread:
             radar_thread.stop()
             radar_thread.join(timeout=1.0)

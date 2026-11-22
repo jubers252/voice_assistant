@@ -114,11 +114,6 @@ class DualSensorReader(threading.Thread):
                             "timestamp": time.time()
                         }
                         
-                        print(
-                            f"[{self.sensor_label}] distance={sample['distance_m']:.2f}m "
-                            f"local_pan={pan_angle:.1f}° "
-                            f"absolute={self.angle_offset + pan_angle:.1f}°"
-                        )
                         self.latest_sample = sample
                         self.consecutive_errors = 0
                         
@@ -350,16 +345,7 @@ class DualSensor230Degree:
                     }
                     self.combined_sample = fused
                     
-                    # Print fusion result
                     abs_angle = fused['absolute_pan_angle']
-                    distance = fused['distance_m']
-                    source = fused['source']
-                    confidence = fused['confidence']
-                    
-                    print(f"[FUSED] Angle: {abs_angle:+7.1f}° Distance: {distance:.2f}m "
-                          f"From: {source:12s} Confidence: {confidence:.0f}%")
-                    print(f"[COORD] x={fused['x_m']:+.2f}m (right +), "
-                          f"y={fused['y_m']:+.2f}m (forward +)")
                     
                     # Control servo with fused angle
                     if self.servo:

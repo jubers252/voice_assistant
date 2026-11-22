@@ -555,7 +555,7 @@ class VoiceAssistant:
     def _shutdown_runtime_services(self):
         try:
             if getattr(self, "command_processor", None) is not None:
-                self.command_processor.close_zepto_mcp()
+                self.command_processor.close_mcp_connections()
         except Exception:
             pass
 

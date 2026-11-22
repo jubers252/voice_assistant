@@ -1,0 +1,198 @@
+- generic [ref=f32e30]:
+  - banner [ref=f32e3]:
+    - generic [ref=f32e5]:
+      - generic [ref=f32e6]:
+        - button "Guide" [ref=f32e8] [cursor=pointer]
+        - generic [ref=f32e31]:
+          - link "YouTube Premium home" [ref=f32e32] [cursor=pointer]:
+            - /url: /
+          - generic [ref=f32e36]: IN
+        - button "Skip navigation" [ref=f32e40] [cursor=pointer]
+      - generic [ref=f32e10]:
+        - search [ref=f32e11]:
+          - generic [ref=f32e13]:
+            - generic [ref=f32e14]:
+              - combobox "Search" [ref=f32e44]: King trailer
+              - button "Clear search query" [ref=f32e45] [cursor=pointer]
+            - button "Search" [ref=f32e23] [cursor=pointer]
+        - generic [ref=f32e47]:
+          - button "Search with your voice" [ref=f32e49] [cursor=pointer]
+          - tooltip "tooltip"
+      - generic [ref=f32e425]:
+        - button "Create" [ref=f32e428] [cursor=pointer]
+        - generic [ref=f32e432]:
+          - button "Notifications" [ref=f32e434] [cursor=pointer]:
+            - generic [ref=f32e435]: 9+
+          - tooltip "tooltip"
+        - button "Account menu" [ref=f32e443]:
+          - img "Avatar image" [ref=f32e445] [cursor=pointer]
+  - generic [ref=f32e53]:
+    - text: • • • • • • • • • • • • • • • • • • • •
+    - main [ref=f32e1565]:
+      - generic [ref=f32e1567]:
+        - generic [aria-hidden] [ref=f32e1570] [cursor=pointer]
+        - complementary [ref=f32e1571]:
+          - generic "YouTube Video Player" [active] [ref=f32e1574]:
+            - button [ref=f32e1578] [cursor=pointer]:
+              - img "Channel watermark" [ref=f32e1579]
+            - generic [ref=f32e1582]:
+              - slider "Seek slider" [ref=f32e1584] [cursor=pointer]
+              - generic [ref=f32e1595]:
+                - generic [ref=f32e1596]:
+                  - button "Pause (k)" [ref=f32e1597] [cursor=pointer]
+                  - generic [ref=f32e1598]:
+                    - button "Mute (m)" [ref=f32e1600] [cursor=pointer]
+                    - slider "Volume":
+                      - generic [ref=f32e1601] [cursor=pointer]
+                  - button "0 Minutes 2 Seconds of 1 Minutes 11 Seconds" [ref=f32e1604] [cursor=pointer]: 0:02 / 1:11
+                - generic [ref=f32e1605]:
+                  - generic [ref=f32e1606]:
+                    - button "Auto-play is off" [ref=f32e1607] [cursor=pointer]
+                    - button "Subtitles/closed captions unavailable" [pressed] [ref=f32e1610] [cursor=pointer]
+                    - button "Settings" [ref=f32e1612] [cursor=pointer]
+                  - generic [ref=f32e1613]:
+                    - button "Cinema mode (t)" [ref=f32e1614] [cursor=pointer]
+                    - button "Full screen (f)" [ref=f32e1615] [cursor=pointer]
+      - generic [ref=f32e1619]:
+        - generic [ref=f32e1620]:
+          - generic [ref=f32e1622]:
+            - heading "KING | Title Reveal | Shah Rukh Khan | Siddharth Anand | It’s Showtime | 2026" [level=1] [ref=f32e1625]
+            - generic [ref=f32e1626]:
+              - generic [ref=f32e1627]:
+                - generic [ref=f32e1628]:
+                  - link [ref=f32e1629] [cursor=pointer]:
+                    - /url: /@RedChilliesEntertainment
+                  - generic [ref=f32e1631]:
+                    - generic [ref=f32e1632]:
+                      - generic "Red Chillies Entertainment" [ref=f32e1635]:
+                        - link "Red Chillies Entertainment" [ref=f32e1636] [cursor=pointer]:
+                          - /url: /@RedChilliesEntertainment
+                      - img "Verified" [ref=f32e1641]
+                    - generic "14.2 million subscribers" [ref=f32e1645]: 14.2m subscribers
+                - button "Subscribe to Red Chillies Entertainment." [ref=f32e1651] [cursor=pointer]:
+                  - generic: Subscribe
+              - generic [ref=f32e1658]:
+                - generic [ref=f32e1659]:
+                  - generic [ref=f32e1663]:
+                    - button "like this video along with 749,212 other people" [ref=f32e1667] [cursor=pointer]:
+                      - generic: 749k
+                    - button "Dislike this video" [ref=f32e1674] [cursor=pointer]
+                  - button "Share" [ref=f32e1680] [cursor=pointer]
+                - generic [ref=f32e1684]:
+                  - button "Ask" [ref=f32e1687] [cursor=pointer]
+                  - button "Save to playlist" [ref=f32e1693] [cursor=pointer]
+                - button "More actions" [ref=f32e1698] [cursor=pointer]
+            - generic [ref=f32e1704] [cursor=pointer]:
+              - generic [ref=f32e1705]:
+                - generic [ref=f32e1707]:
+                  - text: 53m views 1 yr ago
+                  - link "#KING" [ref=f32e1708]:
+                    - /url: /hashtag/king
+                  - link "#KingTitleReveal" [ref=f32e1709]:
+                    - /url: /hashtag/kingtitlereveal
+                - tooltip "tooltip"
+              - generic [ref=f32e1710]:
+                - generic [ref=f32e1711]:
+                  - generic [ref=f32e1714]:
+                    - text: Remember There Is Only One
+                    - link "#KING" [ref=f32e1716]:
+                      - /url: /hashtag/king
+                    - text: Get Ready For A New Shah Rukh Khan Experience!
+                  - generic: …
+                - button "more" [ref=f32e1717]
+          - text: •
+        - generic [ref=f32e1720]:
+          - generic [ref=f32e1722]:
+            - generic [ref=f32e1727]:
+              - tablist [ref=f32e1729]:
+                - tab "All" [selected] [ref=f32e1732] [cursor=pointer]
+                - tab "From your search" [ref=f32e1737] [cursor=pointer]
+                - tab "From Red Chillies Entertainment" [ref=f32e1742] [cursor=pointer]
+                - tab "King" [ref=f32e1747] [cursor=pointer]
+                - tab "Trailers" [ref=f32e1752] [cursor=pointer]
+                - tab "Related" [ref=f32e1757] [cursor=pointer]
+                - tab "For you" [ref=f32e1762] [cursor=pointer]
+                - tab "Recently uploaded" [ref=f32e1767] [cursor=pointer]
+                - tab "Watched" [ref=f32e1772] [cursor=pointer]
+              - button "Next" [ref=f32e1779] [cursor=pointer]
+            - generic [ref=f32e1783]:
+              - generic [ref=f32e1785] [cursor=pointer]:
+                - link [aria-hidden] [ref=f32e1786]:
+                  - /url: /watch?v=BPZkZpGMpXA
+                  - img [ref=f32e1794]:
+                    - generic [aria-hidden] [ref=f32e1798]: 3:43
+                - generic [ref=f32e1800]:
+                  - generic [ref=f32e1801]:
+                    - heading [level=3] [ref=f32e1802]:
+                      - 'link "KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar 3 minutes, 43 seconds" [ref=f32e1803]':
+                        - /url: /watch?v=BPZkZpGMpXA
+                        - text: "KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar"
+                    - generic [ref=f32e1805]:
+                      - group [ref=f32e1806]:
+                        - generic [ref=f32e1807]: T-Series
+                        - generic "Verified" [ref=f32e1808]
+                        - generic [ref=f32e1811]: and 3 more
+                      - group [ref=f32e1812]:
+                        - generic "96 million views" [ref=f32e1816]: 96m
+                        - generic "2 weeks ago" [ref=f32e1817]: 2 wk ago
+                  - button "More actions" [ref=f32e1820]
+              - generic [ref=f32e1825] [cursor=pointer]:
+                - link [aria-hidden] [ref=f32e1826]:
+                  - /url: /watch?v=WGWvEDfNdTU&t=2558s
+                  - img [ref=f32e1834]:
+                    - generic [aria-hidden] [ref=f32e1835]: 57:54
+                - generic [ref=f32e1837]:
+                  - generic [ref=f32e1838]:
+                    - heading [level=3] [ref=f32e1839]:
+                      - link "Tata Safari Long term Review 15,000KMS 😍 @Aayushssm 57 minutes" [ref=f32e1840]:
+                        - /url: /watch?v=WGWvEDfNdTU&t=2558s
+                        - text: Tata Safari Long term Review 15,000KMS 😍 @Aayushssm
+                    - generic [ref=f32e1842]:
+                      - group [ref=f32e1843]:
+                        - generic [ref=f32e1844]: Aayush ssm
+                        - generic "Verified" [ref=f32e1845]
+                      - group [ref=f32e1848]:
+                        - generic "88 thousand views" [ref=f32e1852]: 88k
+                        - generic "7 months ago" [ref=f32e1853]: 7 mo ago
+                  - button "More actions" [ref=f32e1856]
+              - generic [ref=f32e1861] [cursor=pointer]:
+                - link [aria-hidden] [ref=f32e1862]:
+                  - /url: /watch?v=22BzRT7JWwg&pp=ugUEEgJoaQ%3D%3D
+                  - generic [ref=f32e1863]:
+                    - img [ref=f32e1868]:
+                      - generic [aria-hidden] [ref=f32e1869]: 2:02
+                    - img [ref=f32e1872]:
+                      - generic [aria-hidden] [ref=f32e1873]: New
+                - generic [ref=f32e1875]:
+                  - generic [ref=f32e1876]:
+                    - heading [level=3] [ref=f32e1877]:
+                      - 'link "KING – Shah Rukh Khan | Official Concept Trailer | SRK Returns As The King | Dipika '' Abhishek ` 2 minutes, 2 seconds" [ref=f32e1878]':
+                        - /url: /watch?v=22BzRT7JWwg&pp=ugUEEgJoaQ%3D%3D
+                        - text: "KING – Shah Rukh Khan | Official Concept Trailer | SRK Returns As The King | Dipika ' Abhishek `"
+                    - generic [ref=f32e1880]:
+                      - group [ref=f32e1881]:
+                        - generic [ref=f32e1882]: VIBEFLIX STUDIO
+                      - group [ref=f32e1883]:
+                        - generic "492 views" [ref=f32e1887]: "492"
+                        - generic "9 hours ago" [ref=f32e1888]: 9 hr ago
+                  - button "More actions" [ref=f32e1891]
+              - generic [ref=f32e1896] [cursor=pointer]:
+                - link [aria-hidden] [ref=f32e1897]:
+                  - /url: /watch?v=o1ZGnofJgQ4&pp=ugUEEgJoaQ%3D%3D
+                  - img [ref=f32e1903]:
+                    - generic [aria-hidden] [ref=f32e1904]: 4:21
+                - generic [ref=f32e1906]:
+                  - generic [ref=f32e1907]:
+                    - heading [level=3] [ref=f32e1908]:
+                      - 'link "ANIMAL Movie Scene: Ranbir''s Clone😲 -The Professional Butcher Aziz🔪 |Ranbir,Tripti,Sandeep,Bhushan K 4 minutes, 21 seconds" [ref=f32e1909]':
+                        - /url: /watch?v=o1ZGnofJgQ4&pp=ugUEEgJoaQ%3D%3D
+                        - text: "ANIMAL Movie Scene: Ranbir's Clone😲 -The Professional Butcher Aziz🔪 |Ranbir,Tripti,Sandeep,Bhushan K"
+                    - generic [ref=f32e1911]:
+                      - group [ref=f32e1912]:
+                        - generic [ref=f32e1913]: T-Series
+                        - generic "Verified" [ref=f32e1914]
+                      - group [ref=f32e1917]:
+                        - generic "17 million views" [ref=f32e1921]: 17m
+                        - generic "2 years ago" [ref=f32e1922]: 2 yr ago
+                  - button "More actions" [ref=f32e1925]
+          - button "Show more" [ref=f32e1932] [cursor=pointer]

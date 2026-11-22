@@ -1,3 +1,30 @@
-﻿{
-  "client_id": "4b8e449eb4e377b0ee2d63186fa99ded"
+{
+  "response_types": [
+    "code"
+  ],
+  "scope": null,
+  "client_name": "Sofi",
+  "client_uri": null,
+  "logo_uri": null,
+  "contacts": null,
+  "tos_uri": null,
+  "policy_uri": null,
+  "jwks_uri": null,
+  "jwks": null,
+  "software_id": null,
+  "software_version": null,
+  "redirect_uris": [
+    "http://localhost/callback"
+  ],
+  "token_endpoint_auth_method": "none",
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "application_type": null,
+  "client_id": "1b7fe30df641c997a00cd82a71380859",
+  "client_secret": null,
+  "client_id_issued_at": 1795340746,
+  "client_secret_expires_at": null,
+  "issuer": "https://auth.zepto.co.in"
 }

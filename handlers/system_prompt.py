@@ -25,6 +25,7 @@ CAMERA SPEAKER CONTEXT:
 CRITICAL LOGIC & CORRECTIONS
 - QUESTIONS AND CLARIFICATIONS: Never ask questions in response text. Whenever asking the user anything that expects a reply, ONLY use '_create_follow_up_question_tool'. Ask one question at a time, sparingly, and do not repeat a question the user has already answered.
 - MUSIC: Default to YouTube Music unless Spotify is explicitly mentioned.
+- YOUTUBE VIDEO PLAYBACK: For requests to watch a YouTube video, use the Playwright browser tools to open YouTube and control the visible player. Use the YouTube Music tools only for audio/music playback. For follow-up commands such as pause, resume, seek, or fullscreen, control the video already open instead of starting another search.
 - EVENTS vs REMINDERS: Use `add_event_tool` for automated actions (e.g., "turn on lights at 9am"). Use reminder tools only for simple notifications or scheduling alarms.
 
 SHOPPING & EXECUTION

@@ -1,0 +1,771 @@
+- generic [ref=f36e30]:
+  - banner [ref=f36e3]:
+    - generic [ref=f36e5]:
+      - generic [ref=f36e6]:
+        - button "Guide" [active] [ref=f36e8] [cursor=pointer]
+        - generic [ref=f36e31]:
+          - link "YouTube Premium home" [ref=f36e32] [cursor=pointer]:
+            - /url: /
+          - generic [ref=f36e36]: IN
+        - button "Skip navigation" [ref=f36e40] [cursor=pointer]
+      - generic [ref=f36e10]:
+        - search [ref=f36e11]:
+          - generic [ref=f36e13]:
+            - generic [ref=f36e14]:
+              - combobox "Search" [ref=f36e44]: King 2026 Shah Rukh Khan official video
+              - button "Clear search query" [ref=f36e45] [cursor=pointer]
+            - button "Search" [ref=f36e23] [cursor=pointer]
+        - generic [ref=f36e47]:
+          - button "Search with your voice" [ref=f36e49] [cursor=pointer]
+          - tooltip "tooltip"
+      - generic [ref=f36e748]:
+        - button "Create" [ref=f36e751] [cursor=pointer]
+        - generic [ref=f36e755]:
+          - button "Notifications" [ref=f36e757] [cursor=pointer]:
+            - generic [ref=f36e758]: 9+
+          - tooltip "tooltip"
+        - button "Account menu" [ref=f36e766]:
+          - img "Avatar image" [ref=f36e768] [cursor=pointer]
+  - generic [ref=f36e53]:
+    - main [ref=f36e54]:
+      - generic [ref=f36e55]:
+        - generic [ref=f36e57]:
+          - generic [ref=f36e60]:
+            - tablist [ref=f36e62]:
+              - tab "All" [selected] [ref=f36e65] [cursor=pointer]
+              - tab "Shorts" [ref=f36e70] [cursor=pointer]
+              - tab "Unwatched" [ref=f36e75] [cursor=pointer]
+              - tab "Watched" [ref=f36e80] [cursor=pointer]
+              - tab "Videos" [ref=f36e85] [cursor=pointer]
+              - tab "Recently uploaded" [ref=f36e90] [cursor=pointer]
+              - tab "Live" [ref=f36e95] [cursor=pointer]
+            - button "Next" [ref=f36e102] [cursor=pointer]
+          - generic [ref=f36e107]:
+            - button "Search filters" [ref=f36e109] [cursor=pointer]:
+              - generic: Filters
+            - tooltip "tooltip"
+        - generic [ref=f36e118]:
+          - generic [ref=f36e120]:
+            - link [aria-hidden] [ref=f36e122] [cursor=pointer]:
+              - /url: /watch?v=Uu2QK9Z9X5E&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+              - img [ref=f36e773]:
+                - generic [aria-hidden] [ref=f36e774]: 1:12
+              - generic: Now playing
+            - generic [ref=f36e125] [cursor=pointer]:
+              - generic [ref=f36e126]:
+                - generic [ref=f36e127]:
+                  - heading [level=3] [ref=f36e128]:
+                    - link "KING | Title Reveal | Shah Rukh Khan | Siddharth Anand | It’s Showtime | 2026 1 minute, 12 seconds" [ref=f36e129]:
+                      - /url: /watch?v=Uu2QK9Z9X5E&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: KING | Title Reveal | Shah Rukh Khan | Siddharth Anand | It’s Showtime | 2026
+                  - button "Action menu" [ref=f36e778]
+                - generic [ref=f36e132]:
+                  - generic [ref=f36e133]: 53m
+                  - generic [ref=f36e134]: •1 yr ago
+              - generic [ref=f36e135]:
+                - link "Go to channel Red Chillies Entertainment" [ref=f36e136]:
+                  - /url: /@RedChilliesEntertainment
+                - generic [ref=f36e138]:
+                  - link "Red Chillies Entertainment" [ref=f36e142]:
+                    - /url: /@RedChilliesEntertainment
+                  - img "Verified" [ref=f36e147]
+              - generic [ref=f36e149]:
+                - generic [ref=f36e150]: "Remember There Is Only One #KING Get Ready For A New Shah Rukh Khan Experience! #KingTitleReveal It's Showtime!"
+                - tooltip "tooltip"
+              - generic [ref=f36e152]:
+                - img "4K" [ref=f36e155]:
+                  - generic [aria-hidden] [ref=f36e156]: 4K
+                - img "Closed captions" [ref=f36e159]:
+                  - generic [aria-hidden] [ref=f36e160]: Subtitles
+          - generic [ref=f36e162]:
+            - link [aria-hidden] [ref=f36e164] [cursor=pointer]:
+              - /url: /watch?v=BPZkZpGMpXA&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv0gcJCRAIAYcqIYzv
+              - img [ref=f36e788]:
+                - generic [aria-hidden] [ref=f36e792]: 3:43
+              - generic: Now playing
+            - generic [ref=f36e167] [cursor=pointer]:
+              - generic [ref=f36e168]:
+                - generic [ref=f36e169]:
+                  - heading [level=3] [ref=f36e170]:
+                    - 'link "KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar 3 minutes, 43 seconds" [ref=f36e171]':
+                      - /url: /watch?v=BPZkZpGMpXA&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv0gcJCRAIAYcqIYzv
+                      - text: "KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar"
+                  - button "Action menu" [ref=f36e796]
+                - generic [ref=f36e174]:
+                  - generic [ref=f36e175]: 96m
+                  - generic [ref=f36e176]: •2 wk ago
+              - generic [ref=f36e177]:
+                - button "Collaboration channels" [ref=f36e179]
+                - generic [ref=f36e210]: T-Seriesand 3 more
+              - generic [ref=f36e217]:
+                - text: Yeh Daur Ishq ka Naseeb Waalon ko milta hai... Jahan Barood ki Khushboo mein Gulab khilta hai... Of Love and other Battles.
+                - tooltip "tooltip"
+              - img "4K" [ref=f36e222]:
+                - generic [aria-hidden] [ref=f36e223]: 4K
+          - generic [ref=f36e225]:
+            - link [aria-hidden] [ref=f36e227] [cursor=pointer]:
+              - /url: /watch?v=M3mfut2RdHk&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+              - img [ref=f36e804]:
+                - generic [aria-hidden] [ref=f36e805]: 0:46
+              - generic: Now playing
+            - generic [ref=f36e230] [cursor=pointer]:
+              - generic [ref=f36e231]:
+                - generic [ref=f36e232]:
+                  - heading [level=3] [ref=f36e233]:
+                    - link "KING | Date Announcement | Shah Rukh Khan | Siddharth Anand | It’s KingTime | 24th December 2026 46 seconds" [ref=f36e234]:
+                      - /url: /watch?v=M3mfut2RdHk&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: KING | Date Announcement | Shah Rukh Khan | Siddharth Anand | It’s KingTime | 24th December 2026
+                  - button "Action menu" [ref=f36e809]
+                - generic [ref=f36e237]:
+                  - generic [ref=f36e238]: 33m
+                  - generic [ref=f36e239]: •9 mo ago
+              - generic [ref=f36e240]:
+                - link "Go to channel Red Chillies Entertainment" [ref=f36e241]:
+                  - /url: /@RedChilliesEntertainment
+                - generic [ref=f36e243]:
+                  - link "Red Chillies Entertainment" [ref=f36e247]:
+                    - /url: /@RedChilliesEntertainment
+                  - img "Verified" [ref=f36e252]
+              - generic [ref=f36e254]:
+                - generic [ref=f36e255]: "KING is Ready to ROAR on 24.12.2026 in Cinemas #ItsKingTime #KingDateAnnouncement Directed by: Siddharth Anand ..."
+                - tooltip "tooltip"
+              - generic [ref=f36e257]:
+                - img "4K" [ref=f36e260]:
+                  - generic [aria-hidden] [ref=f36e261]: 4K
+                - img "Closed captions" [ref=f36e264]:
+                  - generic [aria-hidden] [ref=f36e265]: Subtitles
+          - generic [ref=f36e266]:
+            - heading "Shorts" [level=2] [ref=f36e274]
+            - generic [ref=f36e275]:
+              - generic [ref=f36e276]:
+                - generic [ref=f36e279]:
+                  - link [aria-hidden] [ref=f36e280] [cursor=pointer]:
+                    - /url: /shorts/NUT7sZOP_oI
+                    - img [ref=f36e285]:
+                      - generic [aria-hidden] [ref=f36e286]: New
+                  - generic [ref=f36e287] [cursor=pointer]:
+                    - generic [ref=f36e288]:
+                      - heading [level=3] [ref=f36e289]:
+                        - 'link "Shah Rukh Khan’s ‘King’ Trailer Set to Create a Storm! Here’s the Release Date 🔥#ShahRukhKhan #King" [ref=f36e290]':
+                          - /url: /shorts/NUT7sZOP_oI
+                      - generic [aria-hidden] [ref=f36e291]: 20k views · 23 hr ago
+                    - button "More actions" [ref=f36e293]
+                - generic [ref=f36e299]:
+                  - link [aria-hidden] [ref=f36e300] [cursor=pointer]:
+                    - /url: /shorts/8nO9bQyYj4U
+                  - generic [ref=f36e304] [cursor=pointer]:
+                    - generic [ref=f36e305]:
+                      - heading [level=3] [ref=f36e306]:
+                        - 'link "KING (2026) 👑 Shah Rukh Khan 🔥 Official Movie Poster | SRK Is Back! #King" [ref=f36e307]':
+                          - /url: /shorts/8nO9bQyYj4U
+                      - generic [aria-hidden] [ref=f36e308]: 77k views · 3 wk ago
+                    - button "More actions" [ref=f36e310]
+                - generic [ref=f36e316]:
+                  - link [aria-hidden] [ref=f36e317] [cursor=pointer]:
+                    - /url: /shorts/VhgO1SMrgLc
+                  - generic [ref=f36e321] [cursor=pointer]:
+                    - generic [ref=f36e322]:
+                      - heading [level=3] [ref=f36e323]:
+                        - 'link "✨Shahrukh Khan Upcoming Movie👑 King Pre-Release Box Office Collection Report! #indiancinema #2026" [ref=f36e324]':
+                          - /url: /shorts/VhgO1SMrgLc
+                      - generic [aria-hidden] [ref=f36e325]: 87k views · 3 wk ago
+                    - button "More actions" [ref=f36e327]
+              - generic [ref=f36e331]:
+                - generic [ref=f36e334]:
+                  - link [aria-hidden] [ref=f36e335] [cursor=pointer]:
+                    - /url: /shorts/hmuKjXzE4JM
+                    - img [ref=f36e340]:
+                      - generic [aria-hidden] [ref=f36e341]: New
+                  - generic [ref=f36e342] [cursor=pointer]:
+                    - generic [ref=f36e343]:
+                      - heading [level=3] [ref=f36e344]:
+                        - 'link "KING (2026) – Shah Rukh Khan | Official Concept Trailer | SRK Returns As The King 🔥 #king" [ref=f36e345]':
+                          - /url: /shorts/hmuKjXzE4JM
+                      - generic [aria-hidden] [ref=f36e346]: 617 views · 4 hr ago
+                    - button "More actions" [ref=f36e348]
+                - generic [ref=f36e354]:
+                  - link [aria-hidden] [ref=f36e355] [cursor=pointer]:
+                    - /url: /shorts/2iNxBV_fOVU
+                  - generic [ref=f36e359] [cursor=pointer]:
+                    - generic [ref=f36e360]:
+                      - heading [level=3] [ref=f36e361]:
+                        - link "KING 🔥 Official Trailer | Shah Rukh Khan | SRK New Movie 2026 | King Movie Trailer" [ref=f36e362]:
+                          - /url: /shorts/2iNxBV_fOVU
+                      - generic [aria-hidden] [ref=f36e363]: 125k views · 3 wk ago
+                    - button "More actions" [ref=f36e365]
+          - generic [ref=f36e370]:
+            - link [aria-hidden] [ref=f36e372] [cursor=pointer]:
+              - /url: /watch?v=X_4kM-0yQ_8&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e374] [cursor=pointer]:
+              - generic [ref=f36e375]:
+                - generic [ref=f36e376]:
+                  - heading [level=3] [ref=f36e377]:
+                    - 'link "KING: Trailer | Shah Rukh Khan | Suhana Khan | Deepika P |Siddharth Anand | In Cinemas 24th Dec 2026 1 minute, 9 seconds" [ref=f36e378]':
+                      - /url: /watch?v=X_4kM-0yQ_8&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "KING: Trailer | Shah Rukh Khan | Suhana Khan | Deepika P |Siddharth Anand | In Cinemas 24th Dec 2026"
+                  - button "Action menu" [ref=f36e820]
+                - generic [ref=f36e381]:
+                  - generic [ref=f36e382]: 68k
+                  - generic [ref=f36e383]: •1 day ago
+              - generic [ref=f36e384]:
+                - link "Go to channel CineCove Studios" [ref=f36e385]:
+                  - /url: /@CineCoveStudios
+                - link "CineCove Studios" [ref=f36e390]:
+                  - /url: /@CineCoveStudios
+              - generic [ref=f36e391]:
+                - generic [ref=f36e392]: "KING: Trailer | Shah Rukh Khan | Suhana Khan | Deepika P |Siddharth Anand | In Cinemas 24th Dec 2026 #King #Trailer #Srk ..."
+                - tooltip "tooltip"
+              - generic [ref=f36e394]:
+                - img "New" [ref=f36e397]:
+                  - generic [aria-hidden] [ref=f36e398]: New
+                - img "2 products" [ref=f36e401]:
+                  - generic [aria-hidden] [ref=f36e403]: 2 products
+          - generic [ref=f36e405]:
+            - link [aria-hidden] [ref=f36e407] [cursor=pointer]:
+              - /url: /watch?v=fA8-gXDoAk8&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e409] [cursor=pointer]:
+              - generic [ref=f36e410]:
+                - generic [ref=f36e411]:
+                  - heading [level=3] [ref=f36e412]:
+                    - link "Maatrubhumi - Trailer | Salman Khan, Chitrangda Singh | Apoorva Lakhia | 4th December 2026 4 minutes, 35 seconds" [ref=f36e413]:
+                      - /url: /watch?v=fA8-gXDoAk8&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: Maatrubhumi - Trailer | Salman Khan, Chitrangda Singh | Apoorva Lakhia | 4th December 2026
+                  - button "Action menu" [ref=f36e829]
+                - generic [ref=f36e416]:
+                  - generic [ref=f36e417]: 54m
+                  - generic [ref=f36e418]: •11 days ago
+              - generic [ref=f36e419]:
+                - link "Go to channel Salman Khan Films" [ref=f36e420]:
+                  - /url: /@SalmanKhanFilms
+                - generic [ref=f36e421]:
+                  - link "Salman Khan Films" [ref=f36e425]:
+                    - /url: /@SalmanKhanFilms
+                  - img "Verified" [ref=f36e430]
+              - generic [ref=f36e432]:
+                - text: Some battles are fought for victory. Some are fought for the future. And some remind us that the greatest victory is when war ...
+                - tooltip "tooltip"
+              - generic [ref=f36e434]:
+                - img "4K" [ref=f36e437]:
+                  - generic [aria-hidden] [ref=f36e438]: 4K
+                - img "Closed captions" [ref=f36e441]:
+                  - generic [aria-hidden] [ref=f36e442]: Subtitles
+          - generic [ref=f36e444] [cursor=pointer]:
+            - link [aria-hidden] [ref=f36e445]:
+              - /url: /watch?v=BPZkZpGMpXA&list=RDBPZkZpGMpXA&start_radio=1
+              - generic [ref=f36e447]: Mix
+            - generic [ref=f36e459]:
+              - generic [ref=f36e460]:
+                - heading [level=3] [ref=f36e461]:
+                  - 'link "Mix - KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar" [ref=f36e462]':
+                    - /url: /watch?v=BPZkZpGMpXA&list=RDBPZkZpGMpXA&start_radio=1
+                - generic [ref=f36e464]:
+                  - group [ref=f36e465]:
+                    - generic [ref=f36e466]: Madhubanti Bagchi, Ed Sheeran, Vivek Kar, and more
+                    - generic [ref=f36e467]: Playlist
+                  - group [ref=f36e468]
+                  - group [ref=f36e469]:
+                    - 'link "KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar · 3:43" [ref=f36e471]':
+                      - /url: /watch?v=BPZkZpGMpXA&list=RDBPZkZpGMpXA&start_radio=1
+                  - group [ref=f36e472]:
+                    - link "Casa Tupka Anthemo | @YoYoHoneySingh feat. Priyanshi | Full Video · 3:06" [ref=f36e474]:
+                      - /url: /watch?v=vRjaGgDsWSo&list=RDBPZkZpGMpXA&start_radio=1
+                  - group [ref=f36e475]:
+                    - generic [ref=f36e476]: Madhubanti Bagchi, Ed Sheeran, Vivek Kar, and more
+              - button "More actions" [ref=f36e479]
+          - generic [ref=f36e483]:
+            - heading "Shorts" [level=2] [ref=f36e491]
+            - generic [ref=f36e492]:
+              - generic [ref=f36e493]:
+                - generic [ref=f36e496]:
+                  - link [aria-hidden] [ref=f36e497] [cursor=pointer]:
+                    - /url: /shorts/eROHhSeefck
+                    - img [ref=f36e502]:
+                      - generic [aria-hidden] [ref=f36e503]: New
+                  - generic [ref=f36e504] [cursor=pointer]:
+                    - generic [ref=f36e505]:
+                      - heading [level=3] [ref=f36e506]:
+                        - link "Shah Rukh Khan's KING Trailer Release Date REVEALED! 🔥👑" [ref=f36e507]:
+                          - /url: /shorts/eROHhSeefck
+                      - generic [aria-hidden] [ref=f36e508]: 5.6k views · 1 day ago
+                    - button "More actions" [ref=f36e510]
+                - generic [ref=f36e516]:
+                  - link [aria-hidden] [ref=f36e517] [cursor=pointer]:
+                    - /url: /shorts/6pEeo1k9WcU
+                  - generic [ref=f36e521] [cursor=pointer]:
+                    - generic [ref=f36e522]:
+                      - heading [level=3] [ref=f36e523]:
+                        - link "KING | Official Trailer | Shah Rukh Khan | Red Chillies Entertainment | Coming Soon" [ref=f36e524]:
+                          - /url: /shorts/6pEeo1k9WcU
+                      - generic [aria-hidden] [ref=f36e525]: 355k views · 1 yr ago
+                    - button "More actions" [ref=f36e527]
+                - generic [ref=f36e533]:
+                  - link [aria-hidden] [ref=f36e534] [cursor=pointer]:
+                    - /url: /shorts/UIc2HTIOlGQ
+                  - generic [ref=f36e538] [cursor=pointer]:
+                    - generic [ref=f36e539]:
+                      - heading [level=3] [ref=f36e540]:
+                        - 'link "KING Trailer Teaser | Shah Rukh Khan & Suhana Khan | Bollywood Action Blockbuster | 2025 #srk #king" [ref=f36e541]':
+                          - /url: /shorts/UIc2HTIOlGQ
+                      - generic [aria-hidden] [ref=f36e542]: 1.9m views · 11 mo ago
+                    - button "More actions" [ref=f36e544]
+              - generic [ref=f36e548]:
+                - generic [ref=f36e551]:
+                  - link [aria-hidden] [ref=f36e552] [cursor=pointer]:
+                    - /url: /shorts/RwkrofY8W8Q
+                  - generic [ref=f36e556] [cursor=pointer]:
+                    - generic [ref=f36e557]:
+                      - heading [level=3] [ref=f36e558]:
+                        - link "KING Official Trailer | Shah Rukh Khan, Suhana Khan | Siddharth Anand | Releasing 2026" [ref=f36e559]:
+                          - /url: /shorts/RwkrofY8W8Q
+                      - generic [aria-hidden] [ref=f36e560]: 42k views · 3 mo ago
+                    - button "More actions" [ref=f36e562]
+                - generic [ref=f36e568]:
+                  - link [aria-hidden] [ref=f36e569] [cursor=pointer]:
+                    - /url: /shorts/NEvLyDF0XFA
+                  - generic [ref=f36e573] [cursor=pointer]:
+                    - generic [ref=f36e574]:
+                      - heading [level=3] [ref=f36e575]:
+                        - link "KING Trailer - Shah Rukh Khan, Deepika" [ref=f36e576]:
+                          - /url: /shorts/NEvLyDF0XFA
+                      - generic [aria-hidden] [ref=f36e577]: 226k views · 2 wk ago
+                    - button "More actions" [ref=f36e579]
+                - generic [ref=f36e585]:
+                  - link [aria-hidden] [ref=f36e586] [cursor=pointer]:
+                    - /url: /shorts/_mlHWVMz1Ac
+                  - generic [ref=f36e590] [cursor=pointer]:
+                    - generic [ref=f36e591]:
+                      - heading [level=3] [ref=f36e592]:
+                        - link "KING Trailer Teaser | Shah Rukh Khan & Suhana Khan | Bollywood Action Blockbuster | 2026" [ref=f36e593]:
+                          - /url: /shorts/_mlHWVMz1Ac
+                      - generic [aria-hidden] [ref=f36e594]: 143k views · 1 mo ago
+                    - button "More actions" [ref=f36e596]
+              - generic [ref=f36e600]:
+                - generic [ref=f36e603]:
+                  - link [aria-hidden] [ref=f36e604] [cursor=pointer]:
+                    - /url: /shorts/T2e2JZAOI90
+                  - generic [ref=f36e608] [cursor=pointer]:
+                    - generic [ref=f36e609]:
+                      - heading [level=3] [ref=f36e610]:
+                        - link "KING 🔥 Official Trailer | Shah💥 Rukh Khan | SRK New Movie 2026 King Movie Trailer" [ref=f36e611]:
+                          - /url: /shorts/T2e2JZAOI90
+                      - generic [aria-hidden] [ref=f36e612]: 4.3k views · 2 wk ago
+                    - button "More actions" [ref=f36e614]
+                - generic [ref=f36e620]:
+                  - link [aria-hidden] [ref=f36e621] [cursor=pointer]:
+                    - /url: /shorts/VtaA9es_eXo
+                  - generic [ref=f36e625] [cursor=pointer]:
+                    - generic [ref=f36e626]:
+                      - heading [level=3] [ref=f36e627]:
+                        - link "Tu Mil Jaaye - King Movie Song | Shahrukh Khan New Song 2026 | SRK Deepika | Arijit Singh" [ref=f36e628]:
+                          - /url: /shorts/VtaA9es_eXo
+                      - generic [aria-hidden] [ref=f36e629]: 379k views · 2 wk ago
+                    - button "More actions" [ref=f36e631]
+                - generic [ref=f36e637]:
+                  - link [aria-hidden] [ref=f36e638] [cursor=pointer]:
+                    - /url: /shorts/U9sJ_BCXT4w
+                    - img [ref=f36e643]:
+                      - generic [aria-hidden] [ref=f36e644]: New
+                  - generic [ref=f36e645] [cursor=pointer]:
+                    - generic [ref=f36e646]:
+                      - heading [level=3] [ref=f36e647]:
+                        - link "King Trailer Release Date | King 2nd Song Release Date | King Promotions Budget | Shahrukh Khan" [ref=f36e648]:
+                          - /url: /shorts/U9sJ_BCXT4w
+                      - generic [aria-hidden] [ref=f36e649]: 16k views · 1 day ago
+                    - button "More actions" [ref=f36e651]
+              - generic [ref=f36e655]:
+                - generic [ref=f36e658]:
+                  - link [aria-hidden] [ref=f36e659] [cursor=pointer]:
+                    - /url: /shorts/TQ0eHLhavQc
+                  - generic [ref=f36e663] [cursor=pointer]:
+                    - generic [ref=f36e664]:
+                      - heading [level=3] [ref=f36e665]:
+                        - 'link "King movie release date confirm #king #shahrukh_khan #upcomingmovie #eid2026 #shorts" [ref=f36e666]':
+                          - /url: /shorts/TQ0eHLhavQc
+                      - generic [aria-hidden] [ref=f36e667]: 1.6m views · 2 yr ago
+                    - button "More actions" [ref=f36e669]
+                - generic [ref=f36e675]:
+                  - link [aria-hidden] [ref=f36e676] [cursor=pointer]:
+                    - /url: /shorts/TMtmDJiOsWQ
+                    - img [ref=f36e681]:
+                      - generic [aria-hidden] [ref=f36e682]: New
+                  - generic [ref=f36e683] [cursor=pointer]:
+                    - generic [ref=f36e684]:
+                      - heading [level=3] [ref=f36e685]:
+                        - 'link "Shah Rukh Khan''s KING Movie 2026 🔥 | Official Release Update | SRK Upcoming Movie #shorts #bollywood" [ref=f36e686]':
+                          - /url: /shorts/TMtmDJiOsWQ
+                      - generic [aria-hidden] [ref=f36e687]: 3.1k views · 2 days ago
+                    - button "More actions" [ref=f36e689]
+                - generic [ref=f36e695]:
+                  - link [aria-hidden] [ref=f36e696] [cursor=pointer]:
+                    - /url: /shorts/XSH_no6McbA
+                  - generic [ref=f36e700] [cursor=pointer]:
+                    - generic [ref=f36e701]:
+                      - heading [level=3] [ref=f36e702]:
+                        - 'link "4 Hidden Facts About SRK King Movie #shorts" [ref=f36e703]':
+                          - /url: /shorts/XSH_no6McbA
+                      - generic [aria-hidden] [ref=f36e704]: 192k views · 1 mo ago
+                    - button "More actions" [ref=f36e706]
+            - button "Show more" [ref=f36e713] [cursor=pointer]
+          - generic [ref=f36e840]:
+            - link [aria-hidden] [ref=f36e842] [cursor=pointer]:
+              - /url: /watch?v=dL-OiziGs0k&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e844] [cursor=pointer]:
+              - generic [ref=f36e845]:
+                - generic [ref=f36e846]:
+                  - heading [level=3] [ref=f36e847]:
+                    - 'link "KING: Trailer | Shah Rukh Khan | Deepika | Suhana Khan | Siddharth Anand | In Cinemas 24th Dec 2026 1 minute, 10 seconds" [ref=f36e848]':
+                      - /url: /watch?v=dL-OiziGs0k&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "KING: Trailer | Shah Rukh Khan | Deepika | Suhana Khan | Siddharth Anand | In Cinemas 24th Dec 2026"
+                  - button "Action menu" [ref=f36e852]
+                - generic [ref=f36e858]:
+                  - generic [ref=f36e859]: 1.8m
+                  - generic [ref=f36e860]: •2 wk ago
+              - generic [ref=f36e861]:
+                - link "Go to channel CineCove Studios" [ref=f36e862]:
+                  - /url: /@CineCoveStudios
+                - link "CineCove Studios" [ref=f36e867]:
+                  - /url: /@CineCoveStudios
+              - generic [ref=f36e868]:
+                - generic [ref=f36e869]: "KING: Trailer | Shah Rukh Khan | Deepika | Suhana Khan | Siddharth Anand | In Cinemas 24th Dec 2026 #King #Trailer #SRK In ..."
+                - tooltip "tooltip"
+              - generic [ref=f36e871]:
+                - img "2 products" [ref=f36e874]:
+                  - generic [aria-hidden] [ref=f36e878]: 2 products
+                - img "Earns commission" [ref=f36e881]:
+                  - generic [aria-hidden] [ref=f36e882]: Earns commission
+          - generic [ref=f36e884]:
+            - link [aria-hidden] [ref=f36e886] [cursor=pointer]:
+              - /url: /watch?v=HW407ivC770&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e888] [cursor=pointer]:
+              - generic [ref=f36e889]:
+                - generic [ref=f36e890]:
+                  - heading [level=3] [ref=f36e891]:
+                    - link "KING TEASER (MOTION) | Shah Rukh Khan | Deepika Padukone | Suhana Khan | Siddharth Anand 1 minute, 2 seconds" [ref=f36e892]:
+                      - /url: /watch?v=HW407ivC770&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: KING TEASER (MOTION) | Shah Rukh Khan | Deepika Padukone | Suhana Khan | Siddharth Anand
+                  - button "Action menu" [ref=f36e896]
+                - generic [ref=f36e902]:
+                  - generic [ref=f36e903]: 34k
+                  - generic [ref=f36e904]: •6 hr ago
+              - generic [ref=f36e905]:
+                - link "Go to channel Star SK" [ref=f36e906]:
+                  - /url: /@starskfilms
+                - link "Star SK" [ref=f36e911]:
+                  - /url: /@starskfilms
+              - generic [ref=f36e912]:
+                - generic [ref=f36e913]: "KING TEASER (MOTION) | Shah Rukh Khan | Deepika Padukone | Suhana Khan | Siddharth Anand #King 2026 - is a upcoming ..."
+                - tooltip "tooltip"
+              - img "New" [ref=f36e918]:
+                - generic [aria-hidden] [ref=f36e919]: New
+          - generic [ref=f36e921]:
+            - link [aria-hidden] [ref=f36e923] [cursor=pointer]:
+              - /url: /watch?v=1B7FIvnClBc&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e925] [cursor=pointer]:
+              - generic [ref=f36e926]:
+                - generic [ref=f36e927]:
+                  - heading [level=3] [ref=f36e928]:
+                    - 'link "KING: Tu Mil Jaaye | Shah Rukh Khan | Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar 3 minutes, 43 seconds" [ref=f36e929]':
+                      - /url: /watch?v=1B7FIvnClBc&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "KING: Tu Mil Jaaye | Shah Rukh Khan | Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar"
+                  - button "Action menu" [ref=f36e933]
+                - generic [ref=f36e939]:
+                  - generic [ref=f36e940]: 335k
+                  - generic [ref=f36e941]: •2 wk ago
+              - generic [ref=f36e942]:
+                - link "Go to channel mou&dipuentertentmentvlogs" [ref=f36e943]:
+                  - /url: /@moudipuentertentmentvlogs6373
+                - link "mou&dipuentertentmentvlogs" [ref=f36e948]:
+                  - /url: /@moudipuentertentmentvlogs6373
+              - generic [ref=f36e949]:
+                - generic [ref=f36e950]: "LoveLikeAKing #TuMilJaaye #KING #saharukhkhan #arijitsingh King Arijit Singh Song King Movie King Movie Trailer King Movie ..."
+                - tooltip "tooltip"
+              - img "4K" [ref=f36e955]:
+                - generic [aria-hidden] [ref=f36e956]: 4K
+          - generic [ref=f36e958]:
+            - link [aria-hidden] [ref=f36e960] [cursor=pointer]:
+              - /url: /watch?v=92TPiNL3k18&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e962] [cursor=pointer]:
+              - generic [ref=f36e963]:
+                - generic [ref=f36e964]:
+                  - heading [level=3] [ref=f36e965]:
+                    - link "KING से SRK ने दुबई में रचा इतिहास | KING TRAILER LAUNCH DUBAI | Shahrukh Khan New Movie 2 minutes, 53 seconds" [ref=f36e966]:
+                      - /url: /watch?v=92TPiNL3k18&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: KING से SRK ने दुबई में रचा इतिहास | KING TRAILER LAUNCH DUBAI | Shahrukh Khan New Movie
+                  - button "Action menu" [ref=f36e970]
+                - generic [ref=f36e976]:
+                  - generic [ref=f36e977]: 30k
+                  - generic [ref=f36e978]: •3 days ago
+              - generic [ref=f36e979]:
+                - link "Go to channel Unsuccessful INSAAN" [ref=f36e980]:
+                  - /url: /@UnsuccessfulINSAAN
+                - link "Unsuccessful INSAAN" [ref=f36e985]:
+                  - /url: /@UnsuccessfulINSAAN
+              - generic [ref=f36e986]:
+                - generic [ref=f36e987]: "Title: KING - Official Trailer (Concept) | Shah Rukh Khan | Suhana Khan | Abhishek Bachchan | Sujoy Ghosh Description: The ..."
+                - tooltip "tooltip"
+              - generic [ref=f36e989]:
+                - img "New" [ref=f36e992]:
+                  - generic [aria-hidden] [ref=f36e993]: New
+                - img "2 products" [ref=f36e996]:
+                  - generic [aria-hidden] [ref=f36e1000]: 2 products
+          - generic [ref=f36e1002]:
+            - link [aria-hidden] [ref=f36e1004] [cursor=pointer]:
+              - /url: /watch?v=YxWlaYCA8MU&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1006] [cursor=pointer]:
+              - generic [ref=f36e1007]:
+                - generic [ref=f36e1008]:
+                  - heading [level=3] [ref=f36e1009]:
+                    - link "Jhoome Jo Pathaan Song | Shah Rukh Khan, Deepika | Vishal & Sheykhar, Arijit Singh, Sukriti, Kumaar 3 minutes, 23 seconds" [ref=f36e1010]:
+                      - /url: /watch?v=YxWlaYCA8MU&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: Jhoome Jo Pathaan Song | Shah Rukh Khan, Deepika | Vishal & Sheykhar, Arijit Singh, Sukriti, Kumaar
+                  - button "Action menu" [ref=f36e1014]
+                - generic [ref=f36e1020]:
+                  - generic [ref=f36e1021]: 1.2bn
+                  - generic [ref=f36e1022]: •3 yr ago
+              - generic [ref=f36e1023]:
+                - link "Go to channel YRF" [ref=f36e1024]:
+                  - /url: /@yrf
+                - generic [ref=f36e1025]:
+                  - link "YRF" [ref=f36e1029]:
+                    - /url: /@yrf
+                  - img "Verified" [ref=f36e1034]
+              - generic [ref=f36e1038]:
+                - text: "Can't stop ourselves from vibing to this absolute banger! #jhoomejopathaan ▻ Subscribe Now: https://goo.gl/xs3mrY Stay ..."
+                - tooltip "tooltip"
+              - generic [ref=f36e1040]:
+                - img "4K" [ref=f36e1043]:
+                  - generic [aria-hidden] [ref=f36e1044]: 4K
+                - img "Closed captions" [ref=f36e1047]:
+                  - generic [aria-hidden] [ref=f36e1048]: Subtitles
+          - generic [ref=f36e1050]:
+            - link [aria-hidden] [ref=f36e1052] [cursor=pointer]:
+              - /url: /watch?v=vRjaGgDsWSo&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1054] [cursor=pointer]:
+              - generic [ref=f36e1055]:
+                - generic [ref=f36e1056]:
+                  - heading [level=3] [ref=f36e1057]:
+                    - link "Casa Tupka Anthemo | @YoYoHoneySingh feat. Priyanshi | Full Video 3 minutes, 6 seconds" [ref=f36e1058]:
+                      - /url: /watch?v=vRjaGgDsWSo&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: Casa Tupka Anthemo | @YoYoHoneySingh feat. Priyanshi | Full Video
+                  - button "Action menu" [ref=f36e1062]
+                - generic [ref=f36e1068]:
+                  - generic [ref=f36e1069]: 245m
+                  - generic [ref=f36e1070]: •2 mo ago
+              - generic [ref=f36e1071]:
+                - link "Go to channel Yo Yo Honey Singh" [ref=f36e1072]:
+                  - /url: /channel/UC1KonH1j8WMhc5cT6Bp7NtA
+                - generic [ref=f36e1073]:
+                  - link "Yo Yo Honey Singh" [ref=f36e1077]:
+                    - /url: /channel/UC1KonH1j8WMhc5cT6Bp7NtA
+                  - img "Official Artist Channel" [ref=f36e1082]
+              - generic [ref=f36e1086]:
+                - text: The vibe is here. The energy is building. Get ready for *CASA TUPKA ANTHEMO* — bringing old *Yo Yo Honey Singh's* vibe, ...
+                - tooltip "tooltip"
+              - img "4K" [ref=f36e1091]:
+                - generic [aria-hidden] [ref=f36e1092]: 4K
+          - generic [ref=f36e1094]:
+            - link [aria-hidden] [ref=f36e1096] [cursor=pointer]:
+              - /url: /watch?v=UzXc_gJOC1Y&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1098] [cursor=pointer]:
+              - generic [ref=f36e1099]:
+                - generic [ref=f36e1100]:
+                  - heading [level=3] [ref=f36e1101]:
+                    - link "Chaiyya Chaiyya | Dil Se.. | Shah Rukh Khan & Malaika Arora | FIRST TIME 8K Music Video 6 minutes, 49 seconds" [ref=f36e1102]:
+                      - /url: /watch?v=UzXc_gJOC1Y&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: Chaiyya Chaiyya | Dil Se.. | Shah Rukh Khan & Malaika Arora | FIRST TIME 8K Music Video
+                  - button "Action menu" [ref=f36e1106]
+                - generic [ref=f36e1112]:
+                  - generic [ref=f36e1113]: 20m
+                  - generic [ref=f36e1114]: •1 mo ago
+              - generic [ref=f36e1115]:
+                - link "Go to channel Revere Records" [ref=f36e1116]:
+                  - /url: /@RevereRecords
+                - generic [ref=f36e1117]:
+                  - link "Revere Records" [ref=f36e1121]:
+                    - /url: /@RevereRecords
+                  - img "Verified" [ref=f36e1126]
+              - generic [ref=f36e1130]:
+                - generic [ref=f36e1131]: Feel the rhythm of “Chaiyya Chaiyya” from Dil Se.., featuring Shah Rukh Khan and Malaika Arora in an unforgettable dance atop a ...
+                - tooltip "tooltip"
+              - img "8K" [ref=f36e1136]:
+                - generic [aria-hidden] [ref=f36e1137]: 8K
+          - generic [ref=f36e1139]:
+            - link [aria-hidden] [ref=f36e1141] [cursor=pointer]:
+              - /url: /watch?v=1CerKK_d4-o&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1143] [cursor=pointer]:
+              - generic [ref=f36e1144]:
+                - generic [ref=f36e1145]:
+                  - heading [level=3] [ref=f36e1146]:
+                    - 'link "KING : Forever Teaser || Shah Rukh Khan || KING TEASER || Shahrukh Khan New Video || KING TRAILER 1 minute, 19 seconds" [ref=f36e1147]':
+                      - /url: /watch?v=1CerKK_d4-o&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "KING : Forever Teaser || Shah Rukh Khan || KING TEASER || Shahrukh Khan New Video || KING TRAILER"
+                  - button "Action menu" [ref=f36e1151]
+                - generic [ref=f36e1157]:
+                  - generic [ref=f36e1158]: 40k
+                  - generic [ref=f36e1159]: •2 days ago
+              - generic [ref=f36e1160]:
+                - link "Go to channel Unsuccessful INSAAN" [ref=f36e1161]:
+                  - /url: /@UnsuccessfulINSAAN
+                - link "Unsuccessful INSAAN" [ref=f36e1166]:
+                  - /url: /@UnsuccessfulINSAAN
+              - generic [ref=f36e1167]:
+                - generic [ref=f36e1168]: "King 19 second trailer King 19 second trailer King 19 second trailer #kingmovie #kingtrailer #shahrukh #shahrukh_khan King ..."
+                - tooltip "tooltip"
+              - generic [ref=f36e1170]:
+                - img "New" [ref=f36e1173]:
+                  - generic [aria-hidden] [ref=f36e1174]: New
+                - img "1 product" [ref=f36e1177]:
+                  - generic [aria-hidden] [ref=f36e1181]: 1 product
+          - generic [ref=f36e1183]:
+            - link [aria-hidden] [ref=f36e1185] [cursor=pointer]:
+              - /url: /watch?v=k_5rG_a7ygI&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1187] [cursor=pointer]:
+              - generic [ref=f36e1188]:
+                - generic [ref=f36e1189]:
+                  - heading [level=3] [ref=f36e1190]:
+                    - 'link "Bollywood Big 3 Khans: Shah Rukh Khan, Salman Khan & Aamir Khan Upcoming Movies 2026-2028 | King | 11 minutes, 23 seconds" [ref=f36e1191]':
+                      - /url: /watch?v=k_5rG_a7ygI&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "Bollywood Big 3 Khans: Shah Rukh Khan, Salman Khan & Aamir Khan Upcoming Movies 2026-2028 | King |"
+                  - button "Action menu" [ref=f36e1195]
+                - generic [ref=f36e1201]:
+                  - generic [ref=f36e1202]: 50k
+                  - generic [ref=f36e1203]: •3 days ago
+              - generic [ref=f36e1204]:
+                - link "Go to channel MovieOne" [ref=f36e1205]:
+                  - /url: /@MovieOne5020
+                - link "MovieOne" [ref=f36e1210]:
+                  - /url: /@MovieOne5020
+              - generic [ref=f36e1211]:
+                - text: "🎬Bollywood Big 3 Khans: Shah Rukh Khan, Salman Khan, & Aamir Khan - Upcoming Movies 2024! 🎬 Friends, get ready for upcoming ..."
+                - tooltip "tooltip"
+              - img "New" [ref=f36e1216]:
+                - generic [aria-hidden] [ref=f36e1217]: New
+          - generic [ref=f36e1219]:
+            - link [aria-hidden] [ref=f36e1221] [cursor=pointer]:
+              - /url: /watch?v=QdnZNnIWHno&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1223] [cursor=pointer]:
+              - generic [ref=f36e1224]:
+                - generic [ref=f36e1225]:
+                  - heading [level=3] [ref=f36e1226]:
+                    - 'link "KING: Trailer (HINDI) | Shah Rukh Khan | Abhishek B, Suhana K, Deepika P, | Siddharth Anand | 2 minutes, 9 seconds" [ref=f36e1227]':
+                      - /url: /watch?v=QdnZNnIWHno&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "KING: Trailer (HINDI) | Shah Rukh Khan | Abhishek B, Suhana K, Deepika P, | Siddharth Anand |"
+                  - button "Action menu" [ref=f36e1231]
+                - generic [ref=f36e1237]:
+                  - generic [ref=f36e1238]: 57k
+                  - generic [ref=f36e1239]: •5 days ago
+              - generic [ref=f36e1240]:
+                - link "Go to channel Filmzz Day" [ref=f36e1241]:
+                  - /url: /@FilmzzDay
+                - link "Filmzz Day" [ref=f36e1246]:
+                  - /url: /@FilmzzDay
+              - generic [ref=f36e1247]:
+                - generic [ref=f36e1248]: "KING: Trailer (HINDI) | Shah Rukh Khan | Abhishek B, Suhana K, Deepika P, | Siddharth Anand | Darr nahin dahshat hai Topic ..."
+                - tooltip "tooltip"
+              - generic [ref=f36e1250]:
+                - img "New" [ref=f36e1253]:
+                  - generic [aria-hidden] [ref=f36e1254]: New
+                - img "4K" [ref=f36e1257]:
+                  - generic [aria-hidden] [ref=f36e1258]: 4K
+          - generic [ref=f36e1260]:
+            - link [aria-hidden] [ref=f36e1262] [cursor=pointer]:
+              - /url: /watch?v=hK_RIwiDepw&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1264] [cursor=pointer]:
+              - generic [ref=f36e1265]:
+                - generic [ref=f36e1266]:
+                  - heading [level=3] [ref=f36e1267]:
+                    - link "KING Trailer | Shah Rukh Khan | Siddharth Anand | Red Chillies Entertainment | 24 Dec 2026 1 minute, 8 seconds" [ref=f36e1268]:
+                      - /url: /watch?v=hK_RIwiDepw&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: KING Trailer | Shah Rukh Khan | Siddharth Anand | Red Chillies Entertainment | 24 Dec 2026
+                  - button "Action menu" [ref=f36e1272]
+                - generic [ref=f36e1278]:
+                  - generic [ref=f36e1279]: 912k
+                  - generic [ref=f36e1280]: •3 wk ago
+              - generic [ref=f36e1281]:
+                - link "Go to channel Aniket Nikam Creations" [ref=f36e1282]:
+                  - /url: /@AniketNikamCreations
+                - generic [ref=f36e1283]:
+                  - link "Aniket Nikam Creations" [ref=f36e1287]:
+                    - /url: /@AniketNikamCreations
+                  - img "Verified" [ref=f36e1292]
+              - generic [ref=f36e1296]:
+                - generic [ref=f36e1297]: Get ready for KING, starring Bollywood superstar Shah Rukh Khan and directed by Siddharth Anand. Experience the anticipation ...
+                - tooltip "tooltip"
+              - img "4K" [ref=f36e1302]:
+                - generic [aria-hidden] [ref=f36e1303]: 4K
+          - generic [ref=f36e1305]:
+            - link [aria-hidden] [ref=f36e1307] [cursor=pointer]:
+              - /url: /watch?v=VAdGW7QDJiU&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1309] [cursor=pointer]:
+              - generic [ref=f36e1310]:
+                - generic [ref=f36e1311]:
+                  - heading [level=3] [ref=f36e1312]:
+                    - 'link "JAWAN: Chaleya (Hindi) | Shah Rukh Khan | Nayanthara | Atlee | Anirudh | Arijit S, Shilpa R | Kumaar 3 minutes, 8 seconds" [ref=f36e1313]':
+                      - /url: /watch?v=VAdGW7QDJiU&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "JAWAN: Chaleya (Hindi) | Shah Rukh Khan | Nayanthara | Atlee | Anirudh | Arijit S, Shilpa R | Kumaar"
+                  - button "Action menu" [ref=f36e1317]
+                - generic [ref=f36e1323]:
+                  - generic [ref=f36e1324]: 683m
+                  - generic [ref=f36e1325]: •3 yr ago
+              - generic [ref=f36e1326]:
+                - link "Go to channel T-Series" [ref=f36e1327]:
+                  - /url: /@tseries
+                - generic [ref=f36e1328]:
+                  - link "T-Series" [ref=f36e1332]:
+                    - /url: /@tseries
+                  - img "Verified" [ref=f36e1337]
+              - generic [ref=f36e1341]:
+                - text: Witness the love with Chaleya, presenting the second song from the highly-awaited film Jawan directed by Atlee. The film stars ...
+                - tooltip "tooltip"
+              - generic [ref=f36e1343]:
+                - img "4K" [ref=f36e1346]:
+                  - generic [aria-hidden] [ref=f36e1347]: 4K
+                - img "Closed captions" [ref=f36e1350]:
+                  - generic [aria-hidden] [ref=f36e1351]: Subtitles
+          - generic [ref=f36e1353]:
+            - link [aria-hidden] [ref=f36e1355] [cursor=pointer]:
+              - /url: /watch?v=oAVhUAaVCVQ&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1357] [cursor=pointer]:
+              - generic [ref=f36e1358]:
+                - generic [ref=f36e1359]:
+                  - heading [level=3] [ref=f36e1360]:
+                    - 'link "Lyrical: Chammak Challo | Ra One | ShahRukh Khan | Kareena Kapoor 4 minutes, 6 seconds" [ref=f36e1361]':
+                      - /url: /watch?v=oAVhUAaVCVQ&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "Lyrical: Chammak Challo | Ra One | ShahRukh Khan | Kareena Kapoor"
+                  - button "Action menu" [ref=f36e1365]
+                - generic [ref=f36e1371]:
+                  - generic [ref=f36e1372]: 769m
+                  - generic [ref=f36e1373]: •8 yr ago
+              - generic [ref=f36e1374]:
+                - link "Go to channel T-Series" [ref=f36e1375]:
+                  - /url: /@tseries
+                - generic [ref=f36e1376]:
+                  - link "T-Series" [ref=f36e1380]:
+                    - /url: /@tseries
+                  - img "Verified" [ref=f36e1385]
+              - generic [ref=f36e1389]:
+                - generic [ref=f36e1390]: Presenting the lyrical video of the song Chammak Chhalo from the Bollywood movie Ra.One.The movie features Shahrukh Khan, ...
+                - tooltip "tooltip"
+          - generic [ref=f36e1392]:
+            - link [aria-hidden] [ref=f36e1394] [cursor=pointer]:
+              - /url: /watch?v=FHeX7IhaNLY&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+            - generic [ref=f36e1396] [cursor=pointer]:
+              - generic [ref=f36e1397]:
+                - generic [ref=f36e1398]:
+                  - heading [level=3] [ref=f36e1399]:
+                    - 'link "KING: Trailer | Shah Rukh Khan | Deepika | Suhana Khan | Siddharth Anand | 24 DEC | Star SK 1 minute, 15 seconds" [ref=f36e1400]':
+                      - /url: /watch?v=FHeX7IhaNLY&pp=ygUnS2luZyAyMDI2IFNoYWggUnVraCBLaGFuIG9mZmljaWFsIHZpZGVv
+                      - text: "KING: Trailer | Shah Rukh Khan | Deepika | Suhana Khan | Siddharth Anand | 24 DEC | Star SK"
+                  - button "Action menu" [ref=f36e1404]
+                - generic [ref=f36e1410]:
+                  - generic [ref=f36e1411]: 788k
+                  - generic [ref=f36e1412]: •2 wk ago
+              - generic [ref=f36e1413]:
+                - link "Go to channel Star SK" [ref=f36e1414]:
+                  - /url: /@starskfilms
+                - link "Star SK" [ref=f36e1419]:
+                  - /url: /@starskfilms
+              - generic [ref=f36e1420]:
+                - generic [ref=f36e1421]: "Presenting most awaiting film of the year King Trailer (fan-made). #KING In cinemas 24.12.26 #ItsKingTime ..."
+                - tooltip "tooltip"
+    - text: •

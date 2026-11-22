@@ -147,10 +147,6 @@ class SensorReader(threading.Thread):
                             "timestamp": time.time()
                         }
                         
-                        print(
-                            f"[SENSOR DATA] x={x:.0f}mm y={y:.0f}mm "
-                            f"distance={sample['distance_m']:.2f}m pan={pan_angle:.1f}deg"
-                        )
                         self.latest_sample = sample
                         self.last_sample_time = time.time()
                         self.consecutive_errors = 0

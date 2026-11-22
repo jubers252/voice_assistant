@@ -13,6 +13,10 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 Environment="PYTHONUNBUFFERED=1"
+Environment="PATH=/home/pi/.nvm/versions/node/v22.23.5/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PLAYWRIGHT_MCP_NPX_PATH=/home/pi/.nvm/versions/node/v22.23.5/bin/npx"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/pi/.Xauthority"
 # Required for pactl/PulseAudio to reach the user's audio session
 Environment="XDG_RUNTIME_DIR=/run/user/1000"
 Environment="PULSE_SERVER=unix:/run/user/1000/pulse/native"
@@ -20,7 +24,7 @@ Environment="PULSE_SERVER=unix:/run/user/1000/pulse/native"
 # Resource limits
 CPUAccounting=yes
 MemoryAccounting=yes
-MemoryLimit=512M
+MemoryMax=2G
 
 # Security
 NoNewPrivileges=true

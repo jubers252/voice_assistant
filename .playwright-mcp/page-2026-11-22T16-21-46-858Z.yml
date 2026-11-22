@@ -1,0 +1,197 @@
+- generic [ref=f36e30]:
+  - banner [ref=f36e3]:
+    - generic [ref=f36e5]:
+      - generic [ref=f36e6]:
+        - button "Guide" [ref=f36e8] [cursor=pointer]
+        - generic [ref=f36e31]:
+          - link "YouTube Premium home" [ref=f36e32] [cursor=pointer]:
+            - /url: /
+          - generic [ref=f36e36]: IN
+        - button "Skip navigation" [ref=f36e40] [cursor=pointer]
+      - generic [ref=f36e10]:
+        - search [ref=f36e11]:
+          - generic [ref=f36e13]:
+            - generic [ref=f36e14]:
+              - combobox "Search" [ref=f36e44]: King 2026 Shah Rukh Khan official video
+              - button "Clear search query" [ref=f36e45] [cursor=pointer]
+            - button "Search" [ref=f36e23] [cursor=pointer]
+        - generic [ref=f36e47]:
+          - button "Search with your voice" [ref=f36e49] [cursor=pointer]
+          - tooltip "tooltip"
+      - generic [ref=f36e748]:
+        - button "Create" [ref=f36e751] [cursor=pointer]
+        - generic [ref=f36e755]:
+          - button "Notifications" [ref=f36e757] [cursor=pointer]:
+            - generic [ref=f36e758]: 9+
+          - tooltip "tooltip"
+        - button "Account menu" [ref=f36e766]:
+          - img "Avatar image" [ref=f36e768] [cursor=pointer]
+  - generic [ref=f36e53]:
+    - text: • • • • • • • • • • • • • • • • • • •
+    - main [ref=f36e1422]:
+      - generic [ref=f36e1424]:
+        - generic [aria-hidden] [ref=f36e1427] [cursor=pointer]
+        - complementary [ref=f36e1428]:
+          - generic "YouTube Video Player" [active] [ref=f36e1431]:
+            - button [ref=f36e1435] [cursor=pointer]:
+              - img "Channel watermark" [ref=f36e1436]
+            - generic [ref=f36e1439]:
+              - slider "Seek slider" [ref=f36e1441] [cursor=pointer]
+              - generic [ref=f36e1452]:
+                - generic [ref=f36e1453]:
+                  - button "Pause (k)" [ref=f36e1454] [cursor=pointer]
+                  - generic [ref=f36e1455]:
+                    - button "Mute (m)" [ref=f36e1457] [cursor=pointer]
+                    - slider "Volume":
+                      - generic [ref=f36e1458] [cursor=pointer]
+                  - button "0 Minutes 1 Seconds of 1 Minutes 11 Seconds" [ref=f36e1461] [cursor=pointer]: 0:01 / 1:11
+                - generic [ref=f36e1462]:
+                  - generic [ref=f36e1463]:
+                    - button "Auto-play is off" [ref=f36e1464] [cursor=pointer]
+                    - button "Subtitles/closed captions unavailable" [pressed] [ref=f36e1467] [cursor=pointer]
+                    - button "Settings" [ref=f36e1469] [cursor=pointer]
+                  - generic [ref=f36e1470]:
+                    - button "Cinema mode (t)" [ref=f36e1471] [cursor=pointer]
+                    - button "Full screen (f)" [ref=f36e1472] [cursor=pointer]
+      - generic [ref=f36e1476]:
+        - generic [ref=f36e1477]:
+          - generic [ref=f36e1479]:
+            - heading "KING | Title Reveal | Shah Rukh Khan | Siddharth Anand | It’s Showtime | 2026" [level=1] [ref=f36e1482]
+            - generic [ref=f36e1483]:
+              - generic [ref=f36e1484]:
+                - generic [ref=f36e1485]:
+                  - link [ref=f36e1486] [cursor=pointer]:
+                    - /url: /@RedChilliesEntertainment
+                  - generic [ref=f36e1488]:
+                    - generic [ref=f36e1489]:
+                      - generic "Red Chillies Entertainment" [ref=f36e1492]:
+                        - link "Red Chillies Entertainment" [ref=f36e1493] [cursor=pointer]:
+                          - /url: /@RedChilliesEntertainment
+                      - img "Verified" [ref=f36e1498]
+                    - generic "14.2 million subscribers" [ref=f36e1502]: 14.2m subscribers
+                - button "Subscribe to Red Chillies Entertainment." [ref=f36e1508] [cursor=pointer]:
+                  - generic: Subscribe
+              - generic [ref=f36e1515]:
+                - generic [ref=f36e1516]:
+                  - generic [ref=f36e1520]:
+                    - button "like this video along with 749,212 other people" [ref=f36e1524] [cursor=pointer]:
+                      - generic: 749k
+                    - button "Dislike this video" [ref=f36e1531] [cursor=pointer]
+                  - button "Share" [ref=f36e1537] [cursor=pointer]
+                - generic [ref=f36e1541]:
+                  - button "Ask" [ref=f36e1544] [cursor=pointer]
+                  - button "Save to playlist" [ref=f36e1550] [cursor=pointer]
+                - button "More actions" [ref=f36e1555] [cursor=pointer]
+            - generic [ref=f36e1561] [cursor=pointer]:
+              - generic [ref=f36e1562]:
+                - generic [ref=f36e1564]:
+                  - text: 53m views 1 yr ago
+                  - link "#KING" [ref=f36e1565]:
+                    - /url: /hashtag/king
+                  - link "#KingTitleReveal" [ref=f36e1566]:
+                    - /url: /hashtag/kingtitlereveal
+                - tooltip "tooltip"
+              - generic [ref=f36e1567]:
+                - generic [ref=f36e1568]:
+                  - generic [ref=f36e1571]:
+                    - text: Remember There Is Only One
+                    - link "#KING" [ref=f36e1573]:
+                      - /url: /hashtag/king
+                    - text: Get Ready For A New Shah Rukh Khan Experience!
+                  - generic: …
+                - button "more" [ref=f36e1574]
+          - text: •
+        - generic [ref=f36e1577]:
+          - generic [ref=f36e1579]:
+            - generic [ref=f36e1584]:
+              - tablist [ref=f36e1586]:
+                - tab "All" [selected] [ref=f36e1589] [cursor=pointer]
+                - tab "From your search" [ref=f36e1594] [cursor=pointer]
+                - tab "From Red Chillies Entertainment" [ref=f36e1599] [cursor=pointer]
+                - tab "King" [ref=f36e1604] [cursor=pointer]
+                - tab "Trailers" [ref=f36e1609] [cursor=pointer]
+                - tab "Related" [ref=f36e1614] [cursor=pointer]
+                - tab "For you" [ref=f36e1619] [cursor=pointer]
+                - tab "Recently uploaded" [ref=f36e1624] [cursor=pointer]
+                - tab "Watched" [ref=f36e1629] [cursor=pointer]
+              - button "Next" [ref=f36e1636] [cursor=pointer]
+            - generic [ref=f36e1640]:
+              - generic [ref=f36e1642] [cursor=pointer]:
+                - link [aria-hidden] [ref=f36e1643]:
+                  - /url: /watch?v=BPZkZpGMpXA
+                  - img [ref=f36e1651]:
+                    - generic [aria-hidden] [ref=f36e1655]: 3:43
+                - generic [ref=f36e1657]:
+                  - generic [ref=f36e1658]:
+                    - heading [level=3] [ref=f36e1659]:
+                      - 'link "KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar 3 minutes, 43 seconds" [ref=f36e1660]':
+                        - /url: /watch?v=BPZkZpGMpXA
+                        - text: "KING: Tu Mil Jaaye | Shah Rukh Khan, Deepika | Sachin-Jigar, Arijit, Ed Sheeran, Madhubanti, Kumaar"
+                    - generic [ref=f36e1662]:
+                      - group [ref=f36e1663]:
+                        - generic [ref=f36e1664]: T-Series
+                        - generic "Verified" [ref=f36e1665]
+                        - generic [ref=f36e1668]: and 3 more
+                      - group [ref=f36e1669]:
+                        - generic "96 million views" [ref=f36e1673]: 96m
+                        - generic "2 weeks ago" [ref=f36e1674]: 2 wk ago
+                  - button "More actions" [ref=f36e1677]
+              - generic [ref=f36e1682] [cursor=pointer]:
+                - link [aria-hidden] [ref=f36e1683]:
+                  - /url: /watch?v=WGWvEDfNdTU&t=2558s
+                  - img [ref=f36e1691]:
+                    - generic [aria-hidden] [ref=f36e1692]: 57:54
+                - generic [ref=f36e1694]:
+                  - generic [ref=f36e1695]:
+                    - heading [level=3] [ref=f36e1696]:
+                      - link "Tata Safari Long term Review 15,000KMS 😍 @Aayushssm 57 minutes" [ref=f36e1697]:
+                        - /url: /watch?v=WGWvEDfNdTU&t=2558s
+                        - text: Tata Safari Long term Review 15,000KMS 😍 @Aayushssm
+                    - generic [ref=f36e1699]:
+                      - group [ref=f36e1700]:
+                        - generic [ref=f36e1701]: Aayush ssm
+                        - generic "Verified" [ref=f36e1702]
+                      - group [ref=f36e1705]:
+                        - generic "88 thousand views" [ref=f36e1709]: 88k
+                        - generic "7 months ago" [ref=f36e1710]: 7 mo ago
+                  - button "More actions" [ref=f36e1713]
+              - generic [ref=f36e1718] [cursor=pointer]:
+                - link [aria-hidden] [ref=f36e1719]:
+                  - /url: /watch?v=22BzRT7JWwg&pp=ugUEEgJoaQ%3D%3D
+                  - generic [ref=f36e1720]:
+                    - img [ref=f36e1725]:
+                      - generic [aria-hidden] [ref=f36e1726]: 2:02
+                    - img [ref=f36e1729]:
+                      - generic [aria-hidden] [ref=f36e1730]: New
+                - generic [ref=f36e1732]:
+                  - generic [ref=f36e1733]:
+                    - heading [level=3] [ref=f36e1734]:
+                      - 'link "KING – Shah Rukh Khan | Official Concept Trailer | SRK Returns As The King | Dipika '' Abhishek ` 2 minutes, 2 seconds" [ref=f36e1735]':
+                        - /url: /watch?v=22BzRT7JWwg&pp=ugUEEgJoaQ%3D%3D
+                        - text: "KING – Shah Rukh Khan | Official Concept Trailer | SRK Returns As The King | Dipika ' Abhishek `"
+                    - generic [ref=f36e1737]:
+                      - group [ref=f36e1738]:
+                        - generic [ref=f36e1739]: VIBEFLIX STUDIO
+                      - group [ref=f36e1740]:
+                        - generic "492 views" [ref=f36e1744]: "492"
+                        - generic "9 hours ago" [ref=f36e1745]: 9 hr ago
+                  - button "More actions" [ref=f36e1748]
+              - generic [ref=f36e1753] [cursor=pointer]:
+                - link [aria-hidden] [ref=f36e1754]:
+                  - /url: /watch?v=Ycfws22aNhA&pp=ugUHEgVlbi1VUw%3D%3D
+                  - img [ref=f36e1760]:
+                    - generic [aria-hidden] [ref=f36e1761]: 2:41
+                - generic [ref=f36e1763]:
+                  - generic [ref=f36e1764]:
+                    - heading [level=3] [ref=f36e1765]:
+                      - 'link "Dune: Part Three | Final Trailer 2 minutes, 41 seconds" [ref=f36e1766]':
+                        - /url: /watch?v=Ycfws22aNhA&pp=ugUHEgVlbi1VUw%3D%3D
+                        - text: "Dune: Part Three | Final Trailer"
+                    - generic [ref=f36e1768]:
+                      - group [ref=f36e1769]:
+                        - generic [ref=f36e1770]: Warner Bros. Pictures International
+                      - group [ref=f36e1771]:
+                        - generic "1.6 million views" [ref=f36e1775]: 1.6m
+                        - generic "3 weeks ago" [ref=f36e1776]: 3 wk ago
+                  - button "More actions" [ref=f36e1779]
+          - button "Show more" [ref=f36e1786] [cursor=pointer]

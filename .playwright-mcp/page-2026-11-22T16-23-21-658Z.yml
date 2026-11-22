@@ -1,0 +1,127 @@
+- generic [ref=f40e2]:
+  - banner [ref=f40e4]:
+    - generic [ref=f40e6]:
+      - generic [ref=f40e7]:
+        - button "Guide" [active] [ref=f40e9] [cursor=pointer]
+        - generic:
+          - link:
+            - /url: /
+      - search [ref=f40e12]:
+        - generic [ref=f40e14]:
+          - generic [ref=f40e15]:
+            - combobox [ref=f40e17]: B Praak new song official video
+            - button [ref=f40e19] [cursor=pointer]
+          - button "Search" [ref=f40e24] [cursor=pointer]
+  - main [ref=f40e32]:
+    - generic [ref=f40e33]:
+      - generic [ref=f40e35]:
+        - generic [ref=f40e38]:
+          - tablist [ref=f40e40]:
+            - tab "All" [selected] [ref=f40e43] [cursor=pointer]
+            - tab "Shorts" [ref=f40e48] [cursor=pointer]
+            - tab "Unwatched" [ref=f40e53] [cursor=pointer]
+            - tab "Watched" [ref=f40e58] [cursor=pointer]
+            - tab "Videos" [ref=f40e63] [cursor=pointer]
+            - tab "Recently uploaded" [ref=f40e68] [cursor=pointer]
+            - tab "Live" [ref=f40e73] [cursor=pointer]
+          - button "Next" [ref=f40e80] [cursor=pointer]
+        - generic [ref=f40e85]:
+          - button "Search filters" [ref=f40e87] [cursor=pointer]:
+            - generic: Filters
+          - tooltip "tooltip"
+      - generic [ref=f40e96]:
+        - generic [ref=f40e98]:
+          - link [aria-hidden] [ref=f40e100] [cursor=pointer]:
+            - /url: /watch?v=mYRV_B_QVGw&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+          - generic [ref=f40e102] [cursor=pointer]:
+            - generic [ref=f40e103]:
+              - heading [level=3] [ref=f40e105]:
+                - link "B Praak x Jaani - Dil Kaat Ke | Sakshi | Rajniesh | Piyush Shazia | Bunny | Desi Melodies 4 minutes, 54 seconds" [ref=f40e106]:
+                  - /url: /watch?v=mYRV_B_QVGw&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+                  - text: B Praak x Jaani - Dil Kaat Ke | Sakshi | Rajniesh | Piyush Shazia | Bunny | Desi Melodies
+              - generic [ref=f40e109]:
+                - generic [ref=f40e110]: 82m
+                - generic [ref=f40e111]: •11 mo ago
+            - generic [ref=f40e112]:
+              - button "Collaboration channels" [ref=f40e114]
+              - generic [ref=f40e131]: DM - Desi Melodiesand B Praak
+            - generic [ref=f40e141]:
+              - generic [ref=f40e142]: "... Jain Label - Desi Melodies https://www.instagram.com/desimelodies/ #Jaani #BPraak #NewMusic Lyrics - Ek Toh Parvardigaar ..."
+              - tooltip "tooltip"
+            - img "4K" [ref=f40e147]:
+              - generic [aria-hidden] [ref=f40e148]: 4K
+        - generic [ref=f40e150]:
+          - link [aria-hidden] [ref=f40e152] [cursor=pointer]:
+            - /url: /watch?v=5KkHLDkPcq8&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+          - generic [ref=f40e154] [cursor=pointer]:
+            - generic [ref=f40e155]:
+              - heading [level=3] [ref=f40e157]:
+                - link "BPraak - Zohrajabeen (Video) | Randeep Hooda, Priyanka Chahar Choudhary | Jaani | Arvindr Khaira 4 minutes, 22 seconds" [ref=f40e158]:
+                  - /url: /watch?v=5KkHLDkPcq8&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+                  - text: BPraak - Zohrajabeen (Video) | Randeep Hooda, Priyanka Chahar Choudhary | Jaani | Arvindr Khaira
+              - generic [ref=f40e161]:
+                - generic [ref=f40e162]: 228m
+                - generic [ref=f40e163]: •3 yr ago
+            - generic [ref=f40e164]:
+              - link "Go to channel DM - Desi Melodies" [ref=f40e165]:
+                - /url: /@DesiMelodies
+              - generic [ref=f40e166]:
+                - link "DM - Desi Melodies" [ref=f40e170]:
+                  - /url: /@DesiMelodies
+                - img "Verified" [ref=f40e175]
+            - generic [ref=f40e177]:
+              - generic [ref=f40e178]: Desi Melodies presents the much-awaited music video of the title track from BPraak's debut album, 'Zohrajabeen'. Every frame ...
+              - tooltip "tooltip"
+            - img "4K" [ref=f40e183]:
+              - generic [aria-hidden] [ref=f40e184]: 4K
+        - generic [ref=f40e186]:
+          - link [aria-hidden] [ref=f40e188] [cursor=pointer]:
+            - /url: /watch?v=YrUqw7uspKg&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+          - generic [ref=f40e190] [cursor=pointer]:
+            - generic [ref=f40e191]:
+              - heading [level=3] [ref=f40e193]:
+                - link "Mann Bharrya (Full Song) | B Praak | Jaani | Himanshi Khurana | Arvindr Khaira | Punjabi Songs 4 minutes, 37 seconds" [ref=f40e194]:
+                  - /url: /watch?v=YrUqw7uspKg&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+                  - text: Mann Bharrya (Full Song) | B Praak | Jaani | Himanshi Khurana | Arvindr Khaira | Punjabi Songs
+              - generic [ref=f40e197]:
+                - generic [ref=f40e198]: 403m
+                - generic [ref=f40e199]: •9 yr ago
+            - generic [ref=f40e200]:
+              - link "Go to channel Speed Records" [ref=f40e201]:
+                - /url: /@speedrecords
+              - generic [ref=f40e202]:
+                - link "Speed Records" [ref=f40e206]:
+                  - /url: /@speedrecords
+                - img "Verified" [ref=f40e211]
+            - generic [ref=f40e213]:
+              - generic [ref=f40e214]: With B Praak's soul-shattering vocals and Jaani's unforgettable lyrics, Mann Bharrya became an all-time anthem of heartbreak ...
+              - tooltip "tooltip"
+            - img "Closed captions" [ref=f40e219]:
+              - generic [aria-hidden] [ref=f40e220]: Subtitles
+        - generic [ref=f40e222]:
+          - link [aria-hidden] [ref=f40e224] [cursor=pointer]:
+            - /url: /watch?v=OBEOPnAO1hc&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+          - generic [ref=f40e226] [cursor=pointer]:
+            - generic [ref=f40e227]:
+              - heading [level=3] [ref=f40e229]:
+                - link "Yaar Ka Sataya Hua Hai - B Praak | Nawazuddin Siddiqui | Shehnaaz Gill | Jaani | Arvindr Khaira 5 minutes, 21 seconds" [ref=f40e230]:
+                  - /url: /watch?v=OBEOPnAO1hc&pp=ygUfQiBQcmFhayBuZXcgc29uZyBvZmZpY2lhbCB2aWRlbw%3D%3D
+                  - text: Yaar Ka Sataya Hua Hai - B Praak | Nawazuddin Siddiqui | Shehnaaz Gill | Jaani | Arvindr Khaira
+              - generic [ref=f40e233]:
+                - generic [ref=f40e234]: 244m
+                - generic [ref=f40e235]: •3 yr ago
+            - generic [ref=f40e236]:
+              - link "Go to channel DM - Desi Melodies" [ref=f40e237]:
+                - /url: /@DesiMelodies
+              - generic [ref=f40e238]:
+                - link "DM - Desi Melodies" [ref=f40e242]:
+                  - /url: /@DesiMelodies
+                - img "Verified" [ref=f40e247]
+            - generic [ref=f40e249]:
+              - generic [ref=f40e250]: Experience a melancholic journey in the voice of BPraak paired with soul-stirring lyrics and composition by Jaani and a short film ...
+              - tooltip "tooltip"
+            - generic [ref=f40e252]:
+              - img "4K" [ref=f40e255]:
+                - generic [aria-hidden] [ref=f40e256]: 4K
+              - img "Closed captions" [ref=f40e259]:
+                - generic [aria-hidden] [ref=f40e260]: Subtitles

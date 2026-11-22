@@ -1,0 +1,13 @@
+- banner [ref=f12e3]:
+  - generic [ref=f12e5]:
+    - generic [ref=f12e6]:
+      - button "Guide" [ref=f12e8] [cursor=pointer]
+      - generic:
+        - link:
+          - /url: /
+    - search [ref=f12e11]:
+      - generic [ref=f12e13]:
+        - generic [ref=f12e14]:
+          - combobox [ref=f12e16]: latest party song 2026
+          - button [ref=f12e18] [cursor=pointer]
+        - button "Search" [ref=f12e23] [cursor=pointer]
